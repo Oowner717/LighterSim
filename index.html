@@ -1,0 +1,1614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lighter">
+<meta name="theme-color" content="#0b0d10">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='8' y='10' width='16' height='20' rx='4' fill='%23aab2ba'/%3E%3Cellipse cx='16' cy='8' rx='4' ry='6' fill='%23ff9a3c'/%3E%3C/svg%3E">
+<title>Flip Lighter</title>
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100dvh;
+    overflow: hidden;
+    background: #0b0d10;
+    touch-action: none;
+    overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #c { display: block; width: 100%; height: 100%; touch-action: none; }
+  #hint {
+    position: fixed;
+    left: 50%; transform: translateX(-50%);
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    max-width: 82vw;
+    padding: 9px 16px;
+    border-radius: 999px;
+    background: rgba(18, 22, 28, 0.62);
+    color: rgba(235, 240, 245, 0.85);
+    font-size: 13px; letter-spacing: 0.02em; text-align: center;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    opacity: 0; transition: opacity 0.6s ease;
+    pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #hint.show { opacity: 1; }
+  #motionBtn {
+    position: fixed;
+    right: calc(12px + env(safe-area-inset-right, 0px));
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(160, 175, 190, 0.35);
+    background: rgba(18, 22, 28, 0.6);
+    color: rgba(225, 232, 240, 0.9);
+    font-size: 12px;
+    display: none;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  }
+  #motionBtn.show { display: block; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint"></div>
+<button id="motionBtn" type="button">Enable motion</button>
+<noscript><p style="color:#ccc;padding:2em;text-align:center">This lighter needs JavaScript.</p></noscript>
+<script>
+  // Boot failure fallback (old browsers without import maps, CDN unreachable).
+  window.addEventListener('error', function () {
+    if (window.__booted) return;
+    var h = document.getElementById('hint');
+    if (h) { h.textContent = 'Could not start — needs a modern browser and a connection.'; h.classList.add('show'); }
+  }, true);
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+/* ============================== TUNABLES ============================== */
+const CFG = {
+  // display
+  MAX_DPR: 1.75,
+  FOV: 34,
+  FIT_HALF_H: 4.45,          // world half-height the camera must frame
+  FIT_HALF_W: 3.1,
+  CAM_TARGET_Y: 3.45,
+  ZOOM_MIN: 0.62, ZOOM_MAX: 1.9,
+  BLOOM_STRENGTH: 0.5, BLOOM_RADIUS: 0.55, BLOOM_THRESHOLD: 1.25, // HDR flame only, not chrome
+  BLOOM_RES: 288,            // max dimension of bloom buffers (kept low-res)
+  FPS_BLOOM_OFF: 45,         // sustained fps below this disables bloom
+
+  // body dimensions (≈ millimetres / 10)
+  BODY_W: 3.8, BODY_D: 1.42, BASE_H: 4.35, LID_H: 1.7, EDGE_R: 0.34,
+  CHIM_X: -0.35, CHIM_W: 2.3, CHIM_D: 1.02, CHIM_H: 1.22,
+  WHEEL_X: 1.30, WHEEL_Y: 4.83, WHEEL_R: 0.52, WHEEL_T: 0.40,
+
+  // lid hinge (over-center cam). Flicks >~17 rad/s carry through the cam;
+  // anything weaker falls back to the nearest end. Pop is the hardest snap.
+  LID_OPEN: 2.0,             // rad, fully open
+  LID_CAM_K: 190,            // over-center torque strength
+  LID_DAMP: 2.6,
+  LID_BOUNCE: 0.14,          // restitution at the stops
+  LID_BOUNCE_MIN: 8,         // |omega| below this at a stop -> rest dead
+  LID_POP_VEL: 30,           // rad/s given by squeeze-pop (the hardest snap)
+  LID_DBLTAP_VEL: 20,
+
+  // squeeze-pop
+  SQZ_TRAVEL: 0.13,          // fraction of initial pinch distance = full pressure
+  SQZ_MIN_PX: 26,
+  SQZ_MAX_SQUASH: 0.03,      // <=3% elastic squash
+  SQZ_ZONE_FRAC: 0.16,       // zone radius as a fraction of vmin
+
+  // flint wheel
+  WHEEL_FRICTION: 5.5,
+  WHEEL_GAIN: 0.055,         // rad/s per px/s of swipe
+  SPARK_SPEED_VMIN: 1.7,     // swipe speed (vmin/s) needed to spark
+  SPARK_REFRACTORY: 0.22,    // s between spark bursts
+  IGNITE_DELAY: 0.07,        // s from spark burst to catching
+
+  // wick
+  WICK_SEGS: 4, WICK_SEG_LEN: 0.345, WICK_R: 0.088,
+  WICK_JOINT_MAX: [0.32, 0.95, 1.0, 0.9],   // per-joint plastic bend limit (rad)
+
+  // flame
+  FLAME_H: 1.28,
+  FLAME_BEND_K: 26, FLAME_BEND_C: 6.0,
+  FLAME_LIGHT: 9.5,          // point light intensity while LIT
+  EMBER_LIFE: 12,            // s of unattended pilot before it dies
+  TURB_TIME: 0.9,            // s of hard flicker after a fast swipe
+
+  // gestures (screen-space, generous ~48px colliders scaled by vmin)
+  R_TIP: 34, R_WHEEL: 48, R_MOUTH: 48, R_LID_PAD: 58,
+  TAP_MS: 280, TAP_PX: 16, DBL_MS: 340, DBL_PX: 80,
+  CROSS_FAST_VMIN: 1.5,      // chimney crossings faster than this (vmin/s) = "fast"
+  FLICK_VMIN: 2.4,           // release speed (vmin/s) that counts as a flick
+  ORBIT_SPEED: 2.6,          // rad per vmin of drag
+
+  // device motion
+  JERK_ACC: 13,              // m/s^2 single spike -> relight / hard bend
+  SHAKE_EMA: 7.5,            // sustained accel level -> snuff
+  SHAKE_HOLD: 0.75,          // s the level must hold
+
+  // physics
+  H: 1 / 120,                // fixed timestep
+};
+
+/* ============================== UTILS ============================== */
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const clamp01 = v => clamp(v, 0, 1);
+const lerp = (a, b, t) => a + (b - a) * t;
+const hashN = n => { const s = Math.sin(n * 127.1) * 43758.5453; return s - Math.floor(s); };
+// smooth value noise in [-1, 1]
+function vnoise(t) {
+  const i = Math.floor(t), f = t - i, u = f * f * (3 - 2 * f);
+  return (lerp(hashN(i), hashN(i + 1), u)) * 2 - 1;
+}
+const vmin = () => Math.min(window.innerWidth, window.innerHeight);
+const uiScale = () => Math.max(0.85, vmin() / 420);
+
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const _v4 = new THREE.Vector3(), _v5 = new THREE.Vector3(), _v6 = new THREE.Vector3();
+const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion();
+const _qI = new THREE.Quaternion();
+
+/* ============================== RENDERER / SCENE ============================== */
+const canvas = document.getElementById('c');
+const hintEl = document.getElementById('hint');
+const motionBtn = document.getElementById('motionBtn');
+
+const renderer = new THREE.WebGLRenderer({
+  canvas, antialias: true, powerPreference: 'high-performance',
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, CFG.MAX_DPR));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.06;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(CFG.FOV, 1, 0.1, 120);
+
+{ // studio environment for the chrome + soft gradient backdrop
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.05).texture;
+  pmrem.dispose();
+}
+function radialCanvas(size, stops, inner = 0) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = size;
+  const g = cv.getContext('2d');
+  const gr = g.createRadialGradient(size / 2, size / 2, size * inner, size / 2, size / 2, size / 2);
+  for (const [o, c] of stops) gr.addColorStop(o, c);
+  g.fillStyle = gr; g.fillRect(0, 0, size, size);
+  return cv;
+}
+{
+  const bg = new THREE.CanvasTexture(radialCanvas(512, [
+    [0, '#222933'], [0.5, '#151a21'], [1, '#07090c'],
+  ]));
+  bg.colorSpace = THREE.SRGBColorSpace;
+  scene.background = bg;
+}
+
+// Composer with cheap low-res bloom (auto-disabled if fps sags).
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(CFG.BLOOM_RES, CFG.BLOOM_RES),
+  CFG.BLOOM_STRENGTH, CFG.BLOOM_RADIUS, CFG.BLOOM_THRESHOLD);
+{ // force the bloom buffers to stay low-res no matter the canvas size
+  const orig = bloomPass.setSize.bind(bloomPass);
+  bloomPass.setSize = (w, h) => {
+    const s = Math.min(1, CFG.BLOOM_RES / Math.max(1, Math.max(w, h)));
+    orig(Math.max(8, Math.round(w * s)), Math.max(8, Math.round(h * s)));
+  };
+  bloomPass.setSize(CFG.BLOOM_RES, CFG.BLOOM_RES);
+}
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+let bloomOn = true;
+
+/* ============================== MATERIALS ============================== */
+function brushedRoughnessTex() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const g = cv.getContext('2d');
+  g.fillStyle = 'rgb(110,110,110)'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 1500; i++) {
+    const x = Math.random() * 256, l = 30 + Math.random() * 200;
+    const v = 60 + Math.random() * 110 | 0;
+    g.strokeStyle = `rgba(${v},${v},${v},0.16)`;
+    g.beginPath(); g.moveTo(x, Math.random() * 256 - l / 2); g.lineTo(x, Math.random() * 256 + l / 2); g.stroke();
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+function knurlTex() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const g = cv.getContext('2d');
+  g.fillStyle = 'rgb(128,128,128)'; g.fillRect(0, 0, 128, 128);
+  g.lineWidth = 2.4;
+  for (let d = -128; d < 256; d += 7) {
+    g.strokeStyle = 'rgba(255,255,255,0.85)';
+    g.beginPath(); g.moveTo(d, 0); g.lineTo(d + 128, 128); g.stroke();
+    g.strokeStyle = 'rgba(0,0,0,0.85)';
+    g.beginPath(); g.moveTo(d + 3, 0); g.lineTo(d + 131, 128); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,0.6)';
+    g.beginPath(); g.moveTo(d + 128, 0); g.lineTo(d, 128); g.stroke();
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(4, 1);
+  return t;
+}
+const brushed = brushedRoughnessTex();
+const matChrome = new THREE.MeshStandardMaterial({
+  color: 0xd9dee3, metalness: 1.0, roughness: 0.55, roughnessMap: brushed, envMapIntensity: 1.25,
+});
+const matChromeDark = new THREE.MeshStandardMaterial({
+  color: 0x9aa1a8, metalness: 1.0, roughness: 0.5, roughnessMap: brushed, envMapIntensity: 1.1,
+});
+const matSteel = new THREE.MeshStandardMaterial({
+  color: 0xc8ccd2, metalness: 1.0, roughness: 0.62, bumpMap: knurlTex(), bumpScale: 0.6, envMapIntensity: 1.0,
+});
+const matInsert = new THREE.MeshStandardMaterial({ color: 0x757b82, metalness: 0.95, roughness: 0.5, envMapIntensity: 0.9 });
+const matDark = new THREE.MeshStandardMaterial({ color: 0x101214, metalness: 0.2, roughness: 0.9 });
+const matWick = new THREE.MeshStandardMaterial({ color: 0xece2cc, metalness: 0, roughness: 0.95 });
+const matWickTip = new THREE.MeshStandardMaterial({ color: 0x272120, metalness: 0, roughness: 0.95 });
+
+/* ============================== MODEL ============================== */
+const lighter = new THREE.Group();      // world root: recoil hop lives here
+const squash = new THREE.Group();       // squeeze scale, pivot at the base bottom
+const caseG = new THREE.Group();        // static body parts
+const lidG = new THREE.Group();         // pivots at the hinge
+lighter.add(squash); squash.add(caseG); squash.add(lidG);
+scene.add(lighter);
+
+const HINGE_Y = CFG.BASE_H, HINGE_Z = -CFG.BODY_D / 2 - 0.06;
+const RIM_Y = CFG.BASE_H + CFG.CHIM_H;
+lidG.position.set(0, HINGE_Y, HINGE_Z);
+
+{ // base body
+  const geo = new RoundedBoxGeometry(CFG.BODY_W, CFG.BASE_H, CFG.BODY_D, 4, CFG.EDGE_R);
+  const base = new THREE.Mesh(geo, matChrome);
+  base.position.y = CFG.BASE_H / 2;
+  caseG.add(base);
+}
+const lidMesh = new THREE.Mesh(
+  new RoundedBoxGeometry(CFG.BODY_W, CFG.LID_H, CFG.BODY_D, 4, CFG.EDGE_R), matChrome);
+lidMesh.position.set(0, CFG.LID_H / 2, CFG.BODY_D / 2 + 0.06);
+lidG.add(lidMesh);
+
+{ // hinge knuckles + cam
+  const kg = new THREE.CylinderGeometry(0.1, 0.1, 0.17, 10);
+  kg.rotateZ(Math.PI / 2);
+  for (const x of [-0.38, 0, 0.38]) {
+    const k = new THREE.Mesh(kg, matChromeDark);
+    k.position.set(x, HINGE_Y, HINGE_Z); caseG.add(k);
+  }
+  for (const x of [-0.19, 0.19]) {
+    const k = new THREE.Mesh(kg, matChromeDark);
+    k.position.set(x, 0, 0); lidG.add(k);
+  }
+  const cam = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.4, 0.34), matInsert);
+  cam.position.set(0, -0.06, 0.16);
+  lidG.add(cam);
+}
+{ // insert top plate + dark inner floor
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(CFG.BODY_W - 0.8, 0.1, CFG.BODY_D - 0.44), matInsert);
+  plate.position.set(0, CFG.BASE_H - 0.03, 0);
+  caseG.add(plate);
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(CFG.CHIM_W - 0.14, 0.05, CFG.CHIM_D - 0.14), matDark);
+  floor.position.set(CFG.CHIM_X, CFG.BASE_H + 0.05, 0);
+  caseG.add(floor);
+}
+{ // chimney with perforated windshield plates (real holes via extruded shapes)
+  const W = CFG.CHIM_W, H = CFG.CHIM_H, TH = 0.06;
+  function perforatedPlate() {
+    const s = new THREE.Shape();
+    const r = 0.1, hw = W / 2, hh = H / 2;
+    s.moveTo(-hw + r, -hh); s.lineTo(hw - r, -hh); s.quadraticCurveTo(hw, -hh, hw, -hh + r);
+    s.lineTo(hw, hh - r); s.quadraticCurveTo(hw, hh, hw - r, hh);
+    s.lineTo(-hw + r, hh); s.quadraticCurveTo(-hw, hh, -hw, hh - r);
+    s.lineTo(-hw, -hh + r); s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+    const addHole = (x, y, hr) => {
+      const p = new THREE.Path(); p.absarc(x, y, hr, 0, Math.PI * 2, true); s.holes.push(p);
+    };
+    for (let i = 0; i < 4; i++) addHole(-0.75 + i * 0.5, 0.28, 0.105);
+    for (let i = 0; i < 3; i++) addHole(-0.5 + i * 0.5, -0.14, 0.105);
+    const g = new THREE.ExtrudeGeometry(s, { depth: TH, bevelEnabled: false, curveSegments: 10 });
+    g.translate(0, 0, -TH / 2);
+    return g;
+  }
+  const pg = perforatedPlate();
+  const front = new THREE.Mesh(pg, matChromeDark);
+  front.position.set(CFG.CHIM_X, CFG.BASE_H + H / 2, CFG.CHIM_D / 2 - TH / 2);
+  const back = new THREE.Mesh(pg, matChromeDark);
+  back.position.set(CFG.CHIM_X, CFG.BASE_H + H / 2, -CFG.CHIM_D / 2 + TH / 2);
+  caseG.add(front, back);
+  const sideG = new THREE.BoxGeometry(TH, H, CFG.CHIM_D - TH * 2);
+  for (const sx of [-1, 1]) {
+    const side = new THREE.Mesh(sideG, matChromeDark);
+    side.position.set(CFG.CHIM_X + sx * (W / 2 - TH / 2), CFG.BASE_H + H / 2, 0);
+    caseG.add(side);
+  }
+}
+const wheelSpin = new THREE.Mesh(
+  new THREE.CylinderGeometry(CFG.WHEEL_R, CFG.WHEEL_R, CFG.WHEEL_T, 30), matSteel);
+{ // flint wheel: axis along z, knurled rim
+  const wg = new THREE.Group();
+  wg.position.set(CFG.WHEEL_X, CFG.WHEEL_Y, 0);
+  wg.rotation.x = Math.PI / 2;             // cylinder axis -> world z
+  wg.add(wheelSpin);
+  caseG.add(wg);
+  const bg = new THREE.BoxGeometry(0.56, 0.6, 0.06);
+  for (const sz of [-1, 1]) {
+    const b = new THREE.Mesh(bg, matChromeDark);
+    b.position.set(CFG.WHEEL_X, CFG.WHEEL_Y - 0.12, sz * (CFG.WHEEL_T / 2 + 0.055));
+    caseG.add(b);
+  }
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.14, 12), matChromeDark);
+  collar.position.set(CFG.WHEEL_X, CFG.BASE_H + 0.04, 0);
+  caseG.add(collar);
+}
+
+// --- bendable wick: 4-segment plastic chain (wire core -> holds its shape) ---
+const wick = { joints: [], tipObj: null, base: null, straightening: false };
+{
+  const L = CFG.WICK_SEG_LEN;
+  wick.base = new THREE.Group();
+  wick.base.position.set(CFG.CHIM_X, CFG.BASE_H + 0.06, 0);
+  caseG.add(wick.base);
+  let parent = wick.base;
+  for (let i = 0; i < CFG.WICK_SEGS; i++) {
+    const j = new THREE.Group();
+    j.position.y = i === 0 ? 0 : L;
+    const seg = new THREE.Mesh(
+      new THREE.CylinderGeometry(CFG.WICK_R * (1 - i * 0.045), CFG.WICK_R * (1 - (i - 1) * 0.045), L, 8),
+      i === CFG.WICK_SEGS - 1 ? matWickTip : matWick);
+    seg.position.y = L / 2;
+    const knee = new THREE.Mesh(new THREE.SphereGeometry(CFG.WICK_R * (1 - i * 0.045), 8, 6),
+      i >= CFG.WICK_SEGS - 1 ? matWickTip : matWick);
+    j.add(seg, knee);
+    parent.add(j);
+    wick.joints.push(j);
+    parent = j;
+  }
+  wick.tipObj = new THREE.Object3D();
+  wick.tipObj.position.y = L;
+  parent.add(wick.tipObj);
+}
+function wickTipWorld(out) { return wick.tipObj.getWorldPosition(out); }
+function wickTipLocalY() {
+  wickTipWorld(_v1);
+  return caseG.worldToLocal(_v1).y;
+}
+function wickIsBent() { return wickTipLocalY() < RIM_Y - 0.06; }
+function wickBentness() { return clamp01((RIM_Y + 0.1 - wickTipLocalY()) / 0.55); }
+function wickTangent(out) {
+  wickTipWorld(out);
+  const j = wick.joints[wick.joints.length - 1].getWorldPosition(_v6);
+  return out.sub(j).normalize();
+}
+function clampQuat(q, maxAngle) {
+  const ang = 2 * Math.acos(clamp(q.w, -1, 1));
+  if (ang > maxAngle) q.slerp(_qI.identity(), 1 - maxAngle / ang);
+  q.normalize();
+}
+function solveWickIK(targetWorld) {
+  for (let iter = 0; iter < 3; iter++) {
+    for (let j = wick.joints.length - 1; j >= 0; j--) {
+      const joint = wick.joints[j];
+      wick.base.updateWorldMatrix(true, true);
+      const jp = _v1.setFromMatrixPosition(joint.matrixWorld);
+      const tip = wickTipWorld(_v2);
+      const a = _v3.subVectors(tip, jp);
+      const b = _v4.subVectors(targetWorld, jp);
+      if (a.lengthSq() < 1e-6 || b.lengthSq() < 1e-6) continue;
+      const q = _q1.setFromUnitVectors(a.normalize(), b.normalize());
+      _q3.identity().slerp(q, 0.55);                        // damped step
+      const pq = joint.parent.getWorldQuaternion(_q2);
+      const lq = _q1.copy(pq).invert().multiply(_q3).multiply(pq);
+      joint.quaternion.premultiply(lq);
+      clampQuat(joint.quaternion, CFG.WICK_JOINT_MAX[j]);
+    }
+  }
+  wick.base.updateWorldMatrix(true, true);
+}
+function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the debug/test path)
+  const angles = [0.25, 0.75, 0.85, 0.6];
+  const axis = _v1.set(0, 0, 1);
+  wick.joints.forEach((j, i) => j.quaternion.setFromAxisAngle(axis, angles[i] * clamp01(k)));
+  wick.base.updateWorldMatrix(true, true);
+}
+
+// contact shadow
+{
+  const t = new THREE.CanvasTexture(radialCanvas(256, [
+    [0, 'rgba(0,0,0,0.55)'], [0.6, 'rgba(0,0,0,0.25)'], [1, 'rgba(0,0,0,0)'],
+  ]));
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(9.5, 9.5),
+    new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = -0.7;
+  m.renderOrder = -1;
+  scene.add(m);
+}
+
+/* ============================== SIM STATE ============================== */
+const OUT = 'OUT', LIT = 'LIT', EMBER = 'EMBER';
+const sim = {
+  lid: { theta: 0, omega: 0, dragging: false, everOpened: false },
+  wheel: { angle: 0, omega: 0, lastSpark: -9 },
+  squash: { s: 0, v: 0, target: 0 },
+  hop: { y: 0, v: 0 },
+  camShake: 0,
+  flame: {
+    state: OUT,
+    bend: new THREE.Vector3(),      // world-space bend offset (spring)
+    bendVel: new THREE.Vector3(),
+    turb: 0, flare: 0, ignite: 0, out: 1,
+  },
+  ember: { t: 0 },
+  upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
+  gWorld: new THREE.Vector3(0, -1, 0),
+  timers: [],
+  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false },
+  counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0 },
+};
+const lidIsOpen = () => sim.lid.theta > CFG.LID_OPEN * 0.75;
+const lidIsClosed = () => sim.lid.theta < 0.12;
+function after(t, fn) { sim.timers.push({ t, fn }); }
+
+/* ============================== AUDIO (fully synthesized) ============================== */
+const Audio = {
+  ctx: null, master: null, noiseBuf: null, burn: null, creak: null,
+  ensure() {
+    if (this.ctx) return true;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    try { this.ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { return false; }
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.85;
+    this.master.connect(this.ctx.destination);
+    const n = (this.ctx.sampleRate * 1.5) | 0;
+    const b = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
+    const d = b.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    this.noiseBuf = b;
+    return true;
+  },
+  resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume().catch(() => {}); },
+  suspend() { if (this.ctx && this.ctx.state === 'running') this.ctx.suspend().catch(() => {}); },
+  t() { return this.ctx.currentTime; },
+  tone(f0, f1, type, dur, vol, t0) {
+    if (!this.ctx) return;
+    try {
+      const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+      o.type = type; t0 = t0 ?? this.t();
+      o.frequency.setValueAtTime(Math.max(20, f0), t0);
+      if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+      g.gain.setValueAtTime(Math.max(0.0001, vol), t0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g).connect(this.master);
+      o.start(t0); o.stop(t0 + dur + 0.03);
+    } catch (e) { /* ignore */ }
+  },
+  burst({ type = 'bandpass', f = 1000, f1 = 0, Q = 1, dur = 0.1, vol = 0.2, t0, att = 0.005 }) {
+    if (!this.ctx) return;
+    try {
+      t0 = t0 ?? this.t();
+      const s = this.ctx.createBufferSource();
+      s.buffer = this.noiseBuf; s.loop = true;
+      const fl = this.ctx.createBiquadFilter();
+      fl.type = type; fl.frequency.setValueAtTime(f, t0); fl.Q.value = Q;
+      if (f1) fl.frequency.exponentialRampToValueAtTime(Math.max(30, f1), t0 + dur);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol), t0 + att);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      s.connect(fl).connect(g).connect(this.master);
+      s.start(t0, Math.random());
+      s.stop(t0 + dur + 0.05);
+    } catch (e) { /* ignore */ }
+  },
+  lid(open, v) {
+    if (!this.ctx) return;
+    v = clamp(v, 0.25, 1);
+    const k = open ? 1 : 0.76, t0 = this.t();
+    [2350, 3620, 5150].forEach((f, i) => this.tone(f * k * (1 + Math.random() * 0.012), 0, 'triangle', 0.05 + i * 0.016, 0.05 * v, t0));
+    this.tone(open ? 175 : 135, 0, 'sine', 0.06, 0.15 * v, t0);
+    this.burst({ type: 'highpass', f: 2800, dur: 0.03, vol: 0.1 * v, t0 });
+  },
+  strike(v = 1) {
+    if (!this.ctx) return;
+    const t0 = this.t();
+    for (let i = 0; i < 3; i++) this.burst({ f: 1500 + Math.random() * 900, Q: 1.1, dur: 0.05, vol: 0.15 * v, t0: t0 + i * 0.024 });
+    this.burst({ type: 'highpass', f: 5200, dur: 0.02, vol: 0.07 * v, t0 });
+  },
+  pop() {
+    if (!this.ctx) return;
+    const t0 = this.t();
+    this.tone(95, 55, 'sine', 0.09, 0.4, t0);
+    this.burst({ type: 'lowpass', f: 900, dur: 0.05, vol: 0.42, t0 });
+    [3050, 4400].forEach(f => this.tone(f, 0, 'triangle', 0.07, 0.075, t0 + 0.005));
+    this.burst({ type: 'highpass', f: 3000, dur: 0.04, vol: 0.13, t0: t0 + 0.005 });
+  },
+  fwoomp() {
+    if (!this.ctx) return;
+    const t0 = this.t();
+    this.burst({ type: 'lowpass', f: 170, f1: 1150, dur: 0.32, vol: 0.5, att: 0.05, t0 });
+    this.tone(120, 55, 'sine', 0.3, 0.22, t0);
+  },
+  puff() { this.burst({ type: 'lowpass', f: 520, dur: 0.24, vol: 0.16, att: 0.02 }); },
+  igniteTick() { this.burst({ type: 'lowpass', f: 300, f1: 800, dur: 0.12, vol: 0.14, att: 0.02 }); },
+  burnEnsure() {
+    if (this.burn || !this.ctx) return;
+    try {
+      const s = this.ctx.createBufferSource();
+      s.buffer = this.noiseBuf; s.loop = true;
+      const fl = this.ctx.createBiquadFilter();
+      fl.type = 'lowpass'; fl.frequency.value = 480; fl.Q.value = 0.4;
+      const g = this.ctx.createGain(); g.gain.value = 0;
+      s.connect(fl).connect(g).connect(this.master);
+      s.start();
+      this.burn = { g, fl };
+    } catch (e) { /* ignore */ }
+  },
+  burnSet(level, cutoff) {
+    if (!this.burn) { if (level > 0) this.burnEnsure(); if (!this.burn) return; }
+    this.burn.g.gain.value = level;
+    this.burn.fl.frequency.value = cutoff || 480;
+  },
+  creakStart() {
+    if (!this.ctx || this.creak) return;
+    try {
+      const o = this.ctx.createOscillator();
+      o.type = 'sawtooth'; o.frequency.value = 82;
+      const fl = this.ctx.createBiquadFilter();
+      fl.type = 'bandpass'; fl.Q.value = 6; fl.frequency.value = 260;
+      const g = this.ctx.createGain(); g.gain.value = 0;
+      o.connect(fl).connect(g).connect(this.master);
+      o.start();
+      this.creak = { o, fl, g };
+    } catch (e) { /* ignore */ }
+  },
+  creakSet(p) {
+    if (!this.creak) return;
+    this.creak.g.gain.value = p * p * 0.12;
+    this.creak.fl.frequency.value = 240 + 950 * p * p;
+    this.creak.o.frequency.value = 70 + 42 * p + Math.random() * 9;
+  },
+  creakStop() {
+    if (!this.creak) return;
+    try {
+      this.creak.g.gain.setTargetAtTime(0, this.t(), 0.02);
+      this.creak.o.stop(this.t() + 0.12);
+    } catch (e) { /* ignore */ }
+    this.creak = null;
+  },
+};
+const buzz = p => { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* unsupported */ } };
+
+/* ============================== WAKE LOCK ============================== */
+let wakeSentinel = null;
+async function requestWake() {
+  try {
+    if (navigator.wakeLock && !wakeSentinel) {
+      wakeSentinel = await navigator.wakeLock.request('screen');
+      wakeSentinel.addEventListener('release', () => { wakeSentinel = null; });
+    }
+  } catch (e) { /* no-op fallback */ }
+}
+function releaseWake() {
+  try { if (wakeSentinel) wakeSentinel.release(); } catch (e) { /* ignore */ }
+  wakeSentinel = null;
+}
+
+/* ============================== FLAME STATE MACHINE ============================== */
+function setFlame(next, cause) {
+  const prev = sim.flame.state;
+  if (prev === next) return;
+  sim.flame.state = next;
+  if (next === LIT) {
+    sim.flame.ignite = 1;
+    sim.counts.ignitions++;
+    sim.disc.lit = true;
+    if (prev === EMBER) {           // relight: whoosh back with a flare
+      sim.flame.flare = 1;
+      sim.counts.relights++;
+      sim.disc.relight = true;
+      Audio.fwoomp();
+      buzz([10, 40, 25]);
+    } else {
+      Audio.igniteTick();
+    }
+    requestWake();
+  } else if (next === EMBER) {      // the flame hides inside the chimney
+    sim.ember.t = CFG.EMBER_LIFE;
+    sim.counts.steals++;
+    sim.disc.ember = true;
+    buzz(8);
+    requestWake();
+  } else {                          // OUT
+    if (prev === LIT) {
+      if (cause === 'smother') { sim.counts.smothers++; sim.disc.smother = true; spawnSmoke(7, 1); Audio.puff(); }
+      else if (cause === 'shake') { sim.counts.snuffs++; spawnSmoke(6, 0.9); Audio.puff(); }
+      else if (cause !== 'lid') { spawnSmoke(4, 0.7); }
+    }
+    if (prev === EMBER && cause === 'decay') spawnSmoke(3, 0.45);
+    releaseWake();
+  }
+  updateHints();
+}
+function tryIgniteFromSparks() {
+  if (!lidIsOpen()) return;                      // sparks only catch with the lid open
+  if (sim.flame.state === LIT) return;
+  after(CFG.IGNITE_DELAY, () => {
+    if (lidIsOpen() && sim.flame.state !== LIT) setFlame(LIT, 'strike');
+  });
+}
+const Actions = {
+  strike(speedVminPerS = 3) {
+    if (!lidIsOpen()) return false;              // wheel is covered when closed
+    const now = perfT();
+    if (now - sim.wheel.lastSpark < CFG.SPARK_REFRACTORY) return false;
+    sim.wheel.lastSpark = now;
+    sim.wheel.omega = clamp(speedVminPerS * 11, 16, 55);
+    sim.counts.sparks++;
+    spawnSparks(9 + (Math.random() * 6 | 0), speedVminPerS);
+    Audio.strike(clamp01(speedVminPerS / 3));
+    buzz(12);
+    tryIgniteFromSparks();
+    return true;
+  },
+  chimneySwipe(speedPxPerS, dirWorld) {
+    if (!lidIsOpen()) return;
+    const fast = speedPxPerS > CFG.CROSS_FAST_VMIN * vmin();
+    if (sim.flame.state === LIT) {
+      if (wickIsBent()) {
+        setFlame(EMBER, 'steal');                // "steal the flame" party trick
+      } else if (fast) {                          // windproof: bends hard, survives
+        sim.flame.turb = 1;
+        if (dirWorld) sim.flame.bendVel.addScaledVector(dirWorld, 7.5);
+        Audio.burst({ type: 'lowpass', f: 700, dur: 0.15, vol: 0.1, att: 0.02 });
+      } else {
+        setFlame(OUT, 'smother');                 // slow palm smother
+      }
+    }
+  },
+  relight(cause) {
+    if (sim.flame.state === EMBER) setFlame(LIT, cause || 'jerk');
+  },
+  jerk(accWorld) {
+    if (sim.flame.state === EMBER) { Actions.relight('jerk'); return; }
+    if (sim.flame.state === LIT) {
+      sim.flame.turb = Math.max(sim.flame.turb, 0.7);
+      const d = accWorld || _v1.set((Math.random() - 0.5), 0, (Math.random() - 0.5)).normalize();
+      sim.flame.bendVel.addScaledVector(d, -6.5);
+    }
+  },
+  shake() {
+    if (sim.flame.state === LIT) setFlame(OUT, 'shake');
+  },
+  flipLid(open, speed) {
+    sim.lid.omega = (open ? 1 : -1) * (speed || CFG.LID_DBLTAP_VEL);
+    sim.lid.dragging = false;
+  },
+  autoLight() {                                   // double-tap combo
+    if (!lidIsOpen()) {
+      Actions.flipLid(true, CFG.LID_DBLTAP_VEL);
+      after(0.3, () => { if (lidIsOpen()) Actions.strike(3); });
+    } else if (sim.flame.state !== LIT) {
+      Actions.strike(3);
+    }
+  },
+  pop() {                                         // squeeze-pop release
+    sim.counts.pops++;
+    sim.disc.pop = true;
+    sim.lid.theta = Math.max(sim.lid.theta, 0.02);
+    sim.lid.omega = CFG.LID_POP_VEL;
+    sim.hop.v = 1.5;
+    sim.camShake = 1;
+    Audio.pop();
+    buzz(50);
+  },
+};
+
+/* ============================== FLAME / SPARK / SMOKE VISUALS ============================== */
+function spriteTex(stops, size = 128) {
+  const t = new THREE.CanvasTexture(radialCanvas(size, stops));
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const TEX = {
+  flame: spriteTex([[0, 'rgba(255,255,255,1)'], [0.22, 'rgba(255,225,150,0.95)'],
+    [0.55, 'rgba(255,140,40,0.5)'], [1, 'rgba(255,70,10,0)']]),
+  core: spriteTex([[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(170,205,255,0.85)'], [1, 'rgba(60,90,255,0)']]),
+  glow: spriteTex([[0, 'rgba(255,175,80,0.6)'], [0.5, 'rgba(255,130,40,0.25)'], [1, 'rgba(255,110,30,0)']]),
+  spark: spriteTex([[0, 'rgba(255,255,255,1)'], [0.3, 'rgba(255,225,160,0.95)'], [1, 'rgba(255,150,50,0)']], 48),
+  smoke: spriteTex([[0, 'rgba(195,198,205,0.32)'], [0.6, 'rgba(185,188,196,0.14)'], [1, 'rgba(180,184,192,0)']]),
+};
+function makeSprite(tex, colorArr, depthTest = true) {
+  const m = new THREE.SpriteMaterial({
+    map: tex, transparent: true, depthWrite: false, depthTest,
+    blending: THREE.AdditiveBlending, opacity: 0,
+  });
+  m.color.setRGB(colorArr[0], colorArr[1], colorArr[2]);
+  const s = new THREE.Sprite(m);
+  s.renderOrder = 10;
+  s.visible = false;
+  scene.add(s);
+  return s;
+}
+// stacked flame layers along a bent spine
+const flameLayers = [
+  { t: 0.05, sx: 0.36, sy: 0.44, tex: 'core', col: [0.7, 1.1, 2.6], op: 0.9, nf: 7, na: 0.02 },
+  { t: 0.17, sx: 0.3, sy: 0.5, tex: 'core', col: [0.9, 1.3, 2.2], op: 0.5, nf: 9, na: 0.04 },
+  { t: 0.34, sx: 0.64, sy: 0.98, tex: 'flame', col: [2.6, 1.35, 0.55], op: 0.95, nf: 11, na: 0.07 },
+  { t: 0.6, sx: 0.5, sy: 0.9, tex: 'flame', col: [2.8, 1.7, 0.75], op: 0.9, nf: 13, na: 0.11 },
+  { t: 0.85, sx: 0.3, sy: 0.64, tex: 'flame', col: [2.9, 2.1, 1.0], op: 0.85, nf: 15, na: 0.16 },
+  { t: 0.45, sx: 1.9, sy: 2.4, tex: 'glow', col: [1.4, 0.75, 0.35], op: 0.3, nf: 5, na: 0.05 },
+].map(L => ({ ...L, spr: makeSprite(TEX[L.tex], L.col), ph: Math.random() * 100 }));
+const pilotSpr = makeSprite(TEX.core, [2.4, 1.4, 0.55]);
+const pilotGlow = makeSprite(TEX.glow, [1.9, 0.85, 0.3]);   // inside the chimney: leaks via the holes
+const flameLight = new THREE.PointLight(0xff9a3c, 0, 11, 2);
+scene.add(flameLight);
+
+const sparks = [];
+for (let i = 0; i < 40; i++) {
+  sparks.push({ spr: makeSprite(TEX.spark, [3, 2.2, 1.3]), pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1 });
+}
+function spawnSparks(n, speedK) {
+  caseG.updateWorldMatrix(true, false);
+  const origin = _v1.set(CFG.WHEEL_X - 0.1, CFG.WHEEL_Y + CFG.WHEEL_R * 0.8, 0);
+  caseG.localToWorld(origin);
+  const baseDir = _v2.set(-1.35, 1.8, 0).normalize().transformDirection(caseG.matrixWorld);
+  let spawned = 0;
+  for (const s of sparks) {
+    if (spawned >= n) break;
+    if (s.life > 0) continue;
+    spawned++;
+    s.pos.copy(origin).addScaledVector(_v3.randomDirection(), 0.06);
+    s.vel.copy(baseDir).multiplyScalar(2 + Math.random() * 1.7 * clamp(speedK / 2, 0.6, 2))
+      .addScaledVector(_v3.randomDirection(), 0.9);
+    s.max = s.life = 0.16 + Math.random() * 0.26;
+  }
+}
+const smoke = [];
+for (let i = 0; i < 12; i++) {
+  const spr = makeSprite(TEX.smoke, [1, 1, 1]);
+  spr.material.blending = THREE.NormalBlending;
+  smoke.push({ spr, pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1, ph: Math.random() * 40, k: 1 });
+}
+function spawnSmoke(n, strength) {
+  wickTipWorld(_v1);
+  let spawned = 0;
+  for (const s of smoke) {
+    if (spawned >= n) break;
+    if (s.life > 0) continue;
+    spawned++;
+    s.pos.copy(_v1).addScaledVector(_v2.randomDirection(), 0.09);
+    s.vel.copy(sim.upDir).multiplyScalar(0.9 + Math.random() * 0.8)
+      .addScaledVector(_v2.randomDirection(), 0.22);
+    s.max = s.life = 1.3 + Math.random() * 0.9;
+    s.k = strength * (0.7 + Math.random() * 0.5);
+  }
+}
+
+/* ============================== CAMERA ============================== */
+const cam = {
+  yaw: 0.32, pitch: 0.06, zoom: 1, fit: 14,
+  yawVel: 0, pitchVel: 0,
+  target: new THREE.Vector3(0, CFG.CAM_TARGET_Y, 0),
+  right: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 1, 0), back: new THREE.Vector3(0, 0, 1),
+};
+function computeFit() {
+  const t = Math.tan(THREE.MathUtils.degToRad(CFG.FOV / 2));
+  const dH = CFG.FIT_HALF_H / t;
+  const dW = CFG.FIT_HALF_W / (t * camera.aspect);
+  cam.fit = Math.max(dH, dW) + 0.6;
+}
+function updateCamera(dt, tSec) {
+  cam.yaw += cam.yawVel * dt;
+  cam.pitch = clamp(cam.pitch + cam.pitchVel * dt, -0.45, 0.6);
+  const dk = Math.exp(-3.2 * dt);
+  cam.yawVel *= dk; cam.pitchVel *= dk;
+  const d = cam.fit * cam.zoom;
+  const cp = Math.cos(cam.pitch);
+  camera.position.set(
+    cam.target.x + d * Math.sin(cam.yaw) * cp,
+    cam.target.y + d * Math.sin(cam.pitch),
+    cam.target.z + d * Math.cos(cam.yaw) * cp);
+  if (sim.camShake > 0) {
+    const s = sim.camShake * 0.06;
+    camera.position.x += vnoise(tSec * 47) * s;
+    camera.position.y += vnoise(tSec * 53 + 9) * s;
+  }
+  camera.lookAt(cam.target);
+  camera.updateMatrixWorld();
+  cam.right.setFromMatrixColumn(camera.matrixWorld, 0);
+  cam.up.setFromMatrixColumn(camera.matrixWorld, 1);
+  cam.back.setFromMatrixColumn(camera.matrixWorld, 2);
+}
+
+/* ============================== SCREEN-SPACE HELPERS ============================== */
+function toScreen(worldV, out) {
+  _v6.copy(worldV).project(camera);
+  out = out || {};
+  out.x = (_v6.x * 0.5 + 0.5) * window.innerWidth;
+  out.y = (0.5 - _v6.y * 0.5) * window.innerHeight;
+  return out;
+}
+function anchorWorld(name, out) {
+  out = out || new THREE.Vector3();
+  caseG.updateWorldMatrix(true, false);
+  lidG.updateWorldMatrix(true, false);
+  switch (name) {
+    case 'tip': return wickTipWorld(out);
+    case 'mouth': return caseG.localToWorld(out.set(CFG.CHIM_X, RIM_Y, 0));
+    case 'mouthX': return caseG.localToWorld(out.set(CFG.CHIM_X + 1, RIM_Y, 0));
+    case 'wheel': return caseG.localToWorld(out.set(CFG.WHEEL_X, CFG.WHEEL_Y + 0.2, 0));
+    case 'lidTop': return lidG.localToWorld(out.set(0, CFG.LID_H, CFG.BODY_D / 2 + 0.06));
+    case 'lidCenter': return lidG.localToWorld(out.set(0, CFG.LID_H / 2, CFG.BODY_D / 2 + 0.06));
+    case 'baseBottom': return caseG.localToWorld(out.set(0, 0.08, 0));
+    case 'baseCenter': return caseG.localToWorld(out.set(0, CFG.BASE_H / 2, 0));
+  }
+  return out;
+}
+function anchorScreen(name) { return toScreen(anchorWorld(name, _v5)); }
+const raycaster = new THREE.Raycaster();
+function rayHit(px, py, meshes) {
+  raycaster.setFromCamera(_v6.set((px / window.innerWidth) * 2 - 1, -(py / window.innerHeight) * 2 + 1, 0).clone(), camera);
+  return raycaster.intersectObjects(meshes, false);
+}
+// grab-point screen tracking for natural lid dragging from any camera angle
+function lidPointScreen(theta, out) {
+  const save = lidG.rotation.x;
+  lidG.rotation.x = -theta;
+  lidG.updateWorldMatrix(true, false);
+  const p = lidG.localToWorld(_v5.set(0, CFG.LID_H * 0.95, CFG.BODY_D + 0.1));
+  toScreen(p, out);
+  lidG.rotation.x = save;
+  lidG.updateWorldMatrix(true, false);
+  return out;
+}
+
+/* ============================== PHYSICS (fixed timestep) ============================== */
+let perfNow = 0;
+function perfT() { return perfNow; }
+function stepPhysics(h) {
+  perfNow += h;
+  // timers
+  for (let i = sim.timers.length - 1; i >= 0; i--) {
+    const tm = sim.timers[i];
+    tm.t -= h;
+    if (tm.t <= 0) { sim.timers.splice(i, 1); try { tm.fn(); } catch (e) { /* ignore */ } }
+  }
+  // ---- lid: spring-damper hinge with over-center cam ----
+  const lid = sim.lid;
+  if (!lid.dragging) {
+    const f = clamp01(lid.theta / CFG.LID_OPEN);
+    let T = -CFG.LID_CAM_K * Math.sin(2 * Math.PI * f);
+    lid.omega += T * h;
+    lid.omega -= lid.omega * CFG.LID_DAMP * h;
+    // never rests mid-arc: nudge a stalled lid toward the nearest end
+    if (Math.abs(lid.omega) < 0.06 && f > 0.02 && f < 0.98) {
+      lid.omega += (f >= 0.5 ? 60 : -60) * h;
+    }
+    lid.theta += lid.omega * h;
+    if (lid.theta <= 0) {
+      lid.theta = 0;
+      if (lid.omega < 0) {
+        if (-lid.omega > 1.5) { Audio.lid(false, -lid.omega / 16); buzz(12); }
+        lid.omega = -lid.omega < CFG.LID_BOUNCE_MIN ? 0 : -lid.omega * CFG.LID_BOUNCE;
+      }
+    } else if (lid.theta >= CFG.LID_OPEN) {
+      lid.theta = CFG.LID_OPEN;
+      if (lid.omega > 0) {
+        if (lid.omega > 1.5) { Audio.lid(true, lid.omega / 16); buzz(lid.omega > 22 ? 24 : 12); }
+        lid.omega = lid.omega < CFG.LID_BOUNCE_MIN ? 0 : -lid.omega * CFG.LID_BOUNCE;
+      }
+      if (!lid.everOpened) { lid.everOpened = true; sim.disc.open = true; updateHints(); }
+    }
+  }
+  // closing the lid from ANY state kills flame and ember
+  if (lid.theta < 0.1 && sim.flame.state !== OUT) setFlame(OUT, 'lid');
+  // ---- squeeze squash spring ----
+  const sq = sim.squash;
+  sq.v += ((sq.target - sq.s) * 420 - sq.v * 24) * h;
+  sq.s += sq.v * h;
+  // ---- recoil hop ----
+  const hp = sim.hop;
+  if (hp.y > 0 || hp.v !== 0) {
+    hp.v -= 62 * h;
+    hp.y += hp.v * h;
+    if (hp.y <= 0) { hp.y = 0; hp.v = Math.abs(hp.v) > 0.35 ? -hp.v * 0.28 : 0; }
+  }
+  // ---- flint wheel ----
+  sim.wheel.omega *= Math.exp(-CFG.WHEEL_FRICTION * h);
+  sim.wheel.angle += sim.wheel.omega * h;
+  // ---- ember decay ----
+  if (sim.flame.state === EMBER) {
+    sim.ember.t -= h;
+    if (sim.ember.t <= 0) setFlame(OUT, 'decay');
+  }
+  // ---- flame bend spring ----
+  const F = sim.flame;
+  F.bendVel.addScaledVector(F.bend, -CFG.FLAME_BEND_K * h);
+  F.bendVel.multiplyScalar(Math.max(0, 1 - CFG.FLAME_BEND_C * h));
+  F.bend.addScaledVector(F.bendVel, h);
+  // keep the bend perpendicular to "up"
+  F.bend.addScaledVector(sim.upDir, -F.bend.dot(sim.upDir));
+  if (F.bend.length() > 1.8) F.bend.setLength(1.8);
+  F.turb = Math.max(0, F.turb - h / CFG.TURB_TIME);
+  F.flare = Math.max(0, F.flare - h / 0.38);
+  F.ignite = Math.max(0, F.ignite - h / 0.16);
+  sim.camShake = Math.max(0, sim.camShake - h / 0.3);
+  // ---- wick straightening animation (pull taut) ----
+  if (wick.straightening) {
+    let done = true;
+    for (const j of wick.joints) {
+      j.quaternion.slerp(_qI.identity(), 1 - Math.exp(-14 * h));
+      if (2 * Math.acos(clamp(j.quaternion.w, -1, 1)) > 0.02) done = false;
+    }
+    if (done) {
+      wick.joints.forEach(j => j.quaternion.identity());
+      wick.straightening = false;
+    }
+    wick.base.updateWorldMatrix(true, true);
+  }
+}
+
+/* ============================== PER-FRAME VISUAL UPDATE ============================== */
+const tipWorld = new THREE.Vector3(), prevTipWorld = new THREE.Vector3();
+const spineA = new THREE.Vector3(), spineB = new THREE.Vector3(), spineC = new THREE.Vector3();
+const flameDir = new THREE.Vector3(0, 1, 0);
+let smoothFlameLevel = 0;
+
+function bezier(t, out) {
+  const it = 1 - t;
+  return out.set(
+    it * it * spineA.x + 2 * it * t * spineB.x + t * t * spineC.x,
+    it * it * spineA.y + 2 * it * t * spineB.y + t * t * spineC.y,
+    it * it * spineA.z + 2 * it * t * spineB.z + t * t * spineC.z);
+}
+function updateFrame(dt, tSec) {
+  // pose the rig
+  lidG.rotation.x = -sim.lid.theta;
+  const s = sim.squash.s;
+  squash.scale.set(1 + s * 0.55, 1 - s, 1 + s * 0.55);
+  lighter.position.y = sim.hop.y;
+  wheelSpin.rotation.y += sim.wheel.omega * dt;
+  caseG.updateWorldMatrix(true, true);
+  lidG.updateWorldMatrix(true, true);
+
+  // wick tip + movement-induced bend (opposite the lighter's motion)
+  wickTipWorld(tipWorld);
+  if (dt > 0) {
+    _v1.subVectors(tipWorld, prevTipWorld).divideScalar(dt);
+    if (_v1.lengthSq() < 400) sim.flame.bendVel.addScaledVector(_v1, -0.45 * dt * 60 * 0.016);
+  }
+  prevTipWorld.copy(tipWorld);
+
+  const F = sim.flame;
+  const bent = wickBentness();
+  const flick = 0.86 + 0.19 * vnoise(tSec * 9.5) + 0.1 * vnoise(tSec * 23 + 7);
+
+  // flame direction: real-world up + bend spring + a bit of wick tangent when bent
+  flameDir.copy(sim.upDir).add(F.bend);
+  if (bent > 0.05) {
+    wickTangent(_v2);
+    flameDir.lerp(_v2, 0.4 * bent);
+  }
+  flameDir.normalize();
+
+  let level = 0;  // 0..1 flame presence for audio/light
+  if (F.state === LIT) {
+    const grow = 1 - F.ignite * F.ignite;
+    const len = CFG.FLAME_H * (1 - 0.42 * bent) * (0.9 + 0.14 * vnoise(tSec * 3.1))
+      * (0.25 + 0.75 * grow) * (1 + 1.15 * F.flare) * (1 - 0.35 * F.turb * Math.abs(vnoise(tSec * 31)));
+    level = clamp01(len / CFG.FLAME_H);
+    spineA.copy(tipWorld);
+    spineC.copy(tipWorld).addScaledVector(flameDir, len);
+    spineB.copy(tipWorld).addScaledVector(sim.upDir, len * 0.28).addScaledVector(flameDir, len * 0.24);
+    const wob = 1 + 2.4 * F.turb;
+    for (const L of flameLayers) {
+      const spr = L.spr;
+      spr.visible = true;
+      bezier(L.t, _v1);
+      const wig = vnoise(tSec * L.nf + L.ph) * L.na * len * wob * (0.3 + L.t);
+      const wig2 = vnoise(tSec * L.nf * 1.4 + L.ph + 31) * L.na * len * wob * 0.5 * L.t;
+      _v1.addScaledVector(cam.right, wig).addScaledVector(cam.up, wig2);
+      spr.position.copy(_v1);
+      const fs = flick * (1 + 0.55 * F.flare);
+      spr.scale.set(L.sx * len * fs, L.sy * len * fs * (1 + 0.35 * F.flare), 1);
+      spr.material.opacity = L.op * grow * (0.8 + 0.2 * flick);
+    }
+    pilotSpr.visible = false;
+    pilotGlow.visible = true;
+    anchorWorld('mouth', _v1); _v1.y -= 0.62;
+    pilotGlow.position.copy(_v1);
+    pilotGlow.scale.set(0.9, 0.75, 1);
+    pilotGlow.material.opacity = 0.28 * grow * flick;
+    bezier(0.45, _v1);
+    flameLight.position.copy(_v1);
+    flameLight.intensity = CFG.FLAME_LIGHT * level * (0.75 + 0.35 * flick) * (1 + 2.6 * F.flare);
+  } else if (F.state === EMBER) {
+    for (const L of flameLayers) L.spr.visible = false;
+    const pilotK = lerp(0.3, 1, clamp01(sim.ember.t / CFG.EMBER_LIFE));
+    const pf = 0.7 + 0.4 * vnoise(tSec * 13) * (0.5 + 0.5 * vnoise(tSec * 5 + 3));
+    level = 0.16 * pilotK;
+    pilotSpr.visible = true;
+    pilotSpr.position.copy(tipWorld).addScaledVector(flameDir, 0.07);
+    pilotSpr.scale.set(0.2 * pilotK * pf + 0.05, 0.26 * pilotK * pf + 0.06, 1);
+    pilotSpr.material.opacity = 0.85 * pf;
+    // the money shot: warm glow pulsing through the windshield holes
+    pilotGlow.visible = true;
+    anchorWorld('mouth', _v1); _v1.y -= 0.6;
+    pilotGlow.position.copy(_v1);
+    pilotGlow.scale.set(1.05 * pilotK, 0.9 * pilotK, 1);
+    pilotGlow.material.opacity = (0.4 + 0.25 * pf) * pilotK;
+    flameLight.position.copy(_v1);
+    flameLight.intensity = 1.3 * pilotK * pf;
+  } else {
+    for (const L of flameLayers) L.spr.visible = false;
+    pilotSpr.visible = false;
+    pilotGlow.visible = false;
+    flameLight.intensity = 0;
+  }
+  smoothFlameLevel = lerp(smoothFlameLevel, level, 1 - Math.exp(-8 * dt));
+
+  // burn loop audio
+  if (Audio.ctx) {
+    if (F.state === LIT) Audio.burnSet(0.11 * smoothFlameLevel * (0.75 + 0.3 * vnoise(tSec * 8)), 480 + 140 * vnoise(tSec * 5));
+    else if (F.state === EMBER) Audio.burnSet(0.016 * (0.6 + 0.5 * vnoise(tSec * 17)), 300);
+    else Audio.burnSet(smoothFlameLevel > 0.01 ? 0.05 * smoothFlameLevel : 0, 420);
+  }
+
+  // sparks
+  for (const sp of sparks) {
+    if (sp.life <= 0) { sp.spr.visible = false; continue; }
+    sp.life -= dt;
+    sp.vel.addScaledVector(sim.gWorld, 15 * dt);
+    sp.pos.addScaledVector(sp.vel, dt);
+    sp.spr.visible = sp.life > 0;
+    const k = clamp01(sp.life / sp.max);
+    sp.spr.position.copy(sp.pos);
+    sp.spr.scale.set(0.05 + 0.05 * k, 0.05 + 0.05 * k, 1);
+    sp.spr.material.opacity = k;
+  }
+  // smoke
+  for (const sm of smoke) {
+    if (sm.life <= 0) { sm.spr.visible = false; continue; }
+    sm.life -= dt;
+    sm.vel.addScaledVector(sim.upDir, 0.5 * dt);
+    sm.vel.multiplyScalar(Math.max(0, 1 - 0.7 * dt));
+    sm.pos.addScaledVector(sm.vel, dt);
+    sm.pos.addScaledVector(cam.right, vnoise(tSec * 2.2 + sm.ph) * 0.25 * dt);
+    const k = clamp01(sm.life / sm.max);
+    const gr = 1.35 - k;
+    sm.spr.visible = sm.life > 0;
+    sm.spr.position.copy(sm.pos);
+    sm.spr.scale.set(gr, gr, 1);
+    sm.spr.material.opacity = 0.4 * sm.k * k * (1 - k * 0.3);
+  }
+  updateCamera(dt, tSec);
+}
+
+/* ============================== INPUT ============================== */
+const pointers = new Map();  // pointerId -> tracker
+let twoMode = null;          // null | {kind:'squeeze'|'zoom', ...}
+let lastTap = null;
+const squeezeState = { popped: false };
+
+function pxSpeedOf(tr) {  // smoothed speed px/s
+  return tr.speed || 0;
+}
+function classify(px, py) {
+  const S = uiScale();
+  if (lidIsOpen()) {
+    const tp = anchorScreen('tip');
+    if (Math.hypot(px - tp.x, py - tp.y) < CFG.R_TIP * S) return 'wick';
+    const wh = anchorScreen('wheel');
+    if (Math.hypot(px - wh.x, py - wh.y) < CFG.R_WHEEL * S) return 'wheel';
+    const mo = anchorScreen('mouth');
+    const mx = anchorScreen('mouthX');
+    const halfW = Math.hypot(mx.x - mo.x, mx.y - mo.y) * 1.15;
+    const dx = (px - mo.x) / (halfW + CFG.R_MOUTH * S);
+    const dy = (py - mo.y) / (CFG.R_MOUTH * S);
+    if (dx * dx + dy * dy < 1) return 'chimney';
+  }
+  const hitsLid = rayHit(px, py, [lidMesh]);
+  if (hitsLid.length) return 'lid';
+  const lc = anchorScreen(lidIsOpen() ? 'lidCenter' : 'lidTop');
+  if (!lidIsOpen() && Math.hypot(px - lc.x, py - lc.y) < CFG.R_LID_PAD * S) return 'lid';
+  const bc = anchorScreen('baseCenter');
+  if (Math.hypot(px - bc.x, py - bc.y) < vmin() * 0.22) return 'case';
+  return 'orbit';
+}
+function beginGesture(tr) {
+  tr.gesture = classify(tr.x, tr.y);
+  if (tr.gesture === 'lid') {
+    sim.lid.dragging = true;
+    tr.lidTheta = sim.lid.theta;
+    tr.omegaEst = 0;
+    refreshLidAxis(tr);
+  } else if (tr.gesture === 'chimney') {
+    const mo = anchorScreen('mouth');
+    const mx = anchorScreen('mouthX');
+    tr.mouthPt = mo;
+    tr.mouthAxis = { x: mx.x - mo.x, y: mx.y - mo.y };
+    const n = Math.hypot(tr.mouthAxis.x, tr.mouthAxis.y) || 1;
+    tr.mouthAxis.x /= n; tr.mouthAxis.y /= n;
+    tr.mouthHalf = n * 1.15;
+    tr.sSign = Math.sign((tr.x - mo.x) * tr.mouthAxis.x + (tr.y - mo.y) * tr.mouthAxis.y) || 1;
+    tr.crossed = false;
+  } else if (tr.gesture === 'wheel') {
+    tr.wheelSpeed = 0;
+  }
+}
+function refreshLidAxis(tr) {
+  const th = sim.lid.theta;
+  const dth = th < CFG.LID_OPEN / 2 ? 0.4 : -0.4;
+  const p0 = lidPointScreen(th, {});
+  const p1 = lidPointScreen(th + dth, {});
+  tr.lidU = { x: (p1.x - p0.x) / dth, y: (p1.y - p0.y) / dth };
+  tr.lidUU = tr.lidU.x * tr.lidU.x + tr.lidU.y * tr.lidU.y || 1;
+  tr.lidAxisTheta = th;
+}
+function endGesture(tr, cancelled) {
+  if (tr.gesture === 'lid') {
+    sim.lid.dragging = false;
+    sim.lid.omega = cancelled ? 0 : clamp(tr.omegaEst, -45, 45);
+  } else if (tr.gesture === 'wick') {
+    // plastic: holds the bend; snap fully straight if it's nearly straight
+    let total = 0;
+    for (const j of wick.joints) total += 2 * Math.acos(clamp(j.quaternion.w, -1, 1));
+    if (total < 0.35) wick.straightening = true;
+  }
+  tr.gesture = 'dead';
+}
+function cancelSingleGestures() {
+  for (const tr of pointers.values()) if (tr.gesture && tr.gesture !== 'dead') endGesture(tr, true);
+}
+function trySqueezeStart(a, b) {
+  const R = Math.max(58, vmin() * CFG.SQZ_ZONE_FRAC);
+  const lt = anchorScreen('lidTop');
+  const bb = anchorScreen('baseBottom');
+  const near = (p, q) => Math.hypot(p.x - q.x, p.y - q.y) < R;
+  for (const [pl, pb] of [[a, b], [b, a]]) {
+    if (near(pl, lt) && near(pb, bb)) {
+      twoMode = { kind: 'squeeze', lidId: pl.id, baseId: pb.id, d0: Math.hypot(a.x - b.x, a.y - b.y) };
+      squeezeState.popped = false;
+      Audio.creakStart();
+      return true;
+    }
+  }
+  return false;
+}
+function twoFingerMove() {
+  if (!twoMode) return;
+  const trs = [...pointers.values()].filter(t => twoMode.kind === 'zoom'
+    ? twoMode.ids.includes(t.id) : (t.id === twoMode.lidId || t.id === twoMode.baseId));
+  if (trs.length < 2) return;
+  const d = Math.hypot(trs[0].x - trs[1].x, trs[0].y - trs[1].y);
+  if (twoMode.kind === 'zoom') {
+    cam.zoom = clamp(twoMode.zoom0 * twoMode.d0 / Math.max(20, d), CFG.ZOOM_MIN, CFG.ZOOM_MAX);
+  } else {
+    const raw = twoMode.d0 - d;
+    const p = clamp01((raw - 5) / Math.max(CFG.SQZ_MIN_PX, twoMode.d0 * CFG.SQZ_TRAVEL));
+    twoMode.p = p;
+    sim.squash.target = p * CFG.SQZ_MAX_SQUASH * (squeezeState.popped ? 0.3 : 1);
+    if (!squeezeState.popped) Audio.creakSet(p);
+    if (!squeezeState.popped && p >= 1) {
+      squeezeState.popped = true;
+      Audio.creakStop();
+      if (lidIsClosed()) Actions.pop();   // squeezing while open just flexes the case
+    }
+  }
+}
+function endTwoFinger() {
+  if (!twoMode) return;
+  if (twoMode.kind === 'squeeze') {
+    sim.squash.target = 0;
+    Audio.creakStop();
+  }
+  twoMode = null;
+}
+
+function onPointerDown(e) {
+  e.preventDefault();
+  if (Audio.ensure()) Audio.resume();
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic */ }
+  const tr = {
+    id: e.pointerId, x: e.clientX, y: e.clientY,
+    startX: e.clientX, startY: e.clientY, t0: performance.now(), tPrev: performance.now(),
+    speed: 0, gesture: null, moved: 0,
+  };
+  pointers.set(e.pointerId, tr);
+  const act = [...pointers.values()];
+  if (act.length === 2) {
+    cancelSingleGestures();
+    if (!trySqueezeStart(act[0], act[1])) {
+      twoMode = {
+        kind: 'zoom', ids: [act[0].id, act[1].id],
+        d0: Math.hypot(act[0].x - act[1].x, act[0].y - act[1].y) || 1, zoom0: cam.zoom,
+      };
+    }
+  } else if (act.length === 1) {
+    beginGesture(tr);
+  } else {
+    tr.gesture = 'dead';
+  }
+}
+function onPointerMove(e) {
+  const tr = pointers.get(e.pointerId);
+  if (!tr) return;
+  e.preventDefault();
+  const now = performance.now();
+  const dt = Math.max(4, now - tr.tPrev) / 1000;   // floor guards burst-delivered events
+  const dx = e.clientX - tr.x, dy = e.clientY - tr.y;
+  tr.speed = lerp(tr.speed, Math.hypot(dx, dy) / dt, 0.45);
+  tr.moved += Math.hypot(dx, dy);
+  tr.x = e.clientX; tr.y = e.clientY; tr.tPrev = now;
+  if (twoMode) { twoFingerMove(); return; }
+  switch (tr.gesture) {
+    case 'lid': {
+      if (Math.abs(sim.lid.theta - tr.lidAxisTheta) > 0.5) refreshLidAxis(tr);
+      const dth = (dx * tr.lidU.x + dy * tr.lidU.y) / tr.lidUU;
+      const prev = sim.lid.theta;
+      sim.lid.theta = clamp(sim.lid.theta + dth, 0, CFG.LID_OPEN);
+      if (sim.lid.theta >= CFG.LID_OPEN && !sim.lid.everOpened) {
+        sim.lid.everOpened = true; sim.disc.open = true; updateHints();
+      }
+      tr.omegaEst = lerp(tr.omegaEst, (sim.lid.theta - prev) / dt, 0.4);
+      break;
+    }
+    case 'wheel': {
+      const sp = (Math.abs(dy) + Math.abs(dx) * 0.35) / dt;   // px/s, mostly vertical
+      tr.wheelSpeed = lerp(tr.wheelSpeed || 0, sp, 0.5);
+      sim.wheel.omega = clamp(tr.wheelSpeed * CFG.WHEEL_GAIN * Math.sign(dy || 1), -60, 60);
+      if (tr.wheelSpeed > CFG.SPARK_SPEED_VMIN * vmin()) {
+        Actions.strike(tr.wheelSpeed / vmin());
+      }
+      break;
+    }
+    case 'wick': {
+      dragWick(e.clientX, e.clientY);
+      break;
+    }
+    case 'chimney': {
+      if (tr.crossed) break;
+      const sNow = (tr.x - tr.mouthPt.x) * tr.mouthAxis.x + (tr.y - tr.mouthPt.y) * tr.mouthAxis.y;
+      if (Math.sign(sNow) === -tr.sSign && Math.abs(sNow) > tr.mouthHalf * 0.55) {
+        tr.crossed = true;
+        const uW = _v4.copy(cam.right).multiplyScalar(tr.mouthAxis.x * -tr.sSign)
+          .addScaledVector(cam.up, -tr.mouthAxis.y * -tr.sSign).normalize();
+        Actions.chimneySwipe(tr.speed, uW);
+      }
+      break;
+    }
+    case 'case':
+    case 'orbit': {
+      const k = CFG.ORBIT_SPEED / vmin();
+      cam.yaw -= dx * k;
+      cam.pitch = clamp(cam.pitch + dy * k * 0.8, -0.45, 0.6);
+      cam.yawVel = lerp(cam.yawVel, -dx * k / dt, 0.5);
+      cam.pitchVel = lerp(cam.pitchVel, dy * k * 0.8 / dt, 0.5);
+      break;
+    }
+  }
+}
+function onPointerUp(e) {
+  const tr = pointers.get(e.pointerId);
+  if (!tr) return;
+  pointers.delete(e.pointerId);
+  try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+  if (twoMode) {
+    endTwoFinger();
+    for (const rest of pointers.values()) rest.gesture = 'dead';
+    return;
+  }
+  const dur = performance.now() - tr.t0;
+  const dist = Math.hypot(tr.x - tr.startX, tr.y - tr.startY);
+  const wasFreeSwipe = (tr.gesture === 'orbit' || tr.gesture === 'case') && !tr.crossed;
+  if (tr.gesture && tr.gesture !== 'dead') endGesture(tr, false);
+  // flick fallback (empty-space swipe only): quick flick relights the ember
+  if (wasFreeSwipe && sim.flame.state === EMBER && dur < 300 && dist > vmin() * 0.12
+    && (dist / (dur / 1000)) > CFG.FLICK_VMIN * vmin()) {
+    Actions.relight('flick');
+  }
+  // taps & double-tap = auto open + strike
+  if (dur < CFG.TAP_MS && tr.moved < CFG.TAP_PX) {
+    const now = performance.now();
+    if (lastTap && now - lastTap.t < CFG.DBL_MS
+      && Math.hypot(tr.x - lastTap.x, tr.y - lastTap.y) < CFG.DBL_PX * uiScale()) {
+      lastTap = null;
+      Actions.autoLight();
+    } else {
+      lastTap = { t: now, x: tr.x, y: tr.y };
+    }
+  }
+  if (pointers.size === 0) sim.lid.dragging = false;
+}
+function onPointerCancel(e) {
+  const tr = pointers.get(e.pointerId);
+  if (tr) { if (tr.gesture && tr.gesture !== 'dead') endGesture(tr, true); pointers.delete(e.pointerId); }
+  if (twoMode) endTwoFinger();
+  if (pointers.size === 0) sim.lid.dragging = false;
+}
+const wickPlane = new THREE.Plane();
+function dragWick(px, py) {
+  camera.getWorldDirection(_v1);
+  wick.base.getWorldPosition(_v2);
+  wickPlane.setFromNormalAndCoplanarPoint(_v1, _v2);
+  raycaster.setFromCamera(_v3.set((px / window.innerWidth) * 2 - 1, -(py / window.innerHeight) * 2 + 1, 0).clone(), camera);
+  if (!raycaster.ray.intersectPlane(wickPlane, _v4)) return;
+  // clamp the target into believable space (inside the chimney when below the rim)
+  const local = caseG.worldToLocal(_v4.clone());
+  local.y = clamp(local.y, CFG.BASE_H + 0.22, RIM_Y + 1.5);
+  if (local.y < RIM_Y) {
+    local.x = clamp(local.x, CFG.CHIM_X - CFG.CHIM_W / 2 + 0.15, CFG.CHIM_X + CFG.CHIM_W / 2 - 0.15);
+    local.z = clamp(local.z, -CFG.CHIM_D / 2 + 0.14, CFG.CHIM_D / 2 - 0.14);
+  } else {
+    local.x = clamp(local.x, CFG.CHIM_X - 1.7, CFG.CHIM_X + 1.7);
+    local.z = clamp(local.z, -0.9, 0.9);
+  }
+  const target = caseG.localToWorld(local);
+  solveWickIK(target);
+  // dragging up past the rim pulls the wick taut again
+  if (local.y > RIM_Y + 0.45) {
+    for (const j of wick.joints) j.quaternion.slerp(_qI.identity(), 0.09);
+    wick.base.updateWorldMatrix(true, true);
+  }
+  wick.straightening = false;
+}
+canvas.addEventListener('pointerdown', onPointerDown);
+canvas.addEventListener('pointermove', onPointerMove);
+canvas.addEventListener('pointerup', onPointerUp);
+canvas.addEventListener('pointercancel', onPointerCancel);
+canvas.addEventListener('lostpointercapture', () => {});
+for (const ev of ['contextmenu', 'dblclick', 'gesturestart', 'gesturechange']) {
+  window.addEventListener(ev, e => e.preventDefault(), { passive: false });
+}
+window.addEventListener('wheel', e => {
+  e.preventDefault();
+  cam.zoom = clamp(cam.zoom * (1 + Math.sign(e.deltaY) * 0.08), CFG.ZOOM_MIN, CFG.ZOOM_MAX);
+}, { passive: false });
+// keyboard fallback (desktop)
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (Audio.ensure()) Audio.resume();
+  switch (e.key) {
+    case ' ': Actions.flipLid(!lidIsOpen()); break;
+    case 's': case 'S': Actions.strike(3); break;
+    case 'b': case 'B': if (lidIsOpen()) setWickBend(1); break;
+    case 'u': case 'U': wick.straightening = true; break;
+    case 'j': case 'J': Actions.jerk(); break;
+    case 'k': case 'K': Actions.shake(); break;
+  }
+});
+
+/* ============================== DEVICE MOTION ============================== */
+const Motion = {
+  hasOrient: false, beta: 0, gamma: 0,
+  emaAcc: 0, shakeT: 0, lastJerk: -9, lastEvT: 0,
+  lpG: new THREE.Vector3(),
+  accWorld: new THREE.Vector3(),
+};
+function screenAngle() {
+  if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
+  return (typeof window.orientation === 'number') ? window.orientation : 0;
+}
+function deviceToWorld(dx, dy, dz, out) {
+  const a = THREE.MathUtils.degToRad(screenAngle());
+  const sx = dx * Math.cos(a) - dy * Math.sin(a);
+  const sy = dx * Math.sin(a) + dy * Math.cos(a);
+  return out.set(0, 0, 0)
+    .addScaledVector(cam.right, sx)
+    .addScaledVector(cam.up, sy)
+    .addScaledVector(cam.back, dz * 0.6);
+}
+function onOrient(e) {
+  if (e.beta === null || e.gamma === null) return;
+  Motion.hasOrient = true;
+  Motion.beta = e.beta;
+  Motion.gamma = e.gamma;
+}
+function onMotion(e) {
+  const now = performance.now();
+  const dtE = clamp((now - (Motion.lastEvT || now)) / 1000, 0.008, 0.1);
+  Motion.lastEvT = now;
+  let ax = 0, ay = 0, az = 0;
+  const acc = e.acceleration;
+  if (acc && (acc.x !== null) && (Math.abs(acc.x) + Math.abs(acc.y) + Math.abs(acc.z) > 0.001 || Motion.hadPureAcc)) {
+    Motion.hadPureAcc = true;
+    ax = acc.x || 0; ay = acc.y || 0; az = acc.z || 0;
+  } else if (e.accelerationIncludingGravity && e.accelerationIncludingGravity.x !== null) {
+    const ig = e.accelerationIncludingGravity;
+    Motion.lpG.lerp(_v1.set(ig.x || 0, ig.y || 0, ig.z || 0), clamp01(dtE * 2));
+    ax = (ig.x || 0) - Motion.lpG.x; ay = (ig.y || 0) - Motion.lpG.y; az = (ig.z || 0) - Motion.lpG.z;
+  }
+  const mag = Math.hypot(ax, ay, az);
+  const tS = now / 1000;
+  // single sharp spike -> relight ember (or hard flame bend while lit)
+  if (mag > CFG.JERK_ACC && (tS - Motion.lastJerk) > 0.6 && Motion.emaAcc < 6) {
+    Motion.lastJerk = tS;
+    deviceToWorld(ax, ay, az, Motion.accWorld);
+    Actions.jerk(Motion.accWorld.normalize());
+  }
+  Motion.emaAcc += (mag - Motion.emaAcc) * clamp01(dtE * 2.5);
+  // sustained vigorous shaking -> snuff
+  if (Motion.emaAcc > CFG.SHAKE_EMA) {
+    Motion.shakeT += dtE;
+    if (Motion.shakeT > CFG.SHAKE_HOLD) { Motion.shakeT = -1.4; Actions.shake(); }
+  } else if (Motion.shakeT > 0) {
+    Motion.shakeT = Math.max(0, Motion.shakeT - dtE * 2);
+  } else {
+    Motion.shakeT = Math.min(0, Motion.shakeT + dtE);
+  }
+}
+function attachMotion() {
+  window.addEventListener('deviceorientation', onOrient);
+  window.addEventListener('devicemotion', onMotion);
+}
+const needsMotionPermission =
+  typeof DeviceMotionEvent !== 'undefined' &&
+  typeof DeviceMotionEvent.requestPermission === 'function';
+if (needsMotionPermission) {
+  motionBtn.classList.add('show');
+  motionBtn.addEventListener('click', async () => {
+    motionBtn.classList.remove('show');
+    try {
+      const r = await DeviceMotionEvent.requestPermission();
+      if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function') {
+        try { await DeviceOrientationEvent.requestPermission(); } catch (e) { /* one prompt usually covers both */ }
+      }
+      if (r === 'granted') attachMotion();
+    } catch (e) { /* denied -> pointer fallbacks keep working */ }
+  });
+} else if (typeof DeviceMotionEvent !== 'undefined' || typeof DeviceOrientationEvent !== 'undefined') {
+  attachMotion();
+}
+function updateGravity(dt) {
+  if (Motion.hasOrient) {
+    const b = THREE.MathUtils.degToRad(Motion.beta);
+    const g = THREE.MathUtils.degToRad(Motion.gamma);
+    const gx = Math.cos(b) * Math.sin(g);
+    const gy = -Math.sin(b);
+    const gz = -Math.cos(b) * Math.cos(g);
+    deviceToWorld(gx, gy, gz, _v1);
+    if (_v1.lengthSq() > 0.05) {
+      sim.gWorld.lerp(_v1.normalize(), 1 - Math.exp(-7 * dt)).normalize();
+    }
+  } else {
+    sim.gWorld.lerp(_v1.set(0, -1, 0), 1 - Math.exp(-4 * dt)).normalize();
+  }
+  sim.upDir.copy(sim.gWorld).multiplyScalar(-1);
+}
+
+/* ============================== HINTS ============================== */
+const HINTS = [
+  { id: 'open', text: 'flip the lid • swipe the wheel — fast', done: () => sim.disc.lit },
+  { id: 'squeeze', text: 'try the squeeze: pinch lid-top + base-bottom', done: () => sim.disc.pop },
+  { id: 'smother', text: 'swipe slowly across the flame to snuff it', done: () => sim.disc.smother },
+  { id: 'ember', text: 'bend the wick low, then swipe the flame away…', done: () => sim.disc.ember },
+  { id: 'relight', text: 'the flame is hiding — snap the phone!', done: () => sim.disc.relight },
+];
+let hintIdx = 0, hintTimer = 0;
+function currentHints() { return HINTS.filter(h => !h.done()); }
+function updateHints() {
+  const hs = currentHints();
+  if (sim.flame.state === EMBER && !sim.disc.relight) {
+    hintEl.textContent = 'the flame is hiding — snap the phone!';
+    hintEl.classList.add('show');
+    return;
+  }
+  if (!hs.length) { hintEl.classList.remove('show'); return; }
+  hintEl.textContent = hs[hintIdx % hs.length].text;
+  hintEl.classList.add('show');
+}
+function tickHints(dt) {
+  hintTimer += dt;
+  if (hintTimer > 8) {
+    hintTimer = 0;
+    hintIdx++;
+    updateHints();
+  }
+}
+
+/* ============================== RESIZE / VISIBILITY / LOOP ============================== */
+function onResize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, CFG.MAX_DPR));
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+  computeFit();
+}
+window.addEventListener('resize', onResize);
+window.addEventListener('orientationchange', () => setTimeout(onResize, 60));
+onResize();
+
+let running = true, rafId = 0, lastT = 0, acc = 0;
+let fpsEma = 60, warm = 0;
+let frames = 0;
+function loop(tms) {
+  if (!running) return;
+  rafId = requestAnimationFrame(loop);
+  if (!lastT) lastT = tms;
+  const dtRaw = (tms - lastT) / 1000;
+  lastT = tms;
+  const dt = clamp(dtRaw, 0, 0.05);
+  if (dtRaw > 0) fpsEma = lerp(fpsEma, 1 / Math.max(1e-3, dtRaw), 0.04);
+  warm += dt;
+  if (bloomOn && warm > 5 && fpsEma < CFG.FPS_BLOOM_OFF) bloomOn = false;
+  acc = Math.min(acc + dt, 0.12);
+  while (acc >= CFG.H) { stepPhysics(CFG.H); acc -= CFG.H; }
+  updateGravity(dt);
+  updateFrame(dt, tms / 1000);
+  tickHints(dt);
+  if (bloomOn) composer.render(); else renderer.render(scene, camera);
+  frames++;
+}
+rafId = requestAnimationFrame(loop);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    running = false;
+    cancelAnimationFrame(rafId);
+    Audio.suspend();
+  } else {
+    running = true;
+    lastT = 0;
+    rafId = requestAnimationFrame(loop);
+    Audio.resume();
+    if (sim.flame.state !== OUT) requestWake();
+  }
+});
+
+updateHints();
+
+/* ============================== DEBUG / TEST API ============================== */
+window.LIGHTER = {
+  CFG, sim, Actions, cam,
+  get state() { return sim.flame.state; },
+  get lidTheta() { return sim.lid.theta; },
+  get frames() { return frames; },
+  get fps() { return fpsEma; },
+  get bloomOn() { return bloomOn; },
+  lidOpen: lidIsOpen,
+  wickBent: wickIsBent,
+  wickTipLocalY,
+  bendWick: setWickBend,
+  straighten: () => { wick.straightening = true; },
+  anchor: name => anchorScreen(name),
+  jerk: () => Actions.jerk(),
+  shake: () => Actions.shake(),
+  strike: v => Actions.strike(v ?? 3),
+  openLid: () => Actions.flipLid(true),
+  closeLid: () => Actions.flipLid(false),
+  chimneySwipe: (pxPerS, dir) => Actions.chimneySwipe(pxPerS, dir),
+};
+window.__booted = true;
+</script>
+</body>
+</html>
