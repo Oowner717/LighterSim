@@ -17,10 +17,12 @@ const state = {
   tilt: 0,
   failedStrikes: 0,
   wheelShift: 0,
+  wheelVel: 0,
 };
 
 let sparks = [];
 let smoke = [];
+let embers = [];
 let W = 0;
 let H = 0;
 
@@ -373,6 +375,7 @@ scene.addEventListener('pointermove', (e) => {
 
   if (g.zone === 'wheel') {
     state.wheelShift += dy;
+    state.wheelVel = Math.max(-1.2, Math.min(1.2, state.wheelVel * 0.7 + (dy / dt) * 0.3));
     wheelEl.style.setProperty('--shift', state.wheelShift.toFixed(1) + 'px');
     g.tickAcc += Math.abs(dy);
     if (g.tickAcc > 15) {
@@ -443,6 +446,7 @@ function updateFlame(dt) {
 }
 
 function spawnSparks(from, toward, speed) {
+  sparks.push({ flash: true, x: from.x, y: from.y, life: 0, ttl: 90 });
   const n = 6 + Math.floor(Math.min(14, speed * 8));
   const ang0 = Math.atan2(toward.y - 26 - from.y, toward.x - from.x);
   for (let i = 0; i < n; i++) {
@@ -485,6 +489,18 @@ function updateDrawSparks(dt) {
   sparks = sparks.filter((s) => {
     s.life += dt;
     if (s.life > s.ttl) return false;
+    const pf = s.life / s.ttl;
+    if (s.flash) {
+      const r = 8 + 26 * pf;
+      const fg = ctx2d.createRadialGradient(s.x, s.y, 0, s.x, s.y, r);
+      fg.addColorStop(0, `rgba(255,230,170,${(1 - pf) * 0.55})`);
+      fg.addColorStop(1, 'rgba(255,150,40,0)');
+      ctx2d.fillStyle = fg;
+      ctx2d.beginPath();
+      ctx2d.arc(s.x, s.y, r, 0, 7);
+      ctx2d.fill();
+      return true;
+    }
     s.vy += 0.0016 * dt;
     s.x += s.vx * dt;
     s.y += s.vy * dt;
@@ -494,6 +510,30 @@ function updateDrawSparks(dt) {
     ctx2d.moveTo(s.x, s.y);
     ctx2d.lineTo(s.x - s.vx * 16, s.y - s.vy * 16);
     ctx2d.stroke();
+    return true;
+  });
+  ctx2d.restore();
+}
+
+function updateDrawEmbers(dt) {
+  if (!embers.length) return;
+  ctx2d.save();
+  ctx2d.globalCompositeOperation = 'lighter';
+  embers = embers.filter((e) => {
+    e.life += dt;
+    if (e.life > e.ttl) return false;
+    const p = e.life / e.ttl;
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
+    const r = Math.max(0.5, e.r * (1 - p * 0.6));
+    const gr = ctx2d.createRadialGradient(e.x, e.y, 0, e.x, e.y, r * 2.2);
+    gr.addColorStop(0, `rgba(255,225,140,${(1 - p) * 0.8})`);
+    gr.addColorStop(0.5, `rgba(255,140,30,${(1 - p) * 0.4})`);
+    gr.addColorStop(1, 'rgba(255,120,20,0)');
+    ctx2d.fillStyle = gr;
+    ctx2d.beginPath();
+    ctx2d.arc(e.x, e.y, r * 2.2, 0, 7);
+    ctx2d.fill();
     return true;
   });
   ctx2d.restore();
@@ -572,12 +612,12 @@ function paintFlame(a, v, t, bend, hgt, wdt) {
   ctx2d.fill();
 }
 
-function drawFlame(t) {
+function drawFlame(t, dt) {
   const f = state.flame;
   if (f.v < 0.02) return 0;
   const a = flameAnchor();
   const lighterRect = lighterEl.getBoundingClientRect();
-  const base = Math.max(10, lighterRect.width * 0.09);
+  const base = Math.max(10, lighterRect.width * 0.095);
   const age = t - f.born;
   const flare = state.lit && age < 450 ? 1 + 0.5 * Math.exp(-age / 180) : 1;
   const flick = 1 + 0.1 * n1(t * 0.006) + 0.05 * n1(t * 0.023 + 9);
@@ -585,6 +625,22 @@ function drawFlame(t) {
   const hgt = base * 3.3 * v * flick;
   const wdt = base * (0.9 + 0.2 * n1(t * 0.004 + 3)) * Math.min(1, v * 1.5);
   const bend = f.bend + 0.16 * n1(t * 0.0035 + 7);
+
+  /* life at the tip: the odd ember drifting up, smoke when the flame is torn */
+  const tip = { x: a.x + bend * hgt * 0.5, y: a.y - hgt };
+  if (state.lit && Math.random() < dt * 0.0008 * v) {
+    embers.push({
+      x: tip.x, y: tip.y + 6,
+      vx: (Math.random() - 0.5) * 0.02,
+      vy: -(0.05 + Math.random() * 0.05),
+      r: wdt * (0.1 + Math.random() * 0.08),
+      life: 0,
+      ttl: 280 + Math.random() * 260,
+    });
+  }
+  if (state.lit && Math.abs(f.bend) > 1.0 && Math.random() < dt * 0.004) {
+    spawnSmoke(tip, 0.12);
+  }
 
   ctx2d.save();
   paintFlame(a, v, t, bend, hgt, wdt);
@@ -604,13 +660,36 @@ function drawFlame(t) {
 }
 
 let last = performance.now();
+let spinAcc = 0;
+let lastSpinTick = 0;
+
+function updateWheelSpin(dt, t) {
+  if (g && g.zone === 'wheel') return;
+  if (Math.abs(state.wheelVel) < 0.02) {
+    state.wheelVel = 0;
+    return;
+  }
+  const d = state.wheelVel * dt;
+  state.wheelShift += d;
+  wheelEl.style.setProperty('--shift', state.wheelShift.toFixed(1) + 'px');
+  state.wheelVel *= Math.pow(0.992, dt);
+  spinAcc += Math.abs(d);
+  if (spinAcc > 18 && t - lastSpinTick > 45) {
+    spinAcc = 0;
+    lastSpinTick = t;
+    Sound.tick();
+  }
+}
+
 function frame(t) {
   const dt = Math.min(50, t - last);
   last = t;
   updateFlame(dt);
+  updateWheelSpin(dt, t);
   ctx2d.clearRect(0, 0, W, H);
   updateDrawSparks(dt);
-  const gi = drawFlame(t);
+  const gi = drawFlame(t, dt);
+  updateDrawEmbers(dt);
   updateDrawSmoke(dt, t);
   const root = document.documentElement.style;
   root.setProperty('--gi', (Math.max(0, Math.min(1, gi)) * 0.9).toFixed(3));
