@@ -73,7 +73,7 @@
   window.addEventListener('error', function () {
     if (window.__booted) return;
     var h = document.getElementById('hint');
-    if (h) { h.textContent = 'Could not start — needs a modern browser and a connection.'; h.classList.add('show'); }
+    if (h) { h.textContent = 'Could not start — needs a connection and a modern browser (iOS 16.4+ / recent Chrome).'; h.classList.add('show'); }
   }, true);
 </script>
 <script type="module">
@@ -493,7 +493,8 @@ const Audio = {
     this.noiseBuf = b;
     return true;
   },
-  resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume().catch(() => {}); },
+  // 'interrupted' is a WebKit extension state (phone call, Siri) that also needs resuming
+  resume() { if (this.ctx && this.ctx.state !== 'running') this.ctx.resume().catch(() => {}); },
   suspend() { if (this.ctx && this.ctx.state === 'running') this.ctx.suspend().catch(() => {}); },
   t() { return this.ctx.currentTime; },
   tone(f0, f1, type, dur, vol, t0) {
@@ -1168,14 +1169,16 @@ function beginGesture(tr) {
     tr.wheelSpeed = 0;
   }
 }
+// The drag axis is captured ONCE at grab time and kept frozen: the grab point's
+// screen path is non-monotonic in theta (it arcs over the top), so re-deriving the
+// axis mid-drag would make an upward swipe close the lid past vertical.
 function refreshLidAxis(tr) {
   const th = sim.lid.theta;
-  const dth = th < CFG.LID_OPEN / 2 ? 0.4 : -0.4;
+  const dth = th < CFG.LID_OPEN / 2 ? 0.5 : -0.5;
   const p0 = lidPointScreen(th, {});
   const p1 = lidPointScreen(th + dth, {});
   tr.lidU = { x: (p1.x - p0.x) / dth, y: (p1.y - p0.y) / dth };
-  tr.lidUU = tr.lidU.x * tr.lidU.x + tr.lidU.y * tr.lidU.y || 1;
-  tr.lidAxisTheta = th;
+  tr.lidUU = Math.max(25, tr.lidU.x * tr.lidU.x + tr.lidU.y * tr.lidU.y);
 }
 // release velocities decay with how long the finger dwelt motionless before lifting
 function releaseDecay(tr) {
@@ -1289,7 +1292,6 @@ function onPointerMove(e) {
   if (twoMode) { twoFingerMove(); return; }
   switch (tr.gesture) {
     case 'lid': {
-      if (Math.abs(sim.lid.theta - tr.lidAxisTheta) > 0.5) refreshLidAxis(tr);
       const dth = (dx * tr.lidU.x + dy * tr.lidU.y) / tr.lidUU;
       const prev = sim.lid.theta;
       sim.lid.theta = clamp(sim.lid.theta + dth, 0, CFG.LID_OPEN);
@@ -1335,6 +1337,8 @@ function onPointerMove(e) {
   }
 }
 function onPointerUp(e) {
+  // touch pointerdown carries no user activation; pointerup does — retry the audio unlock here
+  if (Audio.ensure()) Audio.resume();
   const tr = pointers.get(e.pointerId);
   if (!tr) return;
   pointers.delete(e.pointerId);
@@ -1474,6 +1478,7 @@ function onOrient(e) {
   Motion.gamma = e.gamma;
 }
 function onMotion(e) {
+  Motion.sawMotion = true;
   const now = performance.now();
   const dtE = clamp((now - (Motion.lastEvT || now)) / 1000, 0.008, 0.1);
   Motion.lastEvT = now;
@@ -1547,12 +1552,18 @@ function updateGravity(dt) {
 }
 
 /* ============================== HINTS ============================== */
+// works with denied/absent motion sensors too: the flick fallback gets hinted instead
+function relightHint() {
+  return (Motion.hasOrient || Motion.sawMotion)
+    ? 'the flame is hiding — snap the phone!'
+    : 'the flame is hiding — flick across the screen!';
+}
 const HINTS = [
-  { id: 'open', text: 'flip the lid • swipe the wheel — fast', done: () => sim.disc.lit },
-  { id: 'squeeze', text: 'try the squeeze: pinch lid-top + base-bottom', done: () => sim.disc.pop },
-  { id: 'smother', text: 'swipe slowly across the flame to snuff it', done: () => sim.disc.smother },
-  { id: 'ember', text: 'bend the wick low, then swipe the flame away…', done: () => sim.disc.ember },
-  { id: 'relight', text: 'the flame is hiding — snap the phone!', done: () => sim.disc.relight },
+  { id: 'open', text: () => 'flip the lid • swipe the wheel — fast', done: () => sim.disc.lit },
+  { id: 'squeeze', text: () => 'try the squeeze: pinch lid-top + base-bottom', done: () => sim.disc.pop },
+  { id: 'smother', text: () => 'swipe slowly across the flame to snuff it', done: () => sim.disc.smother },
+  { id: 'ember', text: () => 'bend the wick low, then swipe the flame away…', done: () => sim.disc.ember },
+  { id: 'relight', text: relightHint, done: () => sim.disc.relight },
 ];
 let hintIdx = 0, hintTimer = 0;
 function currentHints() {
@@ -1562,12 +1573,12 @@ function currentHints() {
 function updateHints() {
   const hs = currentHints();
   if (sim.flame.state === EMBER && !sim.disc.relight) {
-    hintEl.textContent = 'the flame is hiding — snap the phone!';
+    hintEl.textContent = relightHint();
     hintEl.classList.add('show');
     return;
   }
   if (!hs.length) { hintEl.classList.remove('show'); return; }
-  hintEl.textContent = hs[hintIdx % hs.length].text;
+  hintEl.textContent = hs[hintIdx % hs.length].text();
   hintEl.classList.add('show');
 }
 function tickHints(dt) {
