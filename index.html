@@ -606,16 +606,21 @@ const Audio = {
 const buzz = p => { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* unsupported */ } };
 
 /* ============================== WAKE LOCK ============================== */
-let wakeSentinel = null;
+let wakeSentinel = null, wakeWanted = false;
 async function requestWake() {
+  wakeWanted = true;
   try {
     if (navigator.wakeLock && !wakeSentinel) {
-      wakeSentinel = await navigator.wakeLock.request('screen');
-      wakeSentinel.addEventListener('release', () => { wakeSentinel = null; });
+      const s = await navigator.wakeLock.request('screen');
+      // the flame may have gone out (or another request won) while we awaited
+      if (!wakeWanted || wakeSentinel) { try { s.release(); } catch (e) { /* ignore */ } return; }
+      wakeSentinel = s;
+      s.addEventListener('release', () => { if (wakeSentinel === s) wakeSentinel = null; });
     }
   } catch (e) { /* no-op fallback */ }
 }
 function releaseWake() {
+  wakeWanted = false;
   try { if (wakeSentinel) wakeSentinel.release(); } catch (e) { /* ignore */ }
   wakeSentinel = null;
 }
@@ -791,7 +796,7 @@ function spawnSparks(n, speedK) {
   }
 }
 const smoke = [];
-for (let i = 0; i < 12; i++) {
+for (let i = 0; i < 16; i++) {
   const spr = makeSprite(TEX.smoke, [1, 1, 1]);
   spr.material.blending = THREE.NormalBlending;
   smoke.push({ spr, pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1, ph: Math.random() * 40, k: 1 });
@@ -927,8 +932,8 @@ function stepPhysics(h) {
       if (!lid.everOpened) { lid.everOpened = true; sim.disc.open = true; updateHints(); }
     }
   }
-  // closing the lid from ANY state kills flame and ember
-  if (lid.theta < 0.1 && sim.flame.state !== OUT) setFlame(OUT, 'lid');
+  // closing the lid from ANY state kills flame and ember (same band as lidIsClosed)
+  if (lid.theta < 0.12 && sim.flame.state !== OUT) setFlame(OUT, 'lid');
   // ---- squeeze squash spring ----
   const sq = sim.squash;
   sq.v += ((sq.target - sq.s) * 420 - sq.v * 24) * h;
@@ -994,7 +999,7 @@ function updateFrame(dt, tSec) {
   const s = sim.squash.s;
   squash.scale.set(1 + s * 0.55, 1 - s, 1 + s * 0.55);
   lighter.position.y = sim.hop.y;
-  wheelSpin.rotation.y += sim.wheel.omega * dt;
+  wheelSpin.rotation.y = sim.wheel.angle;
   caseG.updateWorldMatrix(true, true);
   lidG.updateWorldMatrix(true, true);
 
@@ -1172,10 +1177,20 @@ function refreshLidAxis(tr) {
   tr.lidUU = tr.lidU.x * tr.lidU.x + tr.lidU.y * tr.lidU.y || 1;
   tr.lidAxisTheta = th;
 }
+// release velocities decay with how long the finger dwelt motionless before lifting
+function releaseDecay(tr) {
+  return Math.exp(-Math.max(0, (tr.releaseDwell ?? 0) - 20) / 60);
+}
 function endGesture(tr, cancelled) {
   if (tr.gesture === 'lid') {
     sim.lid.dragging = false;
-    sim.lid.omega = cancelled ? 0 : clamp(tr.omegaEst, -45, 45);
+    sim.lid.omega = cancelled ? 0 : clamp(tr.omegaEst * releaseDecay(tr), -45, 45);
+  } else if (tr.gesture === 'orbit' || tr.gesture === 'case') {
+    if (!cancelled) {
+      const d = releaseDecay(tr);
+      cam.yawVel = clamp((tr.orbitVyaw || 0) * d, -5, 5);
+      cam.pitchVel = clamp((tr.orbitVpitch || 0) * d, -5, 5);
+    }
   } else if (tr.gesture === 'wick') {
     // plastic: holds the bend; snap fully straight if it's nearly straight
     let total = 0;
@@ -1236,6 +1251,9 @@ function onPointerDown(e) {
   e.preventDefault();
   if (Audio.ensure()) Audio.resume();
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic */ }
+  const stale = pointers.get(e.pointerId);   // heal a tracker whose release we never saw
+  if (stale) { if (stale.gesture && stale.gesture !== 'dead') endGesture(stale, true); pointers.delete(e.pointerId); }
+  cam.yawVel = 0; cam.pitchVel = 0;          // touching arrests orbit coasting, keeping anchors valid
   const tr = {
     id: e.pointerId, x: e.clientX, y: e.clientY,
     startX: e.clientX, startY: e.clientY, t0: performance.now(), tPrev: performance.now(),
@@ -1244,6 +1262,7 @@ function onPointerDown(e) {
   pointers.set(e.pointerId, tr);
   const act = [...pointers.values()];
   if (act.length === 2) {
+    lastTap = null;                          // pinches never feed the double-tap combo
     cancelSingleGestures();
     if (!trySqueezeStart(act[0], act[1])) {
       twoMode = {
@@ -1309,8 +1328,8 @@ function onPointerMove(e) {
       const k = CFG.ORBIT_SPEED / vmin();
       cam.yaw -= dx * k;
       cam.pitch = clamp(cam.pitch + dy * k * 0.8, -0.45, 0.6);
-      cam.yawVel = lerp(cam.yawVel, -dx * k / dt, 0.5);
-      cam.pitchVel = lerp(cam.pitchVel, dy * k * 0.8 / dt, 0.5);
+      tr.orbitVyaw = lerp(tr.orbitVyaw || 0, -dx * k / dt, 0.5);
+      tr.orbitVpitch = lerp(tr.orbitVpitch || 0, dy * k * 0.8 / dt, 0.5);
       break;
     }
   }
@@ -1321,21 +1340,29 @@ function onPointerUp(e) {
   pointers.delete(e.pointerId);
   try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
   if (twoMode) {
-    endTwoFinger();
-    for (const rest of pointers.values()) rest.gesture = 'dead';
+    const involved = twoMode.kind === 'zoom'
+      ? twoMode.ids.includes(e.pointerId)
+      : (e.pointerId === twoMode.lidId || e.pointerId === twoMode.baseId);
+    if (involved) {   // a grazing third finger lifting must not kill the pinch
+      endTwoFinger();
+      for (const rest of pointers.values()) rest.gesture = 'dead';
+    }
     return;
   }
-  const dur = performance.now() - tr.t0;
+  const now = performance.now();
+  const dur = now - tr.t0;
   const dist = Math.hypot(tr.x - tr.startX, tr.y - tr.startY);
   const wasFreeSwipe = (tr.gesture === 'orbit' || tr.gesture === 'case') && !tr.crossed;
-  if (tr.gesture && tr.gesture !== 'dead') endGesture(tr, false);
+  const hadGesture = tr.gesture && tr.gesture !== 'dead';
+  tr.releaseDwell = now - tr.tPrev;
+  if (hadGesture) endGesture(tr, false);
   // flick fallback (empty-space swipe only): quick flick relights the ember
   if (wasFreeSwipe && sim.flame.state === EMBER && dur < 300 && dist > vmin() * 0.12
     && (dist / (dur / 1000)) > CFG.FLICK_VMIN * vmin()) {
     Actions.relight('flick');
   }
-  // taps & double-tap = auto open + strike
-  if (dur < CFG.TAP_MS && tr.moved < CFG.TAP_PX) {
+  // taps & double-tap = auto open + strike (real single-finger gestures only)
+  if (hadGesture && dur < CFG.TAP_MS && tr.moved < CFG.TAP_PX) {
     const now = performance.now();
     if (lastTap && now - lastTap.t < CFG.DBL_MS
       && Math.hypot(tr.x - lastTap.x, tr.y - lastTap.y) < CFG.DBL_PX * uiScale()) {
@@ -1350,9 +1377,24 @@ function onPointerUp(e) {
 function onPointerCancel(e) {
   const tr = pointers.get(e.pointerId);
   if (tr) { if (tr.gesture && tr.gesture !== 'dead') endGesture(tr, true); pointers.delete(e.pointerId); }
-  if (twoMode) endTwoFinger();
+  if (twoMode) {
+    const involved = twoMode.kind === 'zoom'
+      ? twoMode.ids.includes(e.pointerId)
+      : (e.pointerId === twoMode.lidId || e.pointerId === twoMode.baseId);
+    if (involved) {
+      endTwoFinger();
+      for (const rest of pointers.values()) rest.gesture = 'dead';
+    }
+  }
   if (pointers.size === 0) sim.lid.dragging = false;
 }
+function resetPointers() {   // heal any tracker whose release event we never received
+  for (const tr of pointers.values()) if (tr.gesture && tr.gesture !== 'dead') endGesture(tr, true);
+  pointers.clear();
+  endTwoFinger();
+  sim.lid.dragging = false;
+}
+window.addEventListener('blur', resetPointers);
 const wickPlane = new THREE.Plane();
 function dragWick(px, py) {
   camera.getWorldDirection(_v1);
@@ -1513,7 +1555,10 @@ const HINTS = [
   { id: 'relight', text: 'the flame is hiding — snap the phone!', done: () => sim.disc.relight },
 ];
 let hintIdx = 0, hintTimer = 0;
-function currentHints() { return HINTS.filter(h => !h.done()); }
+function currentHints() {
+  // the relight hint only makes sense while an ember is actually hiding
+  return HINTS.filter(h => !h.done() && (h.id !== 'relight' || sim.flame.state === EMBER));
+}
 function updateHints() {
   const hs = currentHints();
   if (sim.flame.state === EMBER && !sim.disc.relight) {
@@ -1541,6 +1586,7 @@ function onResize() {
   camera.updateProjectionMatrix();
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, CFG.MAX_DPR));
   renderer.setSize(w, h);
+  composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, CFG.MAX_DPR));
   composer.setSize(w, h);
   computeFit();
 }
@@ -1559,7 +1605,7 @@ function loop(tms) {
   lastT = tms;
   const dt = clamp(dtRaw, 0, 0.05);
   if (dtRaw > 0) fpsEma = lerp(fpsEma, 1 / Math.max(1e-3, dtRaw), 0.04);
-  warm += dt;
+  warm += dtRaw;   // wall time, so the bloom rescue isn't delayed on slow devices
   if (bloomOn && warm > 5 && fpsEma < CFG.FPS_BLOOM_OFF) bloomOn = false;
   acc = Math.min(acc + dt, 0.12);
   while (acc >= CFG.H) { stepPhysics(CFG.H); acc -= CFG.H; }
@@ -1576,6 +1622,7 @@ document.addEventListener('visibilitychange', () => {
     running = false;
     cancelAnimationFrame(rafId);
     Audio.suspend();
+    resetPointers();
   } else {
     running = true;
     lastT = 0;
