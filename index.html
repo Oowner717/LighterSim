@@ -71,6 +71,13 @@
 <button id="motionBtn" type="button">Enable motion</button>
 <noscript><p style="color:#ccc;padding:2em;text-align:center">This lighter needs JavaScript.</p></noscript>
 <script>
+  // A previous deployment on this origin registered a service worker; we don't
+  // use one, so drop any stale registration that could serve dead cached files.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations()
+      .then(function (rs) { rs.forEach(function (r) { r.unregister(); }); })
+      .catch(function () {});
+  }
   // Boot failure fallback (old browsers without import maps, CDN unreachable).
   window.addEventListener('error', function () {
     if (window.__booted) return;

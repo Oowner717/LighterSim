@@ -1,8 +1,9 @@
 name: Deploy to GitHub Pages
 
+# Manual-only: the live site publishes from the repo's default branch via the
+# built-in Pages pipeline. This workflow needs the github-pages environment to
+# allow this branch before it can deploy (Settings -> Environments).
 on:
-  push:
-    branches: [claude/zippo-lighter-3d-v5j1py]
   workflow_dispatch:
 
 permissions:
