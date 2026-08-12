@@ -3,6 +3,7 @@
 const $ = (s) => document.querySelector(s);
 const scene = $('#scene');
 const lighterEl = $('#lighter');
+const caseEl = $('.case');
 const lidEl = $('#lid');
 const wheelEl = $('#wheel');
 const wickEl = $('#wick');
@@ -10,15 +11,29 @@ const hintEl = $('#hint');
 const canvas = $('#fx');
 const ctx2d = canvas.getContext('2d');
 
+/* lid mechanics: 0 = closed, LID_OPEN = fully open; the spring cam pushes the
+   lid toward whichever side of LID_SNAP it is on, so it never rests half-open */
+const LID_OPEN = 102;
+const LID_SNAP = 46;
+const LID_TORQUE = 0.009;   // deg/ms^2
+const LID_DAMP = 0.0045;    // per ms
+
 const state = {
-  open: false,
+  lid: { angle: 0, vel: 0, dragging: false },
   lit: false,
-  flame: { v: 0, bend: 0, bendV: 0, wind: 0, born: 0 },
+  flame: { v: 0, bend: 0, bendV: 0, wind: 0, stress: 0, lick: 0, born: 0 },
+  rock: { a: 0, v: 0 },
   tilt: 0,
   failedStrikes: 0,
   wheelShift: 0,
   wheelVel: 0,
+  ember: null,
+  lastOut: -1e9,
 };
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const openS = () => clamp(state.lid.angle / LID_OPEN, 0, 1);
+const isOpen = () => state.lid.angle > LID_OPEN * 0.8;
 
 let sparks = [];
 let smoke = [];
@@ -120,22 +135,27 @@ const Sound = (() => {
 
   return {
     unlock,
-    /* the bright "cling" of the lid flipping open */
-    open() {
+    /* the bright "cling" of the lid swinging open; k scales with impact */
+    open(k = 1) {
       if (!ready()) return;
-      burst({ dur: 0.02, type: 'highpass', freq: 2500, gain: 0.3 });
-      ping(2280, 0.16, 0.16);
-      ping(3390, 0.12, 0.1);
-      ping(5490, 0.07, 0.05);
-      ping(920, 0.04, 0.08);
+      burst({ dur: 0.02, type: 'highpass', freq: 2500, gain: 0.3 * k });
+      ping(2280, 0.16, 0.16 * k);
+      ping(3390, 0.12, 0.1 * k);
+      ping(5490, 0.07, 0.05 * k);
+      ping(920, 0.04, 0.08 * k);
     },
-    /* the duller "clunk" of it snapping shut */
-    close() {
+    /* the duller "clack" of it snapping shut */
+    close(k = 1) {
       if (!ready()) return;
-      burst({ dur: 0.045, type: 'lowpass', freq: 750, gain: 0.55 });
-      ping(1180, 0.08, 0.14);
-      ping(1770, 0.05, 0.07);
-      ping(150, 0.07, 0.25);
+      burst({ dur: 0.045, type: 'lowpass', freq: 750, gain: 0.55 * k });
+      ping(1180, 0.08, 0.14 * k);
+      ping(1770, 0.05, 0.07 * k);
+      ping(150, 0.07, 0.25 * k);
+    },
+    /* faint hinge friction while the lid is dragged slowly */
+    creak(i) {
+      if (!ready()) return;
+      burst({ dur: 0.018, type: 'bandpass', freq: 620 + Math.random() * 320, q: 2.2, gain: 0.02 + 0.05 * i });
     },
     tick() {
       if (!ready()) return;
@@ -220,6 +240,12 @@ function wheelAnchor() {
   return { x: r.left + r.width / 2, y: r.top + r.height * 0.12 };
 }
 
+/* screen position of the lid hinge (bottom-right of the lid at rest) */
+function hingePoint() {
+  const r = caseEl.getBoundingClientRect();
+  return { x: r.right, y: r.top };
+}
+
 function inflate(r, m) {
   return { left: r.left - m, right: r.right + m, top: r.top - m, bottom: r.bottom + m };
 }
@@ -229,7 +255,7 @@ function within(x, y, r) {
 }
 
 function zoneAt(x, y) {
-  if (state.open && within(x, y, inflate(wheelEl.getBoundingClientRect(), 18))) return 'wheel';
+  if (isOpen() && within(x, y, inflate(wheelEl.getBoundingClientRect(), 18))) return 'wheel';
   if (within(x, y, inflate(lidEl.getBoundingClientRect(), 6))) return 'lid';
   if (within(x, y, inflate(lighterEl.getBoundingClientRect(), 10))) return 'body';
   return 'scene';
@@ -285,38 +311,41 @@ function requestTiltPermission() {
 }
 window.addEventListener('deviceorientation', (e) => {
   if (e.gamma == null) return;
-  state.tilt = Math.max(-1, Math.min(1, e.gamma / 45));
+  state.tilt = clamp(e.gamma / 45, -1, 1);
 });
 
 /* -------------------------------------------------------------- actions */
 
-function openLid() {
-  if (state.open) return;
-  state.open = true;
-  lighterEl.classList.add('open');
-  scene.classList.add('open');
-  Sound.open();
-  buzz(12);
-  setHint(1);
-  requestTiltPermission();
+/* impulses, not animations: the cam spring does the rest */
+function flickOpen(strength = 1) {
+  if (state.lid.dragging) return;
+  state.lid.vel = Math.max(state.lid.vel, 1.0 + 0.4 * clamp(strength, 0, 2));
 }
 
-function closeLid() {
-  if (!state.open) return;
-  state.open = false;
-  lighterEl.classList.remove('open');
-  scene.classList.remove('open');
-  Sound.close();
-  buzz(16);
-  if (state.lit) extinguish('snuff');
-  else setHint(0);
+function flickClosed(strength = 1) {
+  if (state.lid.dragging) return;
+  state.lid.vel = Math.min(state.lid.vel, -(1.05 + 0.4 * clamp(strength, 0, 2)));
+}
+
+function lidImpact(open, v) {
+  const i = clamp((v - 0.15) / 1.2, 0, 1);
+  if (i > 0.02) {
+    if (open) Sound.open(0.35 + 0.65 * i);
+    else Sound.close(0.35 + 0.65 * i);
+    buzz(Math.round(4 + 12 * i));
+  }
+  state.rock.v += (open ? -1 : 1) * Math.min(0.03, v * 0.02);
+  if (open) setHint(1);
+  else if (!state.lit && !hintDone) setHint(0);
 }
 
 function ignite() {
-  if (state.lit || !state.open) return;
+  if (state.lit || !isOpen()) return;
   state.lit = true;
   state.failedStrikes = 0;
   state.flame.born = performance.now();
+  state.flame.stress = 0;
+  state.ember = null;
   wickEl.classList.add('charred');
   Sound.whoof();
   Sound.flameOn();
@@ -328,20 +357,37 @@ function ignite() {
 function extinguish(reason) {
   if (!state.lit) return;
   state.lit = false;
-  if (reason === 'blow') state.flame.v = Math.min(state.flame.v, 0.15);
-  spawnSmoke(flameAnchor(), reason === 'blow' ? 1.4 : 1);
+  state.lastOut = performance.now();
+  const a = flameAnchor();
+  state.ember = { x: a.x, y: a.y, t0: state.lastOut };
   Sound.flameOff();
-  if (reason === 'blow') Sound.puff();
   releaseWakeLock();
+  if (reason === 'blow') {
+    state.flame.v = Math.min(state.flame.v, 0.15);
+    spawnSmoke(a.x, a.y, 14, 1);
+    Sound.puff();
+  } else {
+    /* snuffed under the lid: the smoke stays inside, except a little that
+       seeps out of the seam once the lid is down */
+    state.flame.v = Math.min(state.flame.v, 0.3);
+    setTimeout(() => {
+      const c = caseEl.getBoundingClientRect();
+      spawnSmoke(c.left + c.width * 0.1, c.top - 2, 3, 0.85, -0.008);
+      spawnSmoke(c.right - c.width * 0.1, c.top - 2, 3, 0.85, 0.008);
+      spawnSmoke(c.left + c.width * 0.5, c.top - 1, 2, 0.6);
+    }, 260);
+  }
 }
 
 function strike(speed) {
   spawnSparks(wheelAnchor(), flameAnchor(), speed);
-  Sound.scratch(Math.min(1, speed / 2.2));
+  Sound.scratch(clamp(speed / 2.2, 0, 1));
   buzz(9);
-  if (state.open && !state.lit) {
-    const p = Math.min(0.92, 0.3 + speed * 0.28);
-    const willLight = state.failedStrikes >= 2 || Math.random() < p;
+  if (isOpen() && !state.lit) {
+    let p = 0.3 + speed * 0.28;
+    /* a still-warm wick catches more easily */
+    if (performance.now() - state.lastOut < 1600) p += 0.25;
+    const willLight = state.failedStrikes >= 2 || Math.random() < Math.min(0.94, p);
     if (willLight) setTimeout(ignite, 40 + Math.random() * 50);
     else state.failedStrikes++;
   }
@@ -360,7 +406,8 @@ scene.addEventListener('pointerdown', (e) => {
     x0: e.clientX, y0: e.clientY, t0: now,
     x: e.clientX, y: e.clientY, t: now,
     zone: zoneAt(e.clientX, e.clientY),
-    moved: false, struck: false, wheelDist: 0, tickAcc: 0,
+    moved: false, struck: false, tickAcc: 0, wheelDist: 0,
+    lidVel: 0, lidPhi0: 0, lidAngle0: 0, creakAcc: 0, lastCreak: 0,
   };
   try { scene.setPointerCapture(e.pointerId); } catch (err) { /* fine */ }
 });
@@ -375,7 +422,7 @@ scene.addEventListener('pointermove', (e) => {
 
   if (g.zone === 'wheel') {
     state.wheelShift += dy;
-    state.wheelVel = Math.max(-1.2, Math.min(1.2, state.wheelVel * 0.7 + (dy / dt) * 0.3));
+    state.wheelVel = clamp(state.wheelVel * 0.7 + (dy / dt) * 0.3, -1.2, 1.2);
     wheelEl.style.setProperty('--shift', state.wheelShift.toFixed(1) + 'px');
     g.tickAcc += Math.abs(dy);
     if (g.tickAcc > 15) {
@@ -389,16 +436,45 @@ scene.addEventListener('pointermove', (e) => {
       g.struck = true;
       strike(speed);
     }
+  } else if (g.zone === 'lid' && g.moved) {
+    /* the lid tracks the finger around the hinge, in real time */
+    const h = hingePoint();
+    const phi = Math.atan2(e.clientY - h.y, e.clientX - h.x) * 180 / Math.PI;
+    if (!state.lid.dragging) {
+      state.lid.dragging = true;
+      g.lidPhi0 = phi;
+      g.lidAngle0 = state.lid.angle;
+      g.lidVel = 0;
+    }
+    let dphi = phi - g.lidPhi0;
+    while (dphi > 180) dphi -= 360;
+    while (dphi < -180) dphi += 360;
+    let a = g.lidAngle0 + dphi;
+    /* rubbery resistance past the stops */
+    if (a < 0) a = a * 0.25;
+    if (a > LID_OPEN) a = LID_OPEN + (a - LID_OPEN) * 0.25;
+    const da = a - state.lid.angle;
+    g.lidVel = clamp(g.lidVel * 0.65 + (da / dt) * 0.35, -3, 3);
+    state.lid.angle = a;
+    /* hinge friction on a slow drag */
+    g.creakAcc += Math.abs(da);
+    if (g.creakAcc > 7 && now - g.lastCreak > 70 && Math.abs(g.lidVel) < 0.5) {
+      g.creakAcc = 0;
+      g.lastCreak = now;
+      Sound.creak(clamp(Math.abs(g.lidVel) * 2, 0, 1));
+    }
   } else if (state.lit) {
-    /* a fast swipe near the flame is a gust of wind */
+    /* moving air: the flame is windproof, so it gutters and fights first */
     const f = flameAnchor();
     const mx = (e.clientX + g.x) / 2;
     const my = (e.clientY + g.y) / 2;
     const d = Math.hypot(mx - f.x, my - f.y);
     const speed = Math.hypot(dx, dy) / dt;
-    if (d < 110 && speed > 0.5) {
-      state.flame.wind = Math.max(-60, Math.min(60, state.flame.wind + (dx / dt) * 3));
-      if (speed > 1.5 && d < 80) extinguish('blow');
+    const fall = Math.max(0, 1 - d / 130);
+    if (fall > 0 && speed > 0.45) {
+      state.flame.wind = clamp(state.flame.wind + (dx / dt) * 2.5 * fall, -90, 90);
+      state.flame.stress += speed * fall * 0.28;
+      if (state.flame.stress > 3.4) extinguish('blow');
     }
   }
 
@@ -411,20 +487,48 @@ function endGesture(e) {
   if (!g || e.pointerId !== g.id) return;
   const dy = g.y - g.y0;
   const dx = g.x - g.x0;
-  if (!g.moved) {
-    if (g.zone === 'lid' || (!state.open && g.zone === 'body')) {
-      state.open ? closeLid() : openLid();
+  const dur = Math.max(1, g.t - g.t0);
+
+  if (state.lid.dragging) {
+    state.lid.dragging = false;
+    state.lid.vel = g.lidVel;
+    if (state.lid.angle > LID_SNAP) requestTiltPermission();
+  } else if (!g.moved) {
+    if (g.zone === 'lid' || (g.zone === 'body' && state.lid.angle < 5)) {
+      if (state.lid.angle < 5) {
+        flickOpen(1);
+        requestTiltPermission();
+      } else if (state.lid.angle > LID_OPEN - 5) {
+        flickClosed(1);
+      }
     } else if (g.zone === 'wheel' && !g.struck) {
       Sound.tick();
     }
-  } else if (g.zone !== 'wheel') {
-    if (dy < -40 && Math.abs(dy) > Math.abs(dx)) openLid();
-    else if (dy > 40 && Math.abs(dy) > Math.abs(dx)) closeLid();
+  } else if (g.zone === 'wheel') {
+    /* a hard flick keeps sparking as the wheel spins free */
+    if (!g.struck && Math.abs(state.wheelVel) > 0.5) {
+      g.struck = true;
+      strike(Math.abs(state.wheelVel));
+    }
+  } else {
+    const speed = Math.abs(dy) / dur;
+    if (dy < -40 && Math.abs(dy) > Math.abs(dx)) {
+      flickOpen(clamp(speed * 1.3, 0.4, 2));
+      requestTiltPermission();
+    } else if (dy > 40 && Math.abs(dy) > Math.abs(dx)) {
+      flickClosed(clamp(speed * 1.3, 0.4, 2));
+    }
   }
   g = null;
 }
 scene.addEventListener('pointerup', endGesture);
-scene.addEventListener('pointercancel', () => { g = null; });
+scene.addEventListener('pointercancel', () => {
+  if (g && state.lid.dragging) {
+    state.lid.dragging = false;
+    state.lid.vel = 0;
+  }
+  g = null;
+});
 scene.addEventListener('contextmenu', (e) => e.preventDefault());
 
 /* -------------------------------------------------------------- physics */
@@ -434,15 +538,89 @@ function n1(t) {
   return Math.sin(t * 1.3) * 0.55 + Math.sin(t * 2.9 + 1.7) * 0.3 + Math.sin(t * 6.1 + 4.2) * 0.15;
 }
 
+function updateLid(dt) {
+  const L = state.lid;
+  if (L.dragging) {
+    if (state.lit && L.angle < 35) extinguish('snuff');
+    return;
+  }
+  if (L.vel === 0 && (L.angle <= 0 || L.angle >= LID_OPEN)) return;
+
+  if (L.angle > 0 && L.angle < LID_OPEN) {
+    const dir = L.angle < LID_SNAP ? -1 : 1;
+    L.vel += dir * LID_TORQUE * dt;
+    L.vel -= L.vel * LID_DAMP * dt;
+  }
+  L.angle += L.vel * dt;
+
+  if (state.lit && L.angle < 35 && L.vel < 0) extinguish('snuff');
+
+  if (L.angle <= 0) {
+    L.angle = 0;
+    if (L.vel < -0.05) {
+      lidImpact(false, -L.vel);
+      L.vel *= -0.14;
+      if (Math.abs(L.vel) < 0.08) L.vel = 0;
+    } else {
+      L.vel = 0;
+    }
+  } else if (L.angle >= LID_OPEN) {
+    L.angle = LID_OPEN;
+    if (L.vel > 0.05) {
+      lidImpact(true, L.vel);
+      L.vel *= -0.12;
+      if (Math.abs(L.vel) < 0.08) L.vel = 0;
+    } else {
+      L.vel = 0;
+    }
+  }
+}
+
+/* the whole lighter rocks a touch when the lid slams */
+function updateRock(dt) {
+  const r = state.rock;
+  if (Math.abs(r.a) < 0.001 && Math.abs(r.v) < 0.0001) {
+    r.a = 0;
+    r.v = 0;
+    return;
+  }
+  r.v += (-0.0003 * r.a - 0.01 * r.v) * dt;
+  r.a = clamp(r.a + r.v * dt, -3.5, 3.5);
+}
+
 function updateFlame(dt) {
   const f = state.flame;
-  const target = state.lit ? 1 : 0;
+  f.wind *= Math.pow(0.995, dt);
+  f.stress *= Math.pow(0.996, dt);
+  f.lick = Math.max(0, f.lick - dt * 0.0015);
+  if (state.lit && Math.random() < dt * 0.0004) f.lick = 1;
+
+  /* wind makes it gutter before it ever goes out */
+  const target = state.lit ? 1 - Math.min(0.45, f.stress * 0.12) : 0;
   const rate = state.lit ? 0.006 : 0.012;
   f.v += (target - f.v) * Math.min(1, rate * dt);
-  f.wind *= Math.pow(0.995, dt);
-  const bt = Math.max(-1.4, Math.min(1.4, -state.tilt * 0.9 + Math.max(-1.2, Math.min(1.2, f.wind * 0.02))));
+
+  const bt = clamp(-state.tilt * 0.9 + clamp(f.wind * 0.02, -1.2, 1.2), -1.5, 1.5);
   f.bendV += ((bt - f.bend) * 0.004 - f.bendV * 0.02) * dt;
-  f.bend = Math.max(-1.6, Math.min(1.6, f.bend + f.bendV * dt));
+  f.bend = clamp(f.bend + f.bendV * dt, -1.6, 1.6);
+}
+
+function updateWheelSpin(dt, t) {
+  if (g && g.zone === 'wheel') return;
+  if (Math.abs(state.wheelVel) < 0.02) {
+    state.wheelVel = 0;
+    return;
+  }
+  const d = state.wheelVel * dt;
+  state.wheelShift += d;
+  wheelEl.style.setProperty('--shift', state.wheelShift.toFixed(1) + 'px');
+  state.wheelVel *= Math.pow(0.992, dt);
+  spinAcc += Math.abs(d);
+  if (spinAcc > 18 && t - lastSpinTick > 45) {
+    spinAcc = 0;
+    lastSpinTick = t;
+    Sound.tick();
+  }
 }
 
 function spawnSparks(from, toward, speed) {
@@ -462,18 +640,18 @@ function spawnSparks(from, toward, speed) {
   }
 }
 
-function spawnSmoke(at, k) {
-  const n = Math.round(10 * k);
+function spawnSmoke(x, y, n, dim, vxBias = 0) {
   for (let i = 0; i < n; i++) {
     smoke.push({
-      x: at.x + (Math.random() - 0.5) * 6,
-      y: at.y + (Math.random() - 0.5) * 4,
-      vx: (Math.random() - 0.5) * 0.02,
-      vy: -(0.02 + Math.random() * 0.05),
-      r: 3 + Math.random() * 5,
+      x: x + (Math.random() - 0.5) * 6,
+      y: y + (Math.random() - 0.5) * 4,
+      vx: (Math.random() - 0.5) * 0.02 + vxBias,
+      vy: -(0.02 + Math.random() * 0.05) * (dim < 1 ? 0.7 : 1),
+      r: (3 + Math.random() * 5) * (dim < 1 ? 0.7 : 1),
       life: 0,
       ttl: 1200 + Math.random() * 1400,
       ph: Math.random() * 6.28,
+      dim,
     });
   }
 }
@@ -504,8 +682,7 @@ function updateDrawSparks(dt) {
     s.vy += 0.0016 * dt;
     s.x += s.vx * dt;
     s.y += s.vy * dt;
-    const p = s.life / s.ttl;
-    ctx2d.strokeStyle = `rgba(255,${Math.round(200 - 130 * p)},${Math.round(90 - 80 * p)},${(1 - p) * 0.9})`;
+    ctx2d.strokeStyle = `rgba(255,${Math.round(200 - 130 * pf)},${Math.round(90 - 80 * pf)},${(1 - pf) * 0.9})`;
     ctx2d.beginPath();
     ctx2d.moveTo(s.x, s.y);
     ctx2d.lineTo(s.x - s.vx * 16, s.y - s.vy * 16);
@@ -547,14 +724,38 @@ function updateDrawSmoke(dt, t) {
     const p = s.life / s.ttl;
     s.x += (s.vx + Math.sin(t * 0.0022 + s.ph) * 0.012) * dt;
     s.y += s.vy * dt;
-    const r = s.r + p * 26;
-    const a = Math.sin(Math.PI * Math.min(1, p)) * 0.16;
+    const r = s.r + p * 26 * (s.dim < 1 ? 0.6 : 1);
+    const a = Math.sin(Math.PI * Math.min(1, p)) * 0.16 * s.dim;
     ctx2d.fillStyle = `rgba(185,190,200,${a})`;
     ctx2d.beginPath();
     ctx2d.arc(s.x, s.y, r, 0, 7);
     ctx2d.fill();
     return true;
   });
+}
+
+/* the dying-out glow on the wick just after the flame goes */
+function drawWickEmber(t) {
+  const em = state.ember;
+  if (!em) return;
+  const age = t - em.t0;
+  if (age > 1500) {
+    state.ember = null;
+    return;
+  }
+  if (openS() < 0.45) return; // hidden under the lid
+  const a = Math.pow(1 - age / 1500, 1.5) * (0.55 + 0.15 * n1(t * 0.02));
+  ctx2d.save();
+  ctx2d.globalCompositeOperation = 'lighter';
+  const gr = ctx2d.createRadialGradient(em.x, em.y, 0, em.x, em.y, 7);
+  gr.addColorStop(0, `rgba(255,120,30,${a})`);
+  gr.addColorStop(0.4, `rgba(230,70,15,${a * 0.5})`);
+  gr.addColorStop(1, 'rgba(200,60,10,0)');
+  ctx2d.fillStyle = gr;
+  ctx2d.beginPath();
+  ctx2d.arc(em.x, em.y, 7, 0, 7);
+  ctx2d.fill();
+  ctx2d.restore();
 }
 
 function paintFlame(a, v, t, bend, hgt, wdt) {
@@ -620,11 +821,12 @@ function drawFlame(t, dt) {
   const base = Math.max(10, lighterRect.width * 0.095);
   const age = t - f.born;
   const flare = state.lit && age < 450 ? 1 + 0.5 * Math.exp(-age / 180) : 1;
-  const flick = 1 + 0.1 * n1(t * 0.006) + 0.05 * n1(t * 0.023 + 9);
+  const turb = 1 + f.stress * 0.4;
+  const flick = 1 + (0.1 * n1(t * 0.006) + 0.05 * n1(t * 0.023 + 9)) * turb;
   const v = Math.min(1.3, f.v * flare);
-  const hgt = base * 3.3 * v * flick;
+  const hgt = base * 3.3 * v * flick * (1 + 0.25 * f.lick);
   const wdt = base * (0.9 + 0.2 * n1(t * 0.004 + 3)) * Math.min(1, v * 1.5);
-  const bend = f.bend + 0.16 * n1(t * 0.0035 + 7);
+  const bend = f.bend + 0.16 * turb * n1(t * 0.0035 + 7);
 
   /* life at the tip: the odd ember drifting up, smoke when the flame is torn */
   const tip = { x: a.x + bend * hgt * 0.5, y: a.y - hgt };
@@ -638,8 +840,8 @@ function drawFlame(t, dt) {
       ttl: 280 + Math.random() * 260,
     });
   }
-  if (state.lit && Math.abs(f.bend) > 1.0 && Math.random() < dt * 0.004) {
-    spawnSmoke(tip, 0.12);
+  if (state.lit && (Math.abs(f.bend) > 1.0 || f.stress > 1.4) && Math.random() < dt * 0.004) {
+    spawnSmoke(tip.x, tip.y, 1, 0.5);
   }
 
   ctx2d.save();
@@ -663,36 +865,28 @@ let last = performance.now();
 let spinAcc = 0;
 let lastSpinTick = 0;
 
-function updateWheelSpin(dt, t) {
-  if (g && g.zone === 'wheel') return;
-  if (Math.abs(state.wheelVel) < 0.02) {
-    state.wheelVel = 0;
-    return;
-  }
-  const d = state.wheelVel * dt;
-  state.wheelShift += d;
-  wheelEl.style.setProperty('--shift', state.wheelShift.toFixed(1) + 'px');
-  state.wheelVel *= Math.pow(0.992, dt);
-  spinAcc += Math.abs(d);
-  if (spinAcc > 18 && t - lastSpinTick > 45) {
-    spinAcc = 0;
-    lastSpinTick = t;
-    Sound.tick();
-  }
-}
-
 function frame(t) {
   const dt = Math.min(50, t - last);
   last = t;
+
+  updateLid(dt);
+  updateRock(dt);
   updateFlame(dt);
   updateWheelSpin(dt, t);
+
+  lidEl.style.transform = `rotate(${state.lid.angle.toFixed(2)}deg)`;
+  const root = document.documentElement.style;
+  root.setProperty('--open-s', openS().toFixed(3));
+  root.setProperty('--rock', state.rock.a.toFixed(2) + 'deg');
+
   ctx2d.clearRect(0, 0, W, H);
   updateDrawSparks(dt);
   const gi = drawFlame(t, dt);
   updateDrawEmbers(dt);
+  drawWickEmber(t);
   updateDrawSmoke(dt, t);
-  const root = document.documentElement.style;
-  root.setProperty('--gi', (Math.max(0, Math.min(1, gi)) * 0.9).toFixed(3));
+
+  root.setProperty('--gi', (clamp(gi, 0, 1) * 0.9).toFixed(3));
   if (gi > 0) {
     const a = flameAnchor();
     root.setProperty('--gx', a.x.toFixed(0) + 'px');
@@ -705,7 +899,7 @@ requestAnimationFrame(frame);
 setHint(0);
 
 /* handle for debugging / automated checks */
-window.__lighter = { openLid, closeLid, ignite, extinguish, strike, state };
+window.__lighter = { flickOpen, flickClosed, ignite, extinguish, strike, state };
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   window.addEventListener('load', () => {

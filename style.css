@@ -5,6 +5,8 @@
   --gx: 50vw;
   --gy: 40vh;
   --gi: 0;
+  --open-s: 0; /* 0 closed .. 1 open, driven by the lid physics each frame */
+  --rock: 0deg; /* whole-body wobble excited by lid impacts */
   --metal: linear-gradient(
     108deg,
     #3f434a 0%,
@@ -101,15 +103,10 @@ body {
   top: calc(50% + var(--h) / 2);
   width: calc(var(--w) * 1.45);
   height: calc(var(--w) * 0.22);
-  transform: translate(-50%, -46%);
+  transform: translate(calc(-50% - var(--w) * 0.14 * var(--open-s)), -46%);
   z-index: 1;
   pointer-events: none;
   background: radial-gradient(50% 50% at 50% 50%, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.25) 55%, transparent 75%);
-  transition: transform 0.3s cubic-bezier(0.34, 1.3, 0.4, 1);
-}
-
-.scene.open .floor-shadow {
-  transform: translate(calc(-50% - var(--w) * 0.14), -46%);
 }
 
 .lighter {
@@ -117,14 +114,10 @@ body {
   width: var(--w);
   height: var(--h);
   z-index: 2;
-  transition: transform 0.3s cubic-bezier(0.34, 1.3, 0.4, 1);
+  transform: translateX(calc(var(--w) * -0.16 * var(--open-s))) rotate(calc(-5deg * var(--open-s) + var(--rock)));
   /* the mask is applied pre-flip, so "visible" goes at the bottom to fade the
      reflection out as it falls away from the lighter */
   -webkit-box-reflect: below 3px linear-gradient(transparent 50%, rgba(0, 0, 0, 0.26));
-}
-
-.lighter.open {
-  transform: translateX(calc(var(--w) * -0.16)) rotate(-5deg);
 }
 
 .case {
@@ -170,17 +163,12 @@ body {
   right: 1%;
   top: -0.5%;
   height: 4.5%;
-  opacity: 0;
-  transition: opacity 0.25s 0.05s;
+  opacity: var(--open-s);
   background: linear-gradient(180deg, #14161a, #2c2f35 55%, #4a4e55);
   border-radius: 50% / 90% 90% 30% 30%;
   box-shadow:
     inset 0 -1px 1px rgba(255, 255, 255, 0.15),
     inset 0 2px 3px rgba(0, 0, 0, 0.8);
-}
-
-.lighter.open .case-rim {
-  opacity: 1;
 }
 
 /* dark seam where the lid meets the case, with a catch-light just below */
@@ -223,15 +211,8 @@ body {
     inset 2px 0 4px rgba(255, 255, 255, 0.16),
     inset -2px 0 5px rgba(0, 0, 0, 0.28);
   transform-origin: 100% 100%;
-  /* closing: fast snap shut */
-  transition: transform 0.17s cubic-bezier(0.5, 0, 0.7, 0.4), filter 0.25s;
-}
-
-.lighter.open .lid {
-  transform: rotate(102deg);
-  filter: brightness(0.9);
-  /* opening: springy flick with a little overshoot */
-  transition: transform 0.3s cubic-bezier(0.3, 1.35, 0.45, 1), filter 0.25s;
+  /* the rotation itself is set by the lid physics every frame */
+  filter: brightness(calc(1 - 0.11 * var(--open-s)));
 }
 
 .hinge {
@@ -357,11 +338,3 @@ body {
   pointer-events: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .lighter,
-  .lid,
-  .lighter.open .lid,
-  .floor-shadow {
-    transition-duration: 0.01s;
-  }
-}
