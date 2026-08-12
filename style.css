@@ -1,0 +1,243 @@
+:root {
+  --w: clamp(160px, 46vmin, 250px);
+  --h: calc(var(--w) * 1.5);
+  --lid-h: 42.5%;
+  --gx: 50vw;
+  --gy: 40vh;
+  --gi: 0;
+  --metal: linear-gradient(
+    105deg,
+    #565a61 0%,
+    #b9bec6 10%,
+    #eef1f5 20%,
+    #c3c8d0 32%,
+    #82868e 48%,
+    #a7acb4 62%,
+    #dfe3e8 78%,
+    #94989f 90%,
+    #5c6067 100%
+  );
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: radial-gradient(120% 90% at 50% 30%, #17181d 0%, #0b0c10 55%, #060709 100%);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.scene {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+/* warm pool of light on the backdrop while the flame is lit */
+.glow {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(
+    circle at var(--gx) var(--gy),
+    rgba(255, 147, 41, 0.5),
+    rgba(255, 120, 30, 0.12) 30%,
+    transparent 62%
+  );
+  opacity: var(--gi);
+  mix-blend-mode: screen;
+}
+
+.lighter {
+  position: relative;
+  width: var(--w);
+  height: var(--h);
+  z-index: 2;
+  transition: transform 0.3s cubic-bezier(0.34, 1.3, 0.4, 1);
+  filter: drop-shadow(0 calc(var(--w) * 0.09) calc(var(--w) * 0.13) rgba(0, 0, 0, 0.55));
+}
+
+.lighter.open {
+  transform: translateX(calc(var(--w) * -0.16)) rotate(-5deg);
+}
+
+.case {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(100% - var(--lid-h));
+  z-index: 3;
+  background: var(--metal);
+  border-radius: 7px 7px 26% 26% / 4px 4px 13% 13%;
+  box-shadow:
+    inset 0 2px 3px rgba(255, 255, 255, 0.5),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.35),
+    inset 3px 0 6px rgba(255, 255, 255, 0.18),
+    inset -3px 0 6px rgba(0, 0, 0, 0.25);
+}
+
+/* dark seam line where the lid meets the case */
+.case::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(rgba(0, 0, 0, 0.5), transparent);
+}
+
+/* warm reflection on the chrome while lit */
+.case::after,
+.lid::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(200deg, rgba(255, 150, 50, 0.32), rgba(255, 120, 30, 0.05) 45%, transparent 70%);
+  opacity: calc(var(--gi) * 0.9);
+  pointer-events: none;
+}
+
+.lid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: var(--lid-h);
+  z-index: 5;
+  background: var(--metal);
+  border-radius: 26% 26% 7px 7px / 15% 15% 4px 4px;
+  box-shadow:
+    inset 0 3px 6px rgba(255, 255, 255, 0.55),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.4),
+    inset 3px 0 6px rgba(255, 255, 255, 0.18),
+    inset -3px 0 6px rgba(0, 0, 0, 0.25);
+  transform-origin: 100% 100%;
+  /* closing: fast snap shut */
+  transition: transform 0.17s cubic-bezier(0.5, 0, 0.7, 0.4);
+}
+
+.lighter.open .lid {
+  transform: rotate(102deg);
+  /* opening: springy flick with a little overshoot */
+  transition: transform 0.3s cubic-bezier(0.3, 1.35, 0.45, 1);
+}
+
+.hinge {
+  position: absolute;
+  top: calc(var(--lid-h) - 3.2%);
+  right: -1.5%;
+  width: 8%;
+  height: 6.4%;
+  z-index: 6;
+  background: linear-gradient(180deg, #cfd3da, #7c8087 55%, #4d5057);
+  border-radius: 2px;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.5),
+    0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.insert {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  bottom: calc(100% - var(--lid-h));
+  height: 27%;
+  z-index: 4;
+}
+
+.chimney {
+  position: absolute;
+  left: 12%;
+  bottom: 0;
+  width: 52%;
+  height: 100%;
+  background: linear-gradient(100deg, #6f747c, #b7bcc4 30%, #8d929a 60%, #5f636b);
+  border-radius: 10% 10% 0 0 / 14% 14% 0 0;
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.35),
+    inset 0 -4px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* two rows of windscreen holes */
+.chimney::before {
+  content: "";
+  position: absolute;
+  inset: 14% 12% 28%;
+  background-image: radial-gradient(circle at 50% 50%, rgba(18, 20, 24, 0.9) 0 30%, rgba(18, 20, 24, 0) 36%);
+  background-size: 25% 50%;
+}
+
+.wick {
+  position: absolute;
+  left: 50%;
+  top: -8%;
+  width: 15%;
+  height: 15%;
+  transform: translateX(-50%);
+  background: repeating-linear-gradient(45deg, #e8e2d2 0 2px, #b1aa98 2px 4px);
+  border-radius: 40% 40% 20% 20%;
+}
+
+/* flint wheel, seen edge-on: a knurled strip that scrolls when spun */
+.wheel {
+  position: absolute;
+  right: 5%;
+  bottom: 2%;
+  width: 18%;
+  height: 82%;
+  background: repeating-linear-gradient(180deg, #9aa0a8 0 3px, #52565d 3px 6px);
+  background-position-y: var(--shift, 0px);
+  border-radius: 30% / 12%;
+  box-shadow:
+    inset 0 0 0 1.5px rgba(0, 0, 0, 0.35),
+    inset 3px 0 4px rgba(255, 255, 255, 0.25),
+    inset -3px 0 5px rgba(0, 0, 0, 0.45);
+}
+
+.hint {
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 36px);
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  transition: opacity 0.6s;
+  pointer-events: none;
+}
+
+#fx {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lighter,
+  .lid,
+  .lighter.open .lid {
+    transition-duration: 0.01s;
+  }
+}
