@@ -1,4 +1,4 @@
-const VERSION = 'lighter-v1';
+const VERSION = 'lighter-v2';
 const ASSETS = [
   './',
   './index.html',

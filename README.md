@@ -27,9 +27,10 @@ It's a PWA with a service worker, so after the first load it works offline.
 
 ## Deploying
 
-Pushing to `main` runs `.github/workflows/deploy.yml`, which publishes the repo
-root to GitHub Pages: `https://oowner717.github.io/LighterSim/`. (First run may
-need Pages enabled: repo **Settings → Pages → Source: GitHub Actions**.)
+GitHub Pages is configured to **deploy from a branch** (repo Settings → Pages),
+publishing the repo root of `claude/zippo-lighter-simulation-24ei5h` to
+`https://oowner717.github.io/LighterSim/`. Every push to that branch redeploys.
+The `.nojekyll` file keeps Pages from running the files through Jekyll.
 
 ## Running locally
 

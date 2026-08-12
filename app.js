@@ -292,6 +292,7 @@ function openLid() {
   if (state.open) return;
   state.open = true;
   lighterEl.classList.add('open');
+  scene.classList.add('open');
   Sound.open();
   buzz(12);
   setHint(1);
@@ -302,6 +303,7 @@ function closeLid() {
   if (!state.open) return;
   state.open = false;
   lighterEl.classList.remove('open');
+  scene.classList.remove('open');
   Sound.close();
   buzz(16);
   if (state.lit) extinguish('snuff');
@@ -313,6 +315,7 @@ function ignite() {
   state.lit = true;
   state.failedStrikes = 0;
   state.flame.born = performance.now();
+  wickEl.classList.add('charred');
   Sound.whoof();
   Sound.flameOn();
   buzz([8, 30, 12]);
@@ -514,58 +517,89 @@ function updateDrawSmoke(dt, t) {
   });
 }
 
-function drawFlame(t) {
-  const f = state.flame;
-  if (f.v < 0.02) return 0;
-  const a = flameAnchor();
-  const base = Math.max(10, lighterEl.getBoundingClientRect().width * 0.085);
-  const age = t - f.born;
-  const flare = state.lit && age < 450 ? 1 + 0.5 * Math.exp(-age / 180) : 1;
-  const flick = 1 + 0.1 * n1(t * 0.006) + 0.05 * n1(t * 0.023 + 9);
-  const v = Math.min(1.3, f.v * flare);
-  const hgt = base * 3.1 * v * flick;
-  const wdt = base * (0.9 + 0.2 * n1(t * 0.004 + 3)) * Math.min(1, v * 1.5);
-  const bend = f.bend + 0.16 * n1(t * 0.0035 + 7);
-
-  ctx2d.save();
+function paintFlame(a, v, t, bend, hgt, wdt) {
   ctx2d.globalCompositeOperation = 'lighter';
 
   /* bloom */
   const gy = a.y - hgt * 0.45;
   const gr = ctx2d.createRadialGradient(a.x, gy, 0, a.x, gy, Math.max(1, hgt * 2.2));
-  gr.addColorStop(0, `rgba(255,150,40,${0.28 * v})`);
+  gr.addColorStop(0, `rgba(255,150,40,${0.26 * v})`);
   gr.addColorStop(1, 'rgba(255,150,40,0)');
   ctx2d.fillStyle = gr;
   ctx2d.beginPath();
   ctx2d.arc(a.x, gy, Math.max(1, hgt * 2.2), 0, 7);
   ctx2d.fill();
 
-  /* teardrop body, three nested layers */
+  /* teardrop body: nested layers, each shaded base-to-tip so edges melt together */
   const layers = [
-    { s: 1.0, c: `rgba(255,110,10,${0.5 * v})` },
-    { s: 0.7, c: `rgba(255,190,50,${0.75 * v})` },
-    { s: 0.42, c: `rgba(255,245,205,${0.9 * v})` },
+    { s: 1.0, rgb: '255,100,5', a0: 0.1, a1: 0.5, halo: true },
+    { s: 0.78, rgb: '255,160,25', a0: 0.2, a1: 0.7, halo: false },
+    { s: 0.55, rgb: '255,210,80', a0: 0.35, a1: 0.85, halo: false },
+    { s: 0.34, rgb: '255,248,215', a0: 0.5, a1: 0.95, halo: false },
   ];
   for (const L of layers) {
     const h = hgt * L.s;
     const w = wdt * L.s;
     const tx = a.x + bend * h * 0.5 + n1(t * 0.01 + L.s * 13) * w * 0.12;
+    const grad = ctx2d.createLinearGradient(a.x, a.y, tx, a.y - h);
+    grad.addColorStop(0, `rgba(${L.rgb},${L.a0 * v})`);
+    grad.addColorStop(0.4, `rgba(${L.rgb},${L.a1 * v})`);
+    grad.addColorStop(0.85, `rgba(${L.rgb},${L.a1 * 0.6 * v})`);
+    grad.addColorStop(1, `rgba(${L.rgb},0)`);
+    ctx2d.save();
+    if (L.halo) {
+      ctx2d.shadowColor = `rgba(255,110,10,${0.55 * v})`;
+      ctx2d.shadowBlur = w * 0.5;
+    }
     ctx2d.beginPath();
     ctx2d.moveTo(a.x - w / 2, a.y);
     ctx2d.bezierCurveTo(a.x - w * 0.62, a.y - h * 0.35, tx - w * 0.28, a.y - h * 0.78, tx, a.y - h);
     ctx2d.bezierCurveTo(tx + w * 0.28, a.y - h * 0.78, a.x + w * 0.62, a.y - h * 0.35, a.x + w / 2, a.y);
     ctx2d.closePath();
-    ctx2d.fillStyle = L.c;
+    ctx2d.fillStyle = grad;
     ctx2d.fill();
+    ctx2d.restore();
   }
 
   /* blue root */
-  ctx2d.fillStyle = `rgba(90,130,255,${0.3 * v})`;
+  const bg = ctx2d.createRadialGradient(a.x, a.y - wdt * 0.08, 0, a.x, a.y - wdt * 0.08, wdt * 0.55);
+  bg.addColorStop(0, `rgba(140,170,255,${0.4 * v})`);
+  bg.addColorStop(0.6, `rgba(80,120,255,${0.25 * v})`);
+  bg.addColorStop(1, 'rgba(80,120,255,0)');
+  ctx2d.fillStyle = bg;
   ctx2d.beginPath();
-  ctx2d.ellipse(a.x, a.y - wdt * 0.1, wdt * 0.42, wdt * 0.5, 0, 0, 7);
+  ctx2d.ellipse(a.x, a.y - wdt * 0.08, wdt * 0.5, wdt * 0.58, 0, 0, 7);
   ctx2d.fill();
+}
 
+function drawFlame(t) {
+  const f = state.flame;
+  if (f.v < 0.02) return 0;
+  const a = flameAnchor();
+  const lighterRect = lighterEl.getBoundingClientRect();
+  const base = Math.max(10, lighterRect.width * 0.09);
+  const age = t - f.born;
+  const flare = state.lit && age < 450 ? 1 + 0.5 * Math.exp(-age / 180) : 1;
+  const flick = 1 + 0.1 * n1(t * 0.006) + 0.05 * n1(t * 0.023 + 9);
+  const v = Math.min(1.3, f.v * flare);
+  const hgt = base * 3.3 * v * flick;
+  const wdt = base * (0.9 + 0.2 * n1(t * 0.004 + 3)) * Math.min(1, v * 1.5);
+  const bend = f.bend + 0.16 * n1(t * 0.0035 + 7);
+
+  ctx2d.save();
+  paintFlame(a, v, t, bend, hgt, wdt);
   ctx2d.restore();
+
+  /* faint mirrored glimmer on the floor beneath the lighter */
+  const floorY = lighterRect.bottom + 4;
+  ctx2d.save();
+  ctx2d.globalAlpha = 0.13;
+  ctx2d.translate(0, floorY);
+  ctx2d.scale(1, -0.7);
+  ctx2d.translate(0, -floorY);
+  paintFlame(a, v, t, -bend, hgt, wdt);
+  ctx2d.restore();
+
   return v * flick;
 }
 
