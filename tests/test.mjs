@@ -349,6 +349,8 @@ await page.waitForTimeout(600);
   check('fuel burns down while LIT', f1 < 0.995, `fuel=${f1}`);
 }
 await L('LIGHTER.sim.fuel = 0.12');           // fast-forward to nearly dry
+await waitL('document.getElementById("hint").textContent.includes("starving")', 15000);
+check('low fuel explains itself (sputter toast)', true);
 await waitL('LIGHTER.state === "OUT"', 20000);
 check('tank runs dry -> OUT (cause "dry")', await L('LIGHTER.sim.flame.lastCause') === 'dry');
 { // dry tank: the wheel still sparks, but nothing catches
@@ -399,6 +401,8 @@ await L(`(LIGHTER.CFG.FLINT_LIFE = 0, LIGHTER.CFG.FLINT_FADE = 1,
   await page.waitForTimeout(700);
   check('worn flint duds instead of sparking', true);
   check('a dud never ignites', await L('LIGHTER.state') === 'OUT');
+  check('a dud explains itself (flint toast)',
+    await L('document.getElementById("hint").textContent.includes("flint")'));
 }
 await L('(LIGHTER.CFG.FLINT_LIFE = 1e9, LIGHTER.sim.flintDudRun = 0, 0)');
 await L('LIGHTER.refill()');                   // fresh flint + full tank
@@ -463,6 +467,42 @@ check('uiScale is capped on tablets', Math.abs(await L('LIGHTER.uiScale()') - 1.
   `uiScale=${await L('LIGHTER.uiScale()')}`);
 await page.setViewportSize({ width: 390, height: 844 });
 await page.waitForTimeout(300);
+
+/* 16 ── the guide: opens, explains the real thing, gauges track the sim */
+await L('LIGHTER.sim.fuel = 0.37');
+await page.click('#infoBtn');
+await waitL('LIGHTER.guideOpen');
+check('info button opens the guide', true);
+check('guide explains functions + maintenance', await L(
+  `document.getElementById("guideBody").textContent.includes("capillary")
+   && document.getElementById("guideBody").textContent.includes("spring screw")
+   && document.getElementById("guideBody").textContent.includes("pliers")`));
+check('fuel gauge tracks the tank', await L('document.getElementById("gFuel").style.width') === '37%');
+check('focus moves into the dialog', await L('document.activeElement && document.activeElement.id') === 'guideClose');
+{ // canvas, wheel and keyboard input are all dead while the sheet is up
+  const yaw0 = await L('LIGHTER.cam.yaw');
+  await page.evaluate(() => window.__swipe(200, 400, 120, 400, 150, 55));
+  await page.waitForTimeout(250);
+  check('guide blocks canvas gestures', Math.abs(await L('LIGHTER.cam.yaw') - yaw0) < 1e-6);
+  const z0 = await L('LIGHTER.cam.zoom');
+  await page.evaluate(() => window.dispatchEvent(new WheelEvent('wheel', { deltaY: 120, cancelable: true })));
+  await page.keyboard.press(' ');   // would flip the lid open if the gate leaked
+  await page.waitForTimeout(250);
+  check('guide blocks wheel zoom + sim keys',
+    await L('LIGHTER.cam.zoom') === z0 && await L('LIGHTER.lidTheta') < 0.05
+    && await L('LIGHTER.state') === 'OUT');
+}
+// Space on the focused close button legitimately activates it — normalize, then
+// test each dismissal path from a cleanly opened sheet
+await L('(LIGHTER.closeGuide(), 0)');
+await page.click('#infoBtn');
+await waitL('LIGHTER.guideOpen');
+await page.keyboard.press('Escape');
+check('Escape closes the guide', await L('LIGHTER.guideOpen') === false);
+await page.click('#infoBtn');
+await waitL('LIGHTER.guideOpen');
+await page.click('#guideClose');
+check('close button closes the guide', await L('LIGHTER.guideOpen') === false);
 
 /* discovered tricks persist across sessions */
 await L('LIGHTER.sim.fuel = 0.42');

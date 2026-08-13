@@ -41,6 +41,7 @@
     pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #hint.show { opacity: 1; }
+  #hint.wrap { white-space: normal; max-width: 78vw; border-radius: 16px; }
   #motionBtn {
     position: fixed;
     right: calc(12px + env(safe-area-inset-right, 0px));
@@ -55,6 +56,82 @@
     backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   }
   #motionBtn.show { display: block; }
+  #infoBtn {
+    position: fixed;
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: 1px solid rgba(160, 175, 190, 0.35);
+    background: rgba(18, 22, 28, 0.6);
+    color: rgba(225, 232, 240, 0.9);
+    font-size: 16px; font-weight: 600; line-height: 1; text-align: center;
+    padding: 0;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  }
+  /* the circles stay small; the tap targets don't (44px platform minimum) */
+  #infoBtn::after, #guideClose::after {
+    content: ''; position: absolute; inset: -7px; border-radius: 50%;
+  }
+  #guide {
+    position: fixed; inset: 0; z-index: 10;
+    background: rgba(4, 6, 9, 0.55);
+    display: none;
+  }
+  #guide.show { display: block; }
+  #guidePanel {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: 0;
+    width: min(100%, 560px);
+    max-height: 84dvh;
+    box-sizing: border-box;
+    border-radius: 18px 18px 0 0;
+    border: 1px solid rgba(160, 175, 190, 0.22); border-bottom: none;
+    background: rgba(14, 18, 23, 0.97);
+    color: rgba(228, 234, 240, 0.92);
+    display: flex; flex-direction: column;
+  }
+  #guideHead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px 8px;
+    font-size: 15px; letter-spacing: 0.02em;
+  }
+  #guideClose {
+    position: relative;
+    width: 32px; height: 32px; border-radius: 50%;
+    border: 1px solid rgba(160, 175, 190, 0.3);
+    background: rgba(30, 36, 44, 0.8);
+    color: rgba(225, 232, 240, 0.9);
+    font-size: 17px; line-height: 1; padding: 0;
+  }
+  #guideBody {
+    overflow-y: auto; touch-action: pan-y; overscroll-behavior: contain;
+    padding: 0 18px calc(18px + env(safe-area-inset-bottom, 0px));
+  }
+  #gauges { padding: 2px 0 4px; border-bottom: 1px solid rgba(160, 175, 190, 0.14); }
+  .grow { display: flex; align-items: center; gap: 10px; margin: 7px 0; }
+  .grow span {
+    width: 36px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: rgba(200, 210, 220, 0.72);
+  }
+  .gbar {
+    flex: 1; height: 8px; border-radius: 99px;
+    background: rgba(255, 255, 255, 0.08); overflow: hidden;
+  }
+  .gbar i { display: block; height: 100%; border-radius: 99px; width: 100%; }
+  #gFuel { background: linear-gradient(90deg, #d97a2b, #ffb648); }
+  #gFlint { background: linear-gradient(90deg, #78909f, #a9bfcd); }
+  .grow em {
+    width: 40px; text-align: right; font-style: normal; font-size: 12px;
+    font-variant-numeric: tabular-nums; color: rgba(210, 218, 226, 0.85);
+  }
+  #gStats { padding: 4px 0 10px; font-size: 11.5px; line-height: 1.5; color: rgba(180, 190, 200, 0.7); }
+  #guideBody h3 {
+    margin: 16px 0 4px; font-size: 12px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: rgba(255, 178, 92, 0.85);
+  }
+  #guideBody p { margin: 4px 0; font-size: 13.5px; line-height: 1.5; color: rgba(215, 222, 230, 0.88); }
+  #guideBody p.how { color: rgba(160, 200, 235, 0.82); }
 </style>
 <script type="importmap">
 {
@@ -69,6 +146,85 @@
 <canvas id="c"></canvas>
 <div id="hint"></div>
 <button id="motionBtn" type="button">Enable motion</button>
+<button id="infoBtn" type="button" aria-label="How a Zippo works">?</button>
+<div id="guide" role="dialog" aria-modal="true" aria-label="How a Zippo works">
+  <div id="guidePanel">
+    <div id="guideHead">
+      <b>How a Zippo works</b>
+      <button id="guideClose" type="button" aria-label="Close">&#215;</button>
+    </div>
+    <div id="guideBody">
+      <div id="gauges">
+        <div class="grow"><span>fuel</span><div class="gbar"><i id="gFuel"></i></div><em id="gFuelT"></em></div>
+        <div class="grow"><span>flint</span><div class="gbar"><i id="gFlint"></i></div><em id="gFlintT"></em></div>
+        <div id="gStats"></div>
+      </div>
+      <section>
+        <h3>The click</h3>
+        <p>The lid rides a spring-loaded cam. Pushed past halfway it snaps the rest of the
+          way &mdash; open or shut, never resting in between &mdash; and that snap is the famous clink.</p>
+        <p class="how">Here: swipe the lid open, double-tap to open and light in one go,
+          or pinch lid-top and base-bottom and squeeze until it pops.</p>
+      </section>
+      <section>
+        <h3>Striking</h3>
+        <p>A knurled wheel scrapes a flint pressed against it from below by a spring.
+          One firm downward roll of the thumb shaves off white-hot sparks and throws
+          them into the wick.</p>
+        <p class="how">Here: flick down on the wheel &mdash; lazy rolls just grind without
+          sparking, and the wheel is only exposed while the lid is open.</p>
+      </section>
+      <section>
+        <h3>A windproof flame</h3>
+        <p>The chimney feeds the flame through its rows of holes while breaking up gusts,
+          so wind bends a Zippo flame instead of blowing it out. To kill it you starve
+          it of air: cap the chimney, or close the lid.</p>
+        <p class="how">Here: a fast swipe through the flame only makes it flicker; a slow
+          pass &mdash; or a finger held over the chimney &mdash; smothers it. Closing the lid
+          always puts it out.</p>
+      </section>
+      <section>
+        <h3>Fuel</h3>
+        <p>The case holds an insert packed with cotton. Fluid soaks the cotton and climbs
+          the wick by capillary action, so the flame burns vapor at the tip, never liquid.
+          As the tank runs down the flame shrinks and sputters; bone-dry cotton leaves
+          sparks with nothing to catch. Real ones also lose fuel to evaporation between uses.</p>
+        <p>Maintenance: pull the insert out of the case, fold back the felt pad on its
+          underside, and soak the cotton &mdash; stop when it feels full, never flood it.</p>
+        <p class="how">Here: close the lid and hold a finger on the bottom of the case;
+          it glugs itself full.</p>
+      </section>
+      <section>
+        <h3>Flint</h3>
+        <p>Every strike wears the flint shorter, and a worn flint sparks weakly or not
+          at all.</p>
+        <p>Maintenance: unscrew the brass spring screw in the base of the insert, tip
+          out the old stub, drop a fresh flint into the tube, and screw the spring back
+          down.</p>
+        <p class="how">Here: the same refill hold seats a new flint &mdash; weak dud showers
+          mean it&rsquo;s time.</p>
+      </section>
+      <section>
+        <h3>The wick</h3>
+        <p>The wick is cotton braided around copper wire, so it stands upright in the
+          chimney. The tip slowly chars with use.</p>
+        <p>Maintenance: tug the wick up with pliers to expose fresh braid, snip it level
+          with the chimney, and it&rsquo;s good for years.</p>
+        <p class="how">Here: drag the wick tip to bend it &mdash; bend it low and swipe the
+          flame away to hide it as an ember (tap the lighter, scoop upward, or snap the
+          phone to call it back). Drag the tip up past the rim to pull it straight.</p>
+      </section>
+      <section>
+        <h3>The case</h3>
+        <p>The same windproof works has been dressed in hundreds of finishes since the
+          1930s &mdash; polished chrome, brushed steel, matte lacquer, solid brass &mdash; and
+          every one carries the lifetime promise: it works, or Zippo fixes it free.</p>
+        <p class="how">Here: press-and-hold anywhere on the closed case (except the fuel
+          hold at the very bottom) to swap finishes.</p>
+      </section>
+    </div>
+  </div>
+</div>
 <noscript><p style="color:#ccc;padding:2em;text-align:center">This lighter needs JavaScript.</p></noscript>
 <script>
   // Offline support for the home-screen app (network-first worker, never
@@ -572,7 +728,7 @@ const sim = {
     sputter: 0, lastCause: '',
   },
   ember: { t: 0 },
-  fuel: 1, flint: 0, flintDudRun: 0, sputterNext: 0,
+  fuel: 1, flint: 0, flintDudRun: 0, sputterNext: 0, warnedLowFuel: false,
   finish: 'chrome', finishFlash: 0,
   upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
   gWorld: new THREE.Vector3(0, -1, 0),
@@ -653,6 +809,7 @@ function doRefill() {
   sim.fuel = 1;
   sim.flint = 0;            // the same top-up drops in a fresh flint
   sim.flintDudRun = 0;
+  sim.warnedLowFuel = false;
   sim.counts.refills++;
   sim.disc.refuel = true;
   sim.squash.v += 0.5;      // the case settles as the cotton soaks
@@ -923,6 +1080,10 @@ const Actions = {
       spawnSparks(2 + (Math.random() * 2 | 0), 0.7);
       Audio.strike(0.3);
       buzz(6);
+      if (perfNow - lastDudToast > 20) {
+        lastDudToast = perfNow;
+        toast('worn flint — weak sparks. hold the base of the closed case to fit a new one');
+      }
       return false;
     }
     sim.flintDudRun = 0;
@@ -1289,6 +1450,12 @@ function stepPhysics(h) {
         sim.flame.turb = Math.max(sim.flame.turb, 0.4 * k);
         Audio.crackle(k);
         buzz(4);
+        // hold the one-shot back while the guide covers the hint pill, so the
+        // explainer isn't spent invisibly under the sheet
+        if (!sim.warnedLowFuel && !guideIsOpen()) {
+          sim.warnedLowFuel = true;
+          toast('fuel’s low — the flame is starving. close the lid and hold the base to refill');
+        }
       }
     }
   }
@@ -1685,6 +1852,7 @@ function endTwoFinger() {
 }
 
 function onPointerDown(e) {
+  if (guideIsOpen()) return;    // the guide sheet owns the screen
   e.preventDefault();
   if (Audio.ensure()) Audio.resume();
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* synthetic */ }
@@ -1925,12 +2093,16 @@ for (const ev of ['contextmenu', 'dblclick', 'gesturestart', 'gesturechange']) {
   window.addEventListener(ev, e => e.preventDefault(), { passive: false });
 }
 window.addEventListener('wheel', e => {
+  if (guideIsOpen()) return;   // let native wheel scrolling drive the guide body
   e.preventDefault();
   cam.zoom = clamp(cam.zoom * (1 + Math.sign(e.deltaY) * 0.08), CFG.ZOOM_MIN, CFG.ZOOM_MAX);
 }, { passive: false });
 // keyboard fallback (desktop)
 window.addEventListener('keydown', e => {
   if (e.repeat) return;
+  // while the guide sheet is up, only its own keys work — the sim keys would
+  // operate the lighter invisibly behind the modal
+  if (guideIsOpen() && e.key !== 'i' && e.key !== 'I' && e.key !== '?' && e.key !== 'Escape') return;
   if (Audio.ensure()) Audio.resume();
   switch (e.key) {
     case ' ': Actions.flipLid(!lidIsOpen()); break;
@@ -1939,6 +2111,8 @@ window.addEventListener('keydown', e => {
     case 'u': case 'U': wick.straightening = true; break;
     case 'j': case 'J': Actions.jerk(); break;
     case 'k': case 'K': Actions.shake(); break;
+    case 'i': case 'I': case '?': guideIsOpen() ? closeGuide() : openGuide(); break;
+    case 'Escape': closeGuide(); break;
   }
 });
 
@@ -2058,6 +2232,52 @@ function updateGravity(dt) {
   sim.upDir.copy(sim.gWorld).multiplyScalar(-1);
 }
 
+/* ============================== GUIDE (functions & maintenance) ============================== */
+const infoBtn = document.getElementById('infoBtn');
+const guideEl = document.getElementById('guide');
+const guideCloseBtn = document.getElementById('guideClose');
+const gFuelEl = document.getElementById('gFuel'), gFuelT = document.getElementById('gFuelT');
+const gFlintEl = document.getElementById('gFlint'), gFlintT = document.getElementById('gFlintT');
+const gStatsEl = document.getElementById('gStats');
+// remaining flint, 1 fresh -> 0 at max dud odds
+function flintCond() {
+  return 1 - clamp01(sim.flint / Math.max(1, CFG.FLINT_LIFE + CFG.FLINT_FADE));
+}
+function updateGauges() {
+  const f = Math.round(sim.fuel * 100), c = Math.round(flintCond() * 100);
+  gFuelEl.style.width = f + '%';
+  gFuelT.textContent = f + '%';
+  gFlintEl.style.width = c + '%';
+  gFlintT.textContent = c + '%';
+  const n = sim.counts;
+  gStatsEl.textContent = `${n.ignitions} lights · ${n.smothers} snuffs · `
+    + `${n.steals} steals · ${n.relights} relights · ${n.refills} refills · ${n.duds} duds`;
+}
+const guideIsOpen = () => guideEl.classList.contains('show');
+function openGuide() {
+  updateGauges();
+  guideEl.classList.add('show');
+  resetPointers();   // any finger already on the canvas is void once the sheet is up
+  try { guideCloseBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+}
+function closeGuide() {
+  if (!guideIsOpen()) return;
+  guideEl.classList.remove('show');
+  try { infoBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+}
+infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
+guideCloseBtn.addEventListener('click', closeGuide);
+guideEl.addEventListener('click', e => { if (e.target === guideEl) closeGuide(); });
+
+// transient "why did that happen" explainers, shown over the rotating hints
+let toastUntil = 0, lastDudToast = -1e9, gaugeTimer = 0;
+function toast(msg, s = 3.6) {
+  toastUntil = perfNow + s;
+  hintEl.textContent = msg;
+  hintEl.classList.add('wrap');
+  hintEl.classList.add('show');
+}
+
 /* ============================== HINTS ============================== */
 // works with denied/absent motion sensors too
 function relightHint() {
@@ -2086,6 +2306,8 @@ function currentHints() {
 }
 function updateHints() {
   try { localStorage.setItem('lighter.disc', JSON.stringify(sim.disc)); } catch (e) { /* ignore */ }
+  if (perfNow < toastUntil) return;   // let an active explainer finish
+  hintEl.classList.remove('wrap');
   const hs = currentHints();
   if (sim.fuel <= 0 && sim.flame.state === OUT) {
     hintEl.textContent = 'out of fuel — close it and hold the base to refill';
@@ -2102,6 +2324,11 @@ function updateHints() {
   hintEl.classList.add('show');
 }
 function tickHints(dt) {
+  if (toastUntil && perfNow >= toastUntil) { toastUntil = 0; updateHints(); }
+  if (guideIsOpen()) {
+    gaugeTimer += dt;
+    if (gaugeTimer > 0.5) { gaugeTimer = 0; updateGauges(); }
+  }
   hintTimer += dt;
   if (hintTimer > 8) {
     hintTimer = 0;
@@ -2201,6 +2428,8 @@ window.LIGHTER = {
   get finish() { return sim.finish; },
   get motionAttached() { return Motion.attached; },
   refill: doRefill,
+  openGuide, closeGuide,
+  get guideOpen() { return guideIsOpen(); },
   cycleFinish,
   setFinish: n => { applyFinish(n); saveStats(); },
   save: saveStats,
