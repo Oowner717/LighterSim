@@ -580,6 +580,109 @@ await L('LIGHTER.refill()');
     await L('LIGHTER.flameCol') === 'classic' && await L('LIGHTER.flameLightHex') === 'ff9a3c');
 }
 
+/* 18 ── the service ritual: pull, refuel, re-flint, reassemble */
+await settleLid(true);
+await L('(LIGHTER.sim.fuel = 0.2, LIGHTER.sim.flint = 70, 0)');
+{ // pull the insert out by the chimney
+  const m = await L('LIGHTER.anchor("mouth")');
+  await page.evaluate(async ([m]) => {
+    window.__pt('pointerdown', 71, m.x, m.y);
+    for (let i = 1; i <= 30; i++) {
+      await window.__sleep(18);
+      window.__pt('pointermove', 71, m.x, m.y - i * 10);
+    }
+    window.__pt('pointerup', 71, m.x, m.y - 300);
+  }, [m]);
+  await waitL('LIGHTER.svcState === "out"', 15000);
+  check('pulling the chimney frees the insert', true);
+  await waitL('LIGHTER.sim.svc.pose > 0.9', 15000);
+  await waitL('document.getElementById("hint").textContent.includes("felt pad")', 8000);
+  check('service instructions take over the pill', true);
+  check('done button offered', await L('document.getElementById("svcDone").classList.contains("show")'));
+  check('striking is locked mid-service', await L('LIGHTER.strike(3)') === false);
+}
+{ // tap the felt pad open; the fluid can arrives
+  const p = await L('LIGHTER.anchor("svcPadEdge")');
+  await page.evaluate(async ([p]) => {
+    window.__pt('pointerdown', 72, p.x, p.y);
+    await window.__sleep(60);
+    window.__pt('pointerup', 72, p.x, p.y);
+  }, [p]);
+  await waitL('LIGHTER.sim.svc.pad > 0.8 && LIGHTER.sim.svc.can > 0.6', 15000);
+  check('felt pad peels open and the can slides in', true);
+}
+{ // hold on the cotton until full
+  await page.evaluate(() => { const p = LIGHTER.anchor('svcPacking'); window.__pt('pointerdown', 73, p.x, p.y); });
+  await waitL('LIGHTER.fuel >= 1', 30000);
+  await page.evaluate(() => { const p = LIGHTER.anchor('svcPacking'); window.__pt('pointerup', 73, p.x, p.y); });
+  check('holding on the cotton fills the tank', true);
+  // fold the pad shut again
+  const p = await L('LIGHTER.anchor("svcPadEdge")');
+  await page.evaluate(async ([p]) => {
+    window.__pt('pointerdown', 74, p.x, p.y);
+    await window.__sleep(60);
+    window.__pt('pointerup', 74, p.x, p.y);
+  }, [p]);
+  await waitL('LIGHTER.sim.svc.pad < 0.2', 15000);
+}
+{ // flint: tap the screw out, tip the stub, drop the fresh flint, screw back
+  const tap = async (name, id) => {
+    const p = await L(`LIGHTER.anchor("${name}")`);
+    await page.evaluate(async ([p, id]) => {
+      window.__pt('pointerdown', id, p.x, p.y);
+      await window.__sleep(60);
+      window.__pt('pointerup', id, p.x, p.y);
+    }, [p, id]);
+  };
+  await tap('svcScrew', 75);
+  await waitL('LIGHTER.sim.svc.screwOut', 20000);
+  check('tapping the screw backs it out (spring pops free)', true);
+  await tap('svcTube', 76);
+  await waitL('LIGHTER.sim.svc.stub === false && LIGHTER.sim.svc.stubHop === 0', 15000);
+  check('tapping the tube tips out the worn flint', true);
+  const f = await L('LIGHTER.anchor("svcFlint")');
+  const t = await L('LIGHTER.anchor("svcTube")');
+  await page.evaluate(async ([f, t]) => {
+    window.__pt('pointerdown', 77, f.x, f.y);
+    for (let i = 1; i <= 14; i++) {
+      await window.__sleep(24);
+      window.__pt('pointermove', 77, f.x + (t.x - f.x) * (i / 14), f.y + (t.y - f.y) * (i / 14));
+    }
+    window.__pt('pointerup', 77, t.x, t.y);
+  }, [f, t]);
+  await waitL('LIGHTER.sim.svc.flintNew === true', 15000);
+  check('dragging the fresh flint drops it in the tube', true);
+  await tap('svcScrew', 78);
+  await waitL('!LIGHTER.sim.svc.screwOut && LIGHTER.sim.svc.screw >= 1', 20000);
+  check('screwing back down renews the flint', await L('LIGHTER.flint') === 0);
+}
+{ // done: slides home, everything back to normal
+  await page.click('#svcDone');
+  await waitL('LIGHTER.svcState === "seated" && LIGHTER.sim.svc.pose < 0.02', 15000);
+  check('done seats the insert', true);
+  await lightIt();
+  check('the serviced lighter lights again', await L('LIGHTER.state') === 'LIT');
+  await settleLid(false);
+}
+{ // sealing an empty tube is honest: no flint, no sparks, and it says so
+  await settleLid(true);
+  await L('LIGHTER.svcOut()');
+  await waitL('LIGHTER.sim.svc.pose > 0.9', 15000);
+  await L('(LIGHTER.sim.svc.screwOut = true, LIGHTER.sim.svc.stub = false, 0)');
+  await L('LIGHTER.svcSeat()');
+  await waitL('LIGHTER.svcState === "seated"', 15000);
+  check('sealing an empty tube marks the flint missing', await L('LIGHTER.sim.flintMissing') === true);
+  const sp0 = await L('LIGHTER.sim.counts.sparks');
+  await page.waitForTimeout(700);
+  const r = await L('LIGHTER.strike(3)');
+  check('an empty tube never sparks', r === false && await L('LIGHTER.sim.counts.sparks') === sp0);
+  await waitL('document.getElementById("hint").textContent.includes("empty")', 10000);
+  check('the empty tube explains itself', true);
+  await L('LIGHTER.refill()');
+  check('quick refill still fits a flint too', await L('LIGHTER.sim.flintMissing') === false);
+  await settleLid(false);
+}
+
 /* discovered tricks persist across sessions */
 await L('LIGHTER.sim.fuel = 0.42');
 await L('LIGHTER.setFinish("brass")');

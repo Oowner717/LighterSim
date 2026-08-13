@@ -109,6 +109,20 @@
   #infoBtn::after, #guideClose::after, #finishBtn::after, #flameBtn::after {
     content: ''; position: absolute; inset: -7px; border-radius: 50%;
   }
+  #svcDone {
+    position: fixed;
+    left: 50%; transform: translateX(-50%);
+    bottom: calc(58px + env(safe-area-inset-bottom, 0px));
+    padding: 10px 18px;
+    border-radius: 999px;
+    border: 1px solid rgba(160, 200, 235, 0.4);
+    background: rgba(24, 34, 44, 0.78);
+    color: rgba(190, 220, 245, 0.95);
+    font-size: 13px; letter-spacing: 0.02em;
+    display: none;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  }
+  #svcDone.show { display: block; }
   #debug {
     position: fixed;
     right: calc(12px + env(safe-area-inset-right, 0px));
@@ -229,6 +243,7 @@
   <button id="ffFuel" type="button" title="Fast-forward fuel consumption">&#187; fuel</button>
   <button id="ffFlint" type="button" title="Fast-forward flint wear">&#187; flint</button>
 </div>
+<button id="svcDone" type="button">&#10003; done &mdash; slide it back in</button>
 <div id="hud" aria-hidden="true">
   <div class="hrow"><span>fuel</span><div class="hbar"><i id="hFuel"></i></div></div>
   <div class="hrow"><span>flint</span><div class="hbar"><i id="hFlint"></i></div></div>
@@ -278,8 +293,10 @@
           sparks with nothing to catch. Real ones also lose fuel to evaporation between uses.</p>
         <p>Maintenance: pull the insert out of the case, fold back the felt pad on its
           underside, and soak the cotton &mdash; stop when it feels full, never flood it.</p>
-        <p class="how">Here: close the lid and hold a finger on the bottom of the case;
-          it glugs itself full.</p>
+        <p class="how">Here, the quick way: close the lid and hold a finger on the bottom
+          of the case; it glugs itself full. Or do it properly: with the flame out and
+          the lid open, pull the insert up out of the case, peel back the felt pad, and
+          hold a finger on the cotton while the can pours.</p>
       </section>
       <section>
         <h3>Flint</h3>
@@ -288,8 +305,10 @@
         <p>Maintenance: unscrew the brass spring screw in the base of the insert, tip
           out the old stub, drop a fresh flint into the tube, and screw the spring back
           down.</p>
-        <p class="how">Here: the same refill hold seats a new flint &mdash; weak dud showers
-          mean it&rsquo;s time.</p>
+        <p class="how">Here: the quick refill hold seats a new flint &mdash; or pull the
+          insert out and do it by hand: circle a finger on the brass screw to back it
+          out, tap the tube to tip out the stub, drop the fresh flint in, and screw the
+          spring back down. Weak dud showers mean it&rsquo;s time.</p>
       </section>
       <section>
         <h3>The wick</h3>
@@ -420,6 +439,12 @@ const CFG = {
   FLINT_DUD_RUN: 2,          // never more consecutive duds than this
   MOTION_LINGER: 2.5,        // s sensors stay live after the flame dies
 
+  // service ritual: pull the insert to refuel and re-flint it properly
+  SVC_PULL: 1.9,             // insert lift (world units) that frees it from the case
+  SVC_FILL_S: 2.6,           // s of squirting to fill an empty tank
+  SVC_TURNS: 3,              // screw revolutions between snug and free
+  R_SVC: 54,                 // px service collider radius (x uiScale)
+
   // physics
   H: 1 / 120,                // fixed timestep
 };
@@ -448,6 +473,8 @@ const _qI = new THREE.Quaternion();
 const canvas = document.getElementById('c');
 const hintEl = document.getElementById('hint');
 const motionBtn = document.getElementById('motionBtn');
+const svcDoneBtn = document.getElementById('svcDone');
+svcDoneBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); Actions.svcSeat(); });
 
 const renderer = new THREE.WebGLRenderer({
   canvas, antialias: true, powerPreference: 'high-performance',
@@ -582,6 +609,37 @@ const matWickTip = new THREE.MeshStandardMaterial({
   color: 0x272120, metalness: 0, roughness: 0.95,
   emissive: 0xff6a1a, emissiveIntensity: 0,   // glows while burning, smolders out
 });
+const matFelt = new THREE.MeshStandardMaterial({ color: 0xcfc6b2, metalness: 0, roughness: 1 });
+// packing cotton: canvas texture repainted as fluid soaks in
+const soakCv = document.createElement('canvas');
+soakCv.width = 128; soakCv.height = 64;
+const soakTex = new THREE.CanvasTexture(soakCv);
+soakTex.colorSpace = THREE.SRGBColorSpace;
+function paintSoak(level) {
+  const g = soakCv.getContext('2d');
+  g.fillStyle = '#e8e0cd';
+  g.fillRect(0, 0, 128, 64);
+  for (let i = 0; i < 60; i++) {   // wadding texture
+    g.fillStyle = `rgba(190,180,158,${0.12 + hashN(i) * 0.12})`;
+    g.beginPath();
+    g.arc(hashN(i * 3.1) * 128, hashN(i * 7.7) * 64, 3 + hashN(i * 1.7) * 6, 0, Math.PI * 2);
+    g.fill();
+  }
+  if (level > 0.01) {              // the wet blot spreads with the fill level
+    const r = Math.sqrt(clamp01(level)) * 95;
+    const gr = g.createRadialGradient(70, 34, 0, 70, 34, r);
+    gr.addColorStop(0, 'rgba(96,82,58,0.85)');
+    gr.addColorStop(0.75, 'rgba(112,96,68,0.55)');
+    gr.addColorStop(1, 'rgba(120,104,74,0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 128, 64);
+  }
+  soakTex.needsUpdate = true;
+}
+paintSoak(1);
+const matCotton = new THREE.MeshStandardMaterial({ map: soakTex, metalness: 0, roughness: 1 });
+const matCan = new THREE.MeshStandardMaterial({ color: 0x2a3550, metalness: 0.35, roughness: 0.5 });
+const matFlint = new THREE.MeshStandardMaterial({ color: 0x5a4a42, metalness: 0.15, roughness: 0.85 });
 
 /* ============================== MODEL ============================== */
 const lighter = new THREE.Group();      // world root: recoil hop lives here
@@ -774,6 +832,75 @@ function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the deb
   wick.base.updateWorldMatrix(true, true);
 }
 
+/* ---- service ritual hardware: only meaningful once the insert comes out ---- */
+const svcParts = {};
+{
+  // the tank body: hidden inside the case until the insert is pulled
+  const tank = new THREE.Mesh(
+    new RoundedBoxGeometry(CFG.BODY_W - 0.24, CFG.BASE_H - 0.3, CFG.BODY_D - 0.24, 3, 0.1),
+    matChromeDark);
+  tank.position.y = (CFG.BASE_H - 0.3) / 2 + 0.14;
+  insertG.add(tank);
+  // felt pad: hinged flap on the underside (LIFT TO FILL, minus the stamp)
+  const padG = new THREE.Group();
+  padG.position.set(0.62, 0.10, 0);
+  const flap = new THREE.Mesh(new THREE.BoxGeometry(2.42, 0.055, CFG.BODY_D - 0.5), matFelt);
+  flap.position.set(-1.21, 0, 0);
+  padG.add(flap);
+  insertG.add(padG);
+  // packing cotton, recessed so the closed pad covers it
+  const packing = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.05, CFG.BODY_D - 0.62), matCotton);
+  packing.position.set(-0.62, 0.115, 0);
+  insertG.add(packing);
+  // flint tube mouth + the screw-and-spring assembly that plugs it
+  const tubeRing = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.028, 8, 20), matDark);
+  tubeRing.rotation.x = Math.PI / 2;
+  tubeRing.position.set(1.3, 0.105, 0);
+  const tubeDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.02, 14), matDark);
+  tubeDisc.position.set(1.3, 0.1, 0);
+  insertG.add(tubeRing, tubeDisc);
+  const screwG = new THREE.Group();
+  screwG.position.set(1.3, 0.1, 0);
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.155, 0.075, 18), matChromeDark);
+  const slot = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.078, 0.045), matDark);
+  screwG.add(head, slot);
+  for (let i = 1; i <= 5; i++) {
+    const coil = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.016, 6, 14), matSteel);
+    coil.rotation.x = Math.PI / 2;
+    coil.position.y = i * 0.07;
+    screwG.add(coil);
+  }
+  insertG.add(screwG);
+  // the worn stub, revealed when the spring comes out
+  const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.14, 10), matDark);
+  stub.position.set(1.3, 0.06, 0);
+  stub.visible = false;
+  insertG.add(stub);
+  // fresh flint on a little tray floating beside the insert
+  const tray = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.34, 0.06, 18), matDark);
+  tray.position.set(2.45, 0.1, 0);
+  const flintNew = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.3, 10), matFlint);
+  flintNew.position.set(2.45, 0.22, 0);
+  tray.visible = flintNew.visible = false;
+  insertG.add(tray, flintNew);
+  // the case's dark mouth, visible only while the insert is away
+  const opening = new THREE.Mesh(
+    roundedPlanGeo(CFG.BODY_W - 0.2, CFG.BODY_D - 0.2, CFG.EDGE_R - 0.08, 0.05), matDark);
+  opening.position.set(0, CFG.BASE_H - 0.03, 0);
+  opening.visible = false;
+  caseG.add(opening);
+  // fluid can: slides in when the pad is open
+  const canG = new THREE.Group();
+  const tin = new THREE.Mesh(new RoundedBoxGeometry(0.85, 1.5, 0.5, 3, 0.08), matCan);
+  const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 0.4, 10), matChromeDark);
+  spout.position.set(-0.34, 0.85, 0);
+  spout.rotation.z = 0.5;
+  canG.add(tin, spout);
+  canG.visible = false;
+  squash.add(canG);
+  Object.assign(svcParts, { padG, packing, screwG, stub, tray, flintNew, opening, canG, spout });
+}
+
 { // faint cool sheen suggests a studio floor even with everything out
   const t = new THREE.CanvasTexture(radialCanvas(256, [
     [0, 'rgba(88,108,132,0.15)'], [0.55, 'rgba(70,86,106,0.06)'], [1, 'rgba(60,74,92,0)'],
@@ -818,12 +945,26 @@ const sim = {
   },
   ember: { t: 0 },
   fuel: 1, flint: 0, flintDudRun: 0, sputterNext: 0, warnedLowFuel: false,
+  flintMissing: false, overfilled: false,
   finish: 'chrome', finishFlash: 0, flameCol: 'classic',
+  svc: {   // insert service ritual — deliberately never persisted
+    state: 'seated',            // seated | pulling | out | seating
+    y: 0, yV: 0,                // extraction lift while pulling
+    pose: 0, poseV: 0,          // 0 seated .. 1 floating flipped in front
+    pad: 0, padT: 0,            // felt pad hinge + its settle target
+    screw: 1, screwOut: false,  // 1 snug .. 0 free
+    autoTurn: 0,                // tap-to-auto screw direction
+    stub: true, stubHop: 0,     // worn flint in the tube / eject animation
+    flintNew: false,            // fresh flint dropped in this service
+    can: 0, squirt: 0,          // fluid can slide-in + squirting envelope
+    overHold: 0, squirtT: 0,    // overfill dwell + squirt audio cadence
+    seatK: 0,                   // one-shot clunk latch while seating
+  },
   upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
   gWorld: new THREE.Vector3(0, -1, 0),
   timers: [],
-  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false, flameCol: false },
-  counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0, duds: 0, refills: 0 },
+  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false, flameCol: false, service: false },
+  counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0, duds: 0, refills: 0, services: 0 },
 };
 // discovered tricks persist, so returning players skip the beginner hints
 try { Object.assign(sim.disc, JSON.parse(localStorage.getItem('lighter.disc') || '{}')); } catch (e) { /* ignore */ }
@@ -831,8 +972,8 @@ try { Object.assign(sim.disc, JSON.parse(localStorage.getItem('lighter.disc') ||
 function saveStats() {
   try {
     localStorage.setItem('lighter.stats', JSON.stringify({
-      v: 1, fuel: sim.fuel, flint: sim.flint, finish: sim.finish,
-      flameCol: sim.flameCol, counts: sim.counts,
+      v: 1, fuel: sim.fuel, flint: sim.flint, flintMissing: sim.flintMissing,
+      finish: sim.finish, flameCol: sim.flameCol, counts: sim.counts,
     }));
   } catch (e) { /* ignore */ }
 }
@@ -843,6 +984,7 @@ try {
     if (Number.isFinite(+s.flint)) sim.flint = Math.max(0, s.flint | 0);
     if (typeof s.finish === 'string') sim.finish = s.finish;
     if (typeof s.flameCol === 'string') sim.flameCol = s.flameCol;
+    sim.flintMissing = s.flintMissing === true;
     Object.assign(sim.counts, s.counts || {});
   }
 } catch (e) { /* ignore */ }
@@ -903,6 +1045,7 @@ function doRefill() {
   sim.fuel = 1;
   sim.flint = 0;            // the same top-up drops in a fresh flint
   sim.flintDudRun = 0;
+  sim.flintMissing = false;
   sim.warnedLowFuel = false;
   sim.counts.refills++;
   sim.disc.refuel = true;
@@ -1030,6 +1173,55 @@ const Audio = {
     [1900, 2600].forEach((f, i) => this.tone(f, 0, 'triangle', 0.05, 0.08, t0 + i * 0.07));
   },
   polish() { this.burst({ type: 'bandpass', f: 2200, f1: 3800, Q: 1.2, dur: 0.22, vol: 0.12, att: 0.03 }); },
+  shear(outward) {   // insert sliding against the case walls
+    if (!this.ctx) return;
+    this.burst({
+      type: 'bandpass', f: outward ? 900 : 2200, f1: outward ? 2300 : 900,
+      Q: 1.4, dur: 0.3, vol: 0.16, att: 0.04,
+    });
+  },
+  clunkSeat() {
+    if (!this.ctx) return;
+    const t0 = this.t();
+    this.tone(80, 48, 'sine', 0.1, 0.32, t0);
+    this.burst({ type: 'lowpass', f: 700, dur: 0.05, vol: 0.3, t0 });
+    this.tone(2900, 0, 'triangle', 0.05, 0.06, t0 + 0.01);
+  },
+  peel() {   // felt pad lifting
+    if (!this.ctx) return;
+    this.burst({ type: 'bandpass', f: 560, f1: 900, Q: 0.8, dur: 0.14, vol: 0.12, att: 0.03 });
+  },
+  squirt() {
+    if (!this.ctx) return;
+    const t0 = this.t();
+    this.burst({ type: 'lowpass', f: 850, f1: 420, dur: 0.3, vol: 0.11, att: 0.05, t0 });
+    this.tone(215 + Math.random() * 40, 165, 'sine', 0.2, 0.045, t0);
+  },
+  ratchet() { this.burst({ type: 'bandpass', f: 1800, Q: 3, dur: 0.02, vol: 0.09 }); },
+  boing() {   // the spring pops free
+    if (!this.ctx) return;
+    const t0 = this.t();
+    this.tone(260, 62, 'triangle', 0.32, 0.16, t0);
+    this.tone(330, 90, 'triangle', 0.24, 0.08, t0 + 0.02);
+  },
+  tink() {
+    if (!this.ctx) return;
+    const t0 = this.t();
+    this.tone(4100, 0, 'triangle', 0.04, 0.1, t0);
+    this.tone(5400, 0, 'triangle', 0.03, 0.06, t0 + 0.03);
+  },
+  clink() {   // flint dropping home
+    if (!this.ctx) return;
+    const t0 = this.t();
+    this.tone(2600, 0, 'triangle', 0.05, 0.12, t0);
+    this.burst({ type: 'highpass', f: 3400, dur: 0.03, vol: 0.08, t0 });
+  },
+  torqueClick() {
+    if (!this.ctx) return;
+    const t0 = this.t();
+    this.tone(1250, 0, 'square', 0.03, 0.09, t0);
+    this.burst({ type: 'highpass', f: 2400, dur: 0.02, vol: 0.12, t0 });
+  },
   burnEnsure() {
     if (this.burn || !this.ctx) return;
     try {
@@ -1155,13 +1347,35 @@ function tryIgniteFromSparks() {
     if (lp.y < RIM_Y || Math.abs(lp.x - CFG.CHIM_X) < 0.95) setFlame(LIT, 'strike');
   });
 }
+// seating the flint screw finishes whatever the tube now holds: a fresh flint
+// renews the wear counters, a sealed empty tube means no sparks until refit
+function svcApplySnug() {
+  const S = sim.svc;
+  if (S.flintNew) { sim.flint = 0; sim.flintDudRun = 0; sim.flintMissing = false; }
+  else if (!S.stub) sim.flintMissing = true;
+  S.flintNew = false;
+  S.screw = 1;
+  S.screwOut = false;
+  S.autoTurn = 0;
+}
 const Actions = {
   strike(speedVminPerS = 3) {
     if (!lidIsOpen()) return false;              // wheel is covered when closed
+    if (sim.svc.state !== 'seated') return false; // never strike a stripped insert
     const now = perfT();
     if (now - sim.wheel.lastSpark < CFG.SPARK_REFRACTORY) return false;
     sim.wheel.lastSpark = now;
     sim.wheel.omega = clamp(speedVminPerS * 8, 10, 30);
+    if (sim.flintMissing) {
+      // an empty tube just grinds: no flint, no sparks, ever
+      Audio.burst({ type: 'bandpass', f: 700, Q: 1.4, dur: 0.09, vol: 0.1 });
+      buzz(4);
+      if (perfNow - lastDudToast > 12) {
+        lastDudToast = perfNow;
+        toast('the flint tube is empty — service the insert (or hold the base) to fit a flint');
+      }
+      return false;
+    }
     sim.flint++;
     // a worn flint fizzles sometimes: weak shower, no catch — but never a long
     // streak of duds, so a stubborn thumb always wins in the end
@@ -1229,6 +1443,38 @@ const Actions = {
     } else if (sim.flame.state !== LIT) {
       Actions.strike(3);
     }
+  },
+  svcOut() {                                      // the insert comes free
+    const S = sim.svc;
+    if (S.state === 'out') return;
+    S.state = 'out';
+    S.y = 0; S.yV = 0;
+    S.screw = 1; S.screwOut = false; S.autoTurn = 0;
+    S.stub = true; S.stubHop = 0; S.flintNew = false;
+    S.pad = 0; S.padT = 0; S.can = 0; S.squirt = 0; S.overHold = 0;
+    S.seatK = 0;
+    sim.disc.service = true;
+    sim.counts.services++;
+    Audio.shear(true);
+    buzz([10, 30, 14]);
+    saveStats();
+    updateHints();
+  },
+  svcSeat() {                                     // done: fold up and slide home
+    const S = sim.svc;
+    if (S.state !== 'out') return;
+    // forgiving auto-complete: whatever was left open gets closed properly
+    if (S.screwOut || S.screw < 1) {
+      svcApplySnug();
+      Audio.torqueClick();
+    }
+    S.padT = 0; S.autoTurn = 0;
+    S.state = 'seating';
+    Audio.shear(false);
+    buzz(8);
+    saveStats();
+    updateGauges();
+    updateHints();
   },
   pop() {                                         // squeeze-pop release
     sim.counts.pops++;
@@ -1454,6 +1700,10 @@ function spawnSparks(n, speedK) {
     s.max = s.life = 0.16 + Math.random() * 0.26;
   }
 }
+// fluid stream + splash for the refuel squirt
+svcParts.stream = makeSprite(TEX.core, [1.5, 1.6, 1.8]);
+svcParts.splash = makeSprite(TEX.glow, [1.1, 1.2, 1.4]);
+svcParts.stream.material.rotation = 0;
 const smoke = [];
 for (let i = 0; i < 16; i++) {
   const spr = makeSprite(TEX.smoke, [1, 1, 1]);
@@ -1490,8 +1740,11 @@ function computeFit() {
 }
 function updateCamera(dt, tSec) {
   // the open lid hangs off to the left: slide the framing over a touch
-  cam.target.x += (clamp01(sim.lid.theta / CFG.LID_OPEN) * -0.55 - cam.target.x)
+  cam.target.x += (clamp01(sim.lid.theta / CFG.LID_OPEN) * -0.55 * (1 - sim.svc.pose) - cam.target.x)
     * (1 - Math.exp(-6 * dt));
+  // during service the insert floats up and forward: follow it
+  cam.target.z += (sim.svc.pose * 2.3 - cam.target.z) * (1 - Math.exp(-6 * dt));
+  cam.target.y += (CFG.CAM_TARGET_Y + sim.svc.pose * 0.55 - cam.target.y) * (1 - Math.exp(-6 * dt));
   cam.yaw += cam.yawVel * dt;
   cam.pitch = clamp(cam.pitch + cam.pitchVel * dt, -0.45, 0.6);
   const dk = Math.exp(-3.2 * dt);
@@ -1540,6 +1793,14 @@ function anchorWorld(name, out) {
     case 'lidCenter': return lidG.localToWorld(out.set(-HINGE_X, CFG.LID_H / 2, 0));
     case 'baseBottom': return caseG.localToWorld(out.set(0, 0.08, 0));
     case 'baseCenter': return caseG.localToWorld(out.set(0, CFG.BASE_H / 2, 0));
+    case 'svcScrew': return insertG.localToWorld(out.set(1.3, sim.svc.screwOut ? -0.8 : 0.02, 0));
+    case 'svcTube': return insertG.localToWorld(out.set(1.3, 0.1, 0));
+    case 'svcPacking': return insertG.localToWorld(out.set(-0.62, 0.08, 0));
+    case 'svcPadEdge': {
+      svcParts.padG.updateWorldMatrix(true, false);
+      return svcParts.padG.localToWorld(out.set(-2.3, 0, 0));
+    }
+    case 'svcFlint': return insertG.localToWorld(out.copy(svcParts.flintNew.position));
   }
   return out;
 }
@@ -1673,6 +1934,85 @@ function stepPhysics(h) {
   } else {
     F.cover = Math.max(0, F.cover - h * 3);
   }
+  // ---- service ritual physics ----
+  {
+    const S = sim.svc;
+    // a released half-pulled insert settles back into the case
+    if (S.state === 'seated' && S.y > 0 && !svcPullHold) {
+      S.yV -= (S.y * 260 + S.yV * 18) * h;
+      S.y = Math.max(0, S.y + S.yV * h);
+      if (S.y === 0 && S.yV < -1.2) Audio.clunkSeat();
+      if (S.y === 0) S.yV = 0;
+    }
+    // float out to (or back from) the flipped service pose
+    const poseT = S.state === 'out' ? 1 : 0;
+    S.poseV += ((poseT - S.pose) * 34 - S.poseV * 9.5) * h;
+    S.pose = clamp01(S.pose + S.poseV * h);
+    if (S.state === 'seating') {
+      S.y = Math.max(0, S.y - h * 4);
+      if (S.pose < 0.02 && S.y === 0) {
+        S.pose = 0; S.poseV = 0;
+        S.state = 'seated';
+        S.pad = 0; S.can = 0; S.squirt = 0;
+        Audio.clunkSeat();
+        buzz(14);
+        updateHints();
+      }
+    }
+    // felt pad settles toward its target unless a finger is steering it
+    if (!padHold) S.pad = clamp01(S.pad + (S.padT - S.pad) * (1 - Math.exp(-14 * h)));
+    // fluid can slides in whenever the open pad exposes the cotton
+    const canT = (S.state === 'out' && S.pad > 0.65) ? 1 : 0;
+    S.can = clamp01(S.can + (canT - S.can) * (1 - Math.exp(-7 * h)));
+    // squirting: hold on the cotton while the can is there
+    const filling = fillHold && S.state === 'out' && S.pad > 0.65 && S.can > 0.6;
+    S.squirt = clamp01(S.squirt + ((filling ? 1 : 0) - S.squirt) * (1 - Math.exp(-12 * h)));
+    if (filling) {
+      const before = sim.fuel;
+      sim.fuel = Math.min(1, sim.fuel + h / CFG.SVC_FILL_S);
+      S.squirtT -= h;
+      if (S.squirtT <= 0) { S.squirtT = 0.32; Audio.squirt(); buzz(3); }
+      if (sim.fuel >= 1) {
+        S.overHold += h;
+        if (S.overHold > 0.55 && !sim.overfilled) {
+          sim.overfilled = true;   // one flare-up on the next light
+          toast('that’s full — don’t flood it, it’ll flare on the first light');
+          buzz([6, 40, 6]);
+        }
+      }
+      if (sim.fuel !== before) { sim.warnedLowFuel = false; }
+    } else {
+      S.overHold = 0;
+    }
+    // screw travel: tap-to-auto turning (manual turning drives S.screw directly)
+    if (S.autoTurn !== 0 && !S.screwOut) {
+      S.screw = clamp01(S.screw + S.autoTurn * h / 1.6);
+      S.ratchetT = (S.ratchetT || 0) - h;
+      if (S.ratchetT <= 0) { S.ratchetT = 0.09; Audio.ratchet(); }
+    }
+    if (!S.screwOut && S.screw <= 0) {
+      S.screwOut = true;
+      S.autoTurn = 0;
+      Audio.boing();
+      buzz([8, 40, 12]);
+      updateHints();
+    }
+    if (S.screwOut && S.autoTurn > 0) {
+      // reinstalling: the spring compresses as it goes back down
+      S.screw = clamp01(S.screw + h / 2.0);
+      S.ratchetT = (S.ratchetT || 0) - h;
+      if (S.ratchetT <= 0) { S.ratchetT = 0.09; Audio.ratchet(); }
+    }
+    if (S.screwOut && S.screw >= 1) {
+      svcApplySnug();
+      Audio.torqueClick();
+      buzz(10);
+      saveStats();
+      updateGauges();
+      updateHints();
+    }
+    S.stubHop = Math.max(0, S.stubHop - h / 0.6);
+  }
   // press-and-hold on the closed case's base bottom refills the tank
   if (caseHold) {
     const tr = caseHold;
@@ -1721,6 +2061,71 @@ function bezier(t, out) {
 function updateFrame(dt, tSec) {
   // pose the rig (side hinge: the lid swings left, in the plane of the face)
   lidG.rotation.z = sim.lid.theta;
+  // ---- service pose: lift while pulling, then float out + flip to face you ----
+  {
+    const S = sim.svc;
+    const e = S.pose * S.pose * (3 - 2 * S.pose);
+    insertG.rotation.set(-2.4 * e, 0, 0);
+    // rotate about the insert's middle, then carry it to the service spot
+    _v1.set(0, 2.1, 0);
+    _v2.copy(_v1).applyEuler(insertG.rotation);
+    insertG.position.set(0, S.y + e * 1.6, e * 2.45).add(_v1).sub(_v2);
+    svcParts.opening.visible = S.y > 0.03 || e > 0.02;
+    // felt pad hinge
+    svcParts.padG.rotation.z = -S.pad * 2.5;
+    // screw + spring: walks out as it unscrews, dangles above the tube when free
+    const sg = svcParts.screwG;
+    if (S.screwOut) {
+      // free: hovers well off the tube mouth, lowering back as it re-screws
+      sg.position.set(1.3, 0.1 - 0.95 + S.screw * 0.88 - 0.05 * Math.sin(tSec * 2.6), 0);
+    } else {
+      sg.position.set(1.3, 0.1 - (1 - S.screw) * 0.5, 0);
+    }
+    sg.rotation.y = (1 - S.screw) * CFG.SVC_TURNS * Math.PI * 2;
+    // worn stub: revealed when the spring is out, hops away when tapped
+    svcParts.stub.visible = S.state === 'out' && S.screwOut && (S.stub || S.stubHop > 0);
+    if (S.stubHop > 0 && !S.stub) {
+      const k = 1 - S.stubHop;
+      svcParts.stub.position.set(1.3 + k * 0.9, 0.06 - k * 1.1 + Math.sin(k * Math.PI) * -0.45, 0.2 * k);
+    } else {
+      svcParts.stub.position.set(1.3, 0.06, 0);
+    }
+    // fresh flint + tray appear once the tube is clear
+    const wantTray = S.state === 'out' && S.screwOut && !S.stub && S.stubHop <= 0;
+    svcParts.tray.visible = wantTray && !S.flintNew;
+    svcParts.flintNew.visible = wantTray;
+    if (wantTray && S.flintNew) svcParts.flintNew.position.set(1.3, 0.22, 0);
+    else if (wantTray && !flintDragging) svcParts.flintNew.position.set(2.45, 0.22, 0);
+    // fluid can slides in over the open pad
+    const cg = svcParts.canG;
+    cg.visible = S.can > 0.02;
+    if (cg.visible) {
+      const ck = S.can * S.can * (3 - 2 * S.can);
+      cg.position.set(lerp(4.6, 2.1, ck), lerp(4.8, 4.05, ck), 3.1);
+      cg.rotation.z = -0.18 - 0.85 * S.squirt;
+      // stream: spout tip down to the cotton
+      const tipW = cg.localToWorld(_v3.set(-0.5, 1.05, 0));
+      insertG.updateWorldMatrix(true, false);
+      const packW = insertG.localToWorld(_v4.set(-0.62, 0.06, 0));
+      const st = svcParts.stream, sp = svcParts.splash;
+      st.visible = sp.visible = S.squirt > 0.03;
+      if (st.visible) {
+        st.position.copy(tipW).add(packW).multiplyScalar(0.5);
+        _v5.subVectors(packW, tipW);
+        const len = _v5.length();
+        const vr = _v5.dot(cam.right), vu = _v5.dot(cam.up);
+        st.material.rotation = Math.atan2(-vr, vu);
+        st.scale.set(0.055 + 0.02 * vnoise(tSec * 21), len * 0.6, 1);
+        st.material.opacity = 0.5 * S.squirt;
+        sp.position.copy(packW);
+        sp.scale.set(0.34 + 0.06 * vnoise(tSec * 17), 0.2, 1);
+        sp.material.opacity = 0.4 * S.squirt;
+      }
+    } else {
+      svcParts.stream.visible = svcParts.splash.visible = false;
+    }
+    svcDoneBtn.classList.toggle('show', S.state === 'out');
+  }
   const s = sim.squash.s;
   squash.scale.set(1 + s * 0.55, 1 - s, 1 + s * 0.55);
   lighter.position.y = sim.hop.y;
@@ -1889,6 +2294,10 @@ let twoMode = null;          // null | {kind:'squeeze'|'zoom', ...}
 let lastTap = null;
 let chimneyHold = null;      // chimney-gesture tracker dwelling over the mouth
 let caseHold = null;         // press-and-hold tracker on the closed case (refill / finish)
+let svcPullHold = null;      // tracker pulling the insert out of the case
+let padHold = null;          // tracker steering the felt pad open
+let fillHold = null;         // tracker holding the fluid onto the cotton
+let flintDragging = false;   // the fresh flint is being carried by a finger
 const squeezeState = { popped: false };
 
 function pxSpeedOf(tr) {  // smoothed speed px/s
@@ -1896,7 +2305,29 @@ function pxSpeedOf(tr) {  // smoothed speed px/s
 }
 function classify(px, py) {
   const S = uiScale();
-  if (lidIsOpen()) {
+  const V = sim.svc;
+  if (V.state === 'out') {
+    // the floating insert owns its service colliders, most specific first
+    const R = CFG.R_SVC * S;
+    if (V.screwOut && !V.stub && V.stubHop <= 0 && !V.flintNew) {
+      const fl = anchorScreen('svcFlint');
+      if (Math.hypot(px - fl.x, py - fl.y) < R * 0.85) return 'flintNew';
+    }
+    if (V.screwOut) {
+      // with the assembly out, the open tube mouth outranks the hovering screw
+      const tb = anchorScreen('svcTube');
+      if (Math.hypot(px - tb.x, py - tb.y) < R * 0.75) return 'tube';
+    }
+    const sc = anchorScreen('svcScrew');
+    if (Math.hypot(px - sc.x, py - sc.y) < R * 0.8) return 'screw';
+    const pe = anchorScreen('svcPadEdge');
+    if (Math.hypot(px - pe.x, py - pe.y) < R) return 'pad';
+    if (V.pad > 0.5) {
+      const pk = anchorScreen('svcPacking');
+      if (Math.hypot(px - pk.x, py - pk.y) < R * 1.3) return 'packing';
+    }
+  }
+  if (lidIsOpen() && V.state === 'seated') {
     const tp = anchorScreen('tip');
     // a bent wick is tucked inside the chimney: shrink its grab zone so the
     // steal-the-flame swipe across the mouth can't accidentally drag it
@@ -1923,6 +2354,33 @@ function classify(px, py) {
 }
 function beginGesture(tr) {
   tr.gesture = classify(tr.x, tr.y);
+  // grabbing the chimney with the flame out starts the service pull
+  if (tr.gesture === 'chimney' && sim.flame.state === OUT && sim.svc.state === 'seated') {
+    tr.gesture = 'svcPull';
+    tr.pullBaseY = tr.y;
+    svcPullHold = tr;
+    return;
+  }
+  if (tr.gesture === 'pad') {
+    padHold = tr;
+    tr.padBase = sim.svc.pad;
+    return;
+  }
+  if (tr.gesture === 'packing') {
+    fillHold = tr;
+    return;
+  }
+  if (tr.gesture === 'screw') {
+    tr.scrPivot = anchorScreen('svcTube');
+    tr.scrPrevA = Math.atan2(tr.y - tr.scrPivot.y, tr.x - tr.scrPivot.x);
+    tr.scrTick = 0;
+    tr.scrMoved = 0;
+    return;
+  }
+  if (tr.gesture === 'flintNew') {
+    flintDragging = true;
+    return;
+  }
   if (tr.gesture === 'lid') {
     sim.lid.dragging = true;
     tr.lidTheta = sim.lid.theta;
@@ -2026,6 +2484,24 @@ function releaseDecay(tr) {
 function endGesture(tr, cancelled) {
   if (chimneyHold === tr) chimneyHold = null;
   if (caseHold === tr) caseHold = null;
+  if (svcPullHold === tr) svcPullHold = null;
+  if (fillHold === tr) fillHold = null;
+  if (padHold === tr) {
+    padHold = null;
+    sim.svc.padT = sim.svc.pad > 0.45 ? 1 : 0;   // settle to the nearest end
+  }
+  if (tr.gesture === 'flintNew') {
+    flintDragging = false;
+    if (!cancelled) {
+      const tb = anchorScreen('svcTube');
+      if (Math.hypot(tr.x - tb.x, tr.y - tb.y) < CFG.R_SVC * uiScale()) {
+        sim.svc.flintNew = true;   // dropped home
+        Audio.clink();
+        buzz([6, 25, 8]);
+        updateHints();
+      }
+    }
+  }
   if (tr.gesture === 'lid') {
     sim.lid.dragging = false;
     sim.lid.omega = cancelled ? 0 : clamp(tr.omegaEst * releaseDecay(tr), -45, 45);
@@ -2056,6 +2532,7 @@ function cancelSingleGestures() {
   for (const tr of pointers.values()) if (tr.gesture && tr.gesture !== 'dead') endGesture(tr, true);
 }
 function trySqueezeStart(a, b) {
+  if (sim.svc.state !== 'seated') return false;   // no squeezing a gutted case
   const R = Math.max(58, Math.min(vmin(), 672) * CFG.SQZ_ZONE_FRAC);
   const lt = anchorScreen('lidTop');
   const bb = anchorScreen('baseBottom');
@@ -2142,6 +2619,65 @@ function onPointerMove(e) {
   tr.x = e.clientX; tr.y = e.clientY; tr.tPrev = now;
   if (twoMode) { twoFingerMove(); return; }
   switch (tr.gesture) {
+    case 'svcPull': {
+      // a stiff first inch (the friction catch), then the insert slides free
+      const S = uiScale();
+      const up = Math.max(0, tr.pullBaseY - tr.y);
+      const det = 26 * S;
+      const eff = up < det ? up * 0.12 : (up - det) + det * 0.12;
+      sim.svc.y = Math.min(CFG.SVC_PULL, eff / (86 * S));
+      if (sim.svc.y >= CFG.SVC_PULL) {
+        svcPullHold = null;
+        tr.gesture = 'dead';
+        Actions.svcOut();
+      }
+      break;
+    }
+    case 'pad': {
+      // any dragging peels the pad; drag distance = how far it opens
+      const prev = sim.svc.pad;
+      sim.svc.pad = clamp01(tr.padBase + tr.moved / (120 * uiScale()));
+      if (prev < 0.3 && sim.svc.pad >= 0.3) Audio.peel();
+      break;
+    }
+    case 'screw': {
+      // circling the finger around the tube turns the screw, either direction
+      if (sim.svc.screwOut && sim.svc.stub) break;   // the stub blocks the tube
+      const pv = tr.scrPivot;
+      const rx = tr.x - pv.x, ry = tr.y - pv.y;
+      if (rx * rx + ry * ry > 22 * 22) {
+        let a = Math.atan2(ry, rx);
+        a += 2 * Math.PI * Math.round((tr.scrPrevA - a) / (2 * Math.PI));
+        const dA = a - tr.scrPrevA;
+        if (Math.abs(dA) < 0.7) {
+          const step = Math.abs(dA) / (2 * Math.PI * CFG.SVC_TURNS);
+          const V = sim.svc;
+          V.screw = clamp01(V.screw + (V.screwOut ? step : -step));
+          tr.scrTick += Math.abs(dA);
+          if (tr.scrTick > 1.0) { tr.scrTick = 0; Audio.ratchet(); buzz(3); }
+          tr.scrMoved += Math.abs(dA);
+          tr.scrPrevA = a;
+        } else {
+          tr.scrPrevA = Math.atan2(ry, rx);   // tracking loss: reseed
+        }
+      }
+      break;
+    }
+    case 'flintNew': {
+      // carry the flint across the underside toward the tube
+      camera.getWorldDirection(_v1);
+      anchorWorld('svcTube', _v2);
+      wickPlane.setFromNormalAndCoplanarPoint(_v1, _v2);
+      raycaster.setFromCamera(_v6.set((tr.x / window.innerWidth) * 2 - 1,
+        -(tr.y / window.innerHeight) * 2 + 1, 0).clone(), camera);
+      if (raycaster.ray.intersectPlane(wickPlane, _v4)) {
+        const local = insertG.worldToLocal(_v4.clone());
+        svcParts.flintNew.position.set(
+          clamp(local.x, 0.6, 2.9), 0.2, clamp(local.z, -1.0, 1.0));
+      }
+      break;
+    }
+    case 'tube': break;
     case 'lid': {
       const prev = sim.lid.theta;
       let dth = (dx * tr.lidU.x + dy * tr.lidU.y) / tr.lidUU;
@@ -2194,6 +2730,19 @@ function onPointerMove(e) {
       break;
     }
     case 'wick': {
+      // a straight wick dragged decisively UP isn't a bend — it's the grip
+      // that pulls the whole insert out (the wick sits at the chimney mouth)
+      if (sim.flame.state === OUT && sim.svc.state === 'seated' && !wickIsBent()) {
+        tr.wickUp = (tr.wickUp || 0) + Math.max(0, -dy);
+        tr.wickSide = (tr.wickSide || 0) + Math.max(0, dy) + Math.abs(dx) * 0.5;
+        if (tr.wickUp > 30 * uiScale() && tr.wickUp > tr.wickSide * 2.2) {
+          tr.gesture = 'svcPull';
+          tr.pullBaseY = tr.startY;
+          svcPullHold = tr;
+          wick.straightening = true;
+          break;
+        }
+      }
       dragWick(e.clientX, e.clientY);
       break;
     }
@@ -2290,6 +2839,39 @@ function onPointerUp(e) {
   }
   // taps & double-tap = auto open + strike (real single-finger gestures only)
   if (hadGesture && dur < CFG.TAP_MS && tr.moved < CFG.TAP_PX) {
+    // service taps: toggle the pad, tip out the stub, or seat the insert
+    if (sim.svc.state === 'out') {
+      if (gestName === 'pad') {
+        sim.svc.padT = sim.svc.padT > 0.5 ? 0 : 1;
+        Audio.peel();
+        buzz(5);
+        updateHints();
+        return;
+      }
+      if (gestName === 'tube' && sim.svc.screwOut && sim.svc.stub) {
+        sim.svc.stub = false;
+        sim.svc.stubHop = 1;
+        Audio.tink();
+        buzz(6);
+        updateHints();
+        return;
+      }
+      if (gestName === 'screw') {
+        // tap-to-auto: the screw runs itself the way the ritual needs next —
+        // but never seals the worn stub back in mid-service
+        if (sim.svc.screwOut && sim.svc.stub) {
+          toast('tip the old flint out first — tap the tube');
+          return;
+        }
+        sim.svc.autoTurn = sim.svc.screwOut ? 1 : -1;
+        buzz(4);
+        return;
+      }
+      if (gestName === 'case' || gestName === 'lid') {
+        Actions.svcSeat();
+        return;
+      }
+    }
     // a tap ON the lighter wakes a hiding ember straight back to flame
     if (sim.flame.state === EMBER && gestName !== 'orbit') {
       lastTap = null;
@@ -2516,8 +3098,9 @@ const gStatsEl = document.getElementById('gStats');
 const hudEl = document.getElementById('hud');
 const hFuelEl = document.getElementById('hFuel'), hFlintEl = document.getElementById('hFlint');
 const finishBtn = document.getElementById('finishBtn');
-// remaining flint, 1 fresh -> 0 at max dud odds
+// remaining flint, 1 fresh -> 0 at max dud odds (or an empty tube)
 function flintCond() {
+  if (sim.flintMissing) return 0;
   return 1 - clamp01(sim.flint / Math.max(1, CFG.FLINT_LIFE + CFG.FLINT_FADE));
 }
 // drives both the always-on HUD bars and the guide's detailed gauges;
@@ -2532,6 +3115,7 @@ function updateGauges() {
     gFuelT.textContent = w;
     hFuelEl.style.width = w;
     hudEl.classList.toggle('low', sim.fuel < CFG.FUEL_LOW);
+    paintSoak(sim.fuel);   // the service cotton always matches the tank
   }
   if (c !== lastG.c) {
     lastG.c = c;
@@ -2593,6 +3177,27 @@ function toast(msg, s = 3.6) {
 }
 
 /* ============================== HINTS ============================== */
+// the service ritual narrates itself: one clear instruction per step
+function serviceHint() {
+  const S = sim.svc;
+  if (svcPullHold || (S.state === 'seated' && S.y > 0.05)) return 'ease it up — pull the insert right out of the case';
+  if (S.state === 'seating') return '';
+  if (S.state !== 'out') return null;
+  if (fillHold) return 'soaking in… let go when it reads full';
+  if (S.pad > 0.65 && sim.fuel >= 1) return 'tank’s full — tap the felt pad to fold it shut';
+  if (S.pad > 0.65) return 'hold a finger on the cotton and the can pours';
+  if (S.screwOut) {
+    if (S.stub || S.stubHop > 0) return 'tap the flint tube to tip out the worn flint';
+    if (!S.flintNew) return 'drag the fresh flint over and drop it in the tube';
+    return 'circle a finger on the screw (or tap it) to seat the spring back down';
+  }
+  if (S.screw < 0.98) return 'keep circling — the screw is backing out';
+  if (sim.fuel < 0.98) return 'peel the felt pad back to reach the cotton';
+  if (sim.flintMissing || sim.flint > CFG.FLINT_LIFE * 0.5) {
+    return 'circle a finger on the brass screw (or tap it) to change the flint';
+  }
+  return 'all serviced — tap the case, or ✓ done, to slide it home';
+}
 // works with denied/absent motion sensors too
 function relightHint() {
   return (Motion.hasOrient || Motion.sawMotion)
@@ -2606,6 +3211,7 @@ const HINTS = [
   { id: 'ember', text: () => 'bend the wick low, then swipe the flame away…', done: () => sim.disc.ember },
   { id: 'relight', text: relightHint, done: () => sim.disc.relight },
   { id: 'refuel', text: () => 'tank’s low — close the lid, hold the base to refill', done: () => sim.disc.refuel },
+  { id: 'service', text: () => 'or service it properly: flame out, lid open, pull the insert up and out', done: () => sim.disc.service },
   { id: 'finish', text: () => 'tap the round swatch (top-left) to restyle the case', done: () => sim.disc.finish },
   { id: 'flame', text: () => 'tap the flame drop (top-left) to tint the flame', done: () => sim.disc.flameCol },
 ];
@@ -2617,11 +3223,21 @@ function currentHints() {
     && ((h.id !== 'smother' && h.id !== 'ember') || sim.flame.state === LIT)
     && (h.id !== 'squeeze' || sim.disc.lit)
     && (h.id !== 'refuel' || sim.fuel < CFG.FUEL_LOW)
+    && (h.id !== 'service' || (sim.disc.lit
+      && (sim.fuel < CFG.FUEL_LOW || sim.flintMissing || flintCond() < 0.5)))
     && ((h.id !== 'finish' && h.id !== 'flame') || sim.disc.lit));
 }
 function updateHints() {
   try { localStorage.setItem('lighter.disc', JSON.stringify(sim.disc)); } catch (e) { /* ignore */ }
   if (perfNow < toastUntil) return;   // let an active explainer finish
+  // mid-service, the ritual's own step-by-step instruction owns the pill
+  const svcText = serviceHint();
+  if (svcText !== null) {
+    hintEl.classList.add('wrap');
+    if (svcText) { hintEl.textContent = svcText; hintEl.classList.add('show'); }
+    else hintEl.classList.remove('show');
+    return;
+  }
   hintEl.classList.remove('wrap');
   const hs = currentHints();
   if (sim.fuel <= 0 && sim.flame.state === OUT) {
@@ -2641,7 +3257,13 @@ function updateHints() {
 function tickHints(dt) {
   if (toastUntil && perfNow >= toastUntil) { toastUntil = 0; updateHints(); }
   gaugeTimer += dt;
-  if (gaugeTimer > 0.5) { gaugeTimer = 0; updateGauges(); }
+  if (gaugeTimer > 0.5) {
+    gaugeTimer = 0;
+    updateGauges();
+    // the service instruction tracks live state (filling, pulling, screwing)
+    if (sim.svc.state !== 'seated' || svcPullHold || sim.svc.y > 0.001
+      || hintEl.classList.contains('wrap')) updateHints();
+  }
   hintTimer += dt;
   if (hintTimer > 8) {
     hintTimer = 0;
@@ -2681,6 +3303,8 @@ function simIsIdle() {
     && sim.camShake === 0 && sim.timers.length === 0 && !wick.straightening
     && Math.abs(sim.wheel.omega) < 0.01 && sim.wheel.flash === 0
     && cam.yawVel === 0 && cam.pitchVel === 0 && sim.finishFlash === 0
+    && sim.svc.state === 'seated' && sim.svc.y === 0 && sim.svc.pose < 1e-4
+    && sim.svc.stubHop === 0 && sim.svc.can < 1e-3
     && sparks.every(s => s.life <= 0) && smoke.every(s => s.life <= 0);
 }
 function loop(tms) {
@@ -2743,6 +3367,9 @@ window.LIGHTER = {
   get finish() { return sim.finish; },
   get motionAttached() { return Motion.attached; },
   refill: doRefill,
+  get svcState() { return sim.svc.state; },
+  svcOut: () => Actions.svcOut(),
+  svcSeat: () => Actions.svcSeat(),
   openGuide, closeGuide,
   get guideOpen() { return guideIsOpen(); },
   cycleFinish,
