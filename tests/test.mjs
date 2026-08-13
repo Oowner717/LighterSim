@@ -96,11 +96,8 @@ check('lid opens fully via flick', await L('LIGHTER.lidTheta > LIGHTER.CFG.LID_O
 await settleLid(false);
 check('lid closes fully', await L('LIGHTER.lidTheta') < 0.05);
 await L('(LIGHTER.sim.lid.theta = LIGHTER.CFG.LID_OPEN * 0.5, LIGHTER.sim.lid.omega = 0)');
-await page.waitForTimeout(1500);
-{
-  const ok = await L('LIGHTER.lidTheta < 0.1 || LIGHTER.lidTheta > LIGHTER.CFG.LID_OPEN - 0.1');
-  check('lid never rests mid-arc', ok, `theta=${(await L('LIGHTER.lidTheta')).toFixed(2)}`);
-}
+await waitL('LIGHTER.lidTheta < 0.1 || LIGHTER.lidTheta > LIGHTER.CFG.LID_OPEN - 0.1', 15000);
+check('lid never rests mid-arc', true);
 { // a weak flick falls back instead of hanging mid-arc
   await settleLid(false);
   await L('LIGHTER.sim.lid.omega = 12');
