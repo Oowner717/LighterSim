@@ -465,6 +465,7 @@ const uiScale = () => clamp(vmin() / 420, 0.85, 1.6);
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3(), _v5 = new THREE.Vector3(), _v6 = new THREE.Vector3();
+const _vUp = new THREE.Vector3(0, 1, 0);
 const _s1 = { x: 0, y: 0 }, _s2 = { x: 0, y: 0 };
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion();
 const _qI = new THREE.Quaternion();
@@ -638,8 +639,17 @@ function paintSoak(level) {
 }
 paintSoak(1);
 const matCotton = new THREE.MeshStandardMaterial({ map: soakTex, metalness: 0, roughness: 1 });
-const matCan = new THREE.MeshStandardMaterial({ color: 0x2a3550, metalness: 0.35, roughness: 0.5 });
-const matFlint = new THREE.MeshStandardMaterial({ color: 0x5a4a42, metalness: 0.15, roughness: 0.85 });
+// a fluid tin reads instantly if it's warm and bright against the dark scene
+const matCan = new THREE.MeshStandardMaterial({ color: 0xd8a12a, metalness: 0.45, roughness: 0.42 });
+const matCanBand = new THREE.MeshStandardMaterial({ color: 0xf2e7cf, metalness: 0.2, roughness: 0.6 });
+// low metalness: a near-mirror nozzle just reflects the dark room and vanishes
+const matCanCap = new THREE.MeshStandardMaterial({ color: 0x939aa3, metalness: 0.3, roughness: 0.5 });
+const matFlint = new THREE.MeshStandardMaterial({ color: 0x9b8b7a, metalness: 0.25, roughness: 0.7 });
+const matFlintWorn = new THREE.MeshStandardMaterial({ color: 0x6d5f50, metalness: 0.2, roughness: 0.9 });
+const matBore = new THREE.MeshStandardMaterial({ color: 0x0a0c0e, metalness: 0.5, roughness: 0.8, side: THREE.BackSide });
+const matFluid = new THREE.MeshBasicMaterial({
+  color: 0xbfd6e8, transparent: true, opacity: 0.75, depthWrite: false,
+});
 
 /* ============================== MODEL ============================== */
 const lighter = new THREE.Group();      // world root: recoil hop lives here
@@ -852,53 +862,88 @@ const svcParts = {};
   const packing = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.05, CFG.BODY_D - 0.62), matCotton);
   packing.position.set(-0.62, 0.115, 0);
   insertG.add(packing);
-  // flint tube mouth + the screw-and-spring assembly that plugs it
-  const tubeRing = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.028, 8, 20), matDark);
-  tubeRing.rotation.x = Math.PI / 2;
-  tubeRing.position.set(1.3, 0.105, 0);
-  const tubeDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.02, 14), matDark);
-  tubeDisc.position.set(1.3, 0.1, 0);
-  insertG.add(tubeRing, tubeDisc);
+  // Flint tube: a real bore you can see down, so "the flint lives in there" is
+  // legible at a glance. Local -Y is "outward" once the insert flips over.
+  const BORE_X = 1.3, BORE_Y = 0.1;
+  const bore = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.115, 0.115, 0.62, 16, 1, true), matBore);
+  bore.position.set(BORE_X, BORE_Y + 0.31, 0);
+  const boreFloor = new THREE.Mesh(new THREE.CircleGeometry(0.115, 16), matDark);
+  boreFloor.rotation.x = Math.PI / 2;
+  boreFloor.position.set(BORE_X, BORE_Y + 0.61, 0);
+  const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.135, 0.03, 10, 22), matChromeDark);
+  collarRing.rotation.x = Math.PI / 2;
+  collarRing.position.set(BORE_X, BORE_Y + 0.01, 0);
+  insertG.add(bore, boreFloor, collarRing);
+  // pulsing target ring: lights the bore whenever it's the next thing to touch
+  const boreTarget = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.028, 8, 26),
+    new THREE.MeshBasicMaterial({
+      color: 0x9fd0ff, transparent: true, opacity: 0, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }));
+  boreTarget.rotation.x = Math.PI / 2;
+  boreTarget.position.set(BORE_X, BORE_Y - 0.10, 0);
+  boreTarget.renderOrder = 9;
+  insertG.add(boreTarget);
+  // screw head — the spring below it is drawn separately so it can stretch
   const screwG = new THREE.Group();
-  screwG.position.set(1.3, 0.1, 0);
-  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.155, 0.075, 18), matChromeDark);
-  const slot = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.078, 0.045), matDark);
-  screwG.add(head, slot);
-  for (let i = 1; i <= 5; i++) {
-    const coil = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.016, 6, 14), matSteel);
-    coil.rotation.x = Math.PI / 2;
-    coil.position.y = i * 0.07;
-    screwG.add(coil);
-  }
+  screwG.position.set(BORE_X, BORE_Y, 0);
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.145, 0.08, 18), matChromeDark);
+  const slot = new THREE.Mesh(new THREE.BoxGeometry(0.29, 0.085, 0.05), matDark);
+  slot.position.y = -0.01;
+  const shank = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.16, 12), matSteel);
+  shank.position.y = 0.11;
+  screwG.add(head, slot, shank);
   insertG.add(screwG);
-  // the worn stub, revealed when the spring comes out
-  const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.14, 10), matDark);
-  stub.position.set(1.3, 0.06, 0);
+  // the spring: coils re-spaced every frame to span mouth -> screw head, so
+  // withdrawing it reads as ONE assembly stretching out of the tube
+  const coils = [];
+  for (let i = 0; i < 6; i++) {
+    const coil = new THREE.Mesh(new THREE.TorusGeometry(0.082, 0.017, 6, 16), matSteel);
+    coil.rotation.x = Math.PI / 2;
+    coils.push(coil);
+    insertG.add(coil);
+  }
+  // the worn stub: sits proud in the bore mouth so you can see what's coming out
+  const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.082, 0.26, 12), matFlintWorn);
+  stub.position.set(BORE_X, BORE_Y + 0.06, 0);
   stub.visible = false;
   insertG.add(stub);
-  // fresh flint on a little tray floating beside the insert
-  const tray = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.34, 0.06, 18), matDark);
-  tray.position.set(2.45, 0.1, 0);
-  const flintNew = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.3, 10), matFlint);
-  flintNew.position.set(2.45, 0.22, 0);
-  tray.visible = flintNew.visible = false;
-  insertG.add(tray, flintNew);
+  // the fresh flint waits right beside the bore, lit, with a short drag home
+  const flintNew = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.088, 0.34, 12), matFlint);
+  flintNew.position.set(2.0, -0.42, 0);
+  flintNew.visible = false;
+  insertG.add(flintNew);
   // the case's dark mouth, visible only while the insert is away
   const opening = new THREE.Mesh(
     roundedPlanGeo(CFG.BODY_W - 0.2, CFG.BODY_D - 0.2, CFG.EDGE_R - 0.08, 0.05), matDark);
   opening.position.set(0, CFG.BASE_H - 0.03, 0);
   opening.visible = false;
   caseG.add(opening);
-  // fluid can: slides in when the pad is open
+  // Fluid tin: tall rectangular can with a shouldered neck and nozzle, built
+  // nose-up along local +Y so aiming it is just "point +Y at the cotton".
   const canG = new THREE.Group();
-  const tin = new THREE.Mesh(new RoundedBoxGeometry(0.85, 1.5, 0.5, 3, 0.08), matCan);
-  const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 0.4, 10), matChromeDark);
-  spout.position.set(-0.34, 0.85, 0);
-  spout.rotation.z = 0.5;
-  canG.add(tin, spout);
+  const tin = new THREE.Mesh(new RoundedBoxGeometry(0.66, 1.6, 0.46, 3, 0.09), matCan);
+  const band = new THREE.Mesh(new RoundedBoxGeometry(0.685, 0.54, 0.485, 2, 0.06), matCanBand);
+  band.position.y = -0.12;
+  const shoulder = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.31, 0.24, 14), matCan);
+  shoulder.position.y = 0.9;
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.14, 0.18, 12), matCanCap);
+  neck.position.y = 1.09;
+  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.09, 0.26, 12), matCanCap);
+  nozzle.position.y = 1.29;
+  canG.add(tin, band, shoulder, neck, nozzle);
   canG.visible = false;
   squash.add(canG);
-  Object.assign(svcParts, { padG, packing, screwG, stub, tray, flintNew, opening, canG, spout });
+  const CAN_TIP = 1.42;   // local Y of the nozzle opening
+  // the pour itself: a thin fluid column from nozzle to cotton + a wet splash
+  const stream = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.058, 1, 8), matFluid);
+  stream.visible = false;
+  squash.add(stream);
+  Object.assign(svcParts, {
+    padG, packing, screwG, coils, stub, flintNew, opening,
+    canG, stream, boreTarget, BORE_X, BORE_Y, CAN_TIP,
+  });
 }
 
 { // faint cool sheen suggests a studio floor even with everything out
@@ -953,9 +998,11 @@ const sim = {
     pose: 0, poseV: 0,          // 0 seated .. 1 floating flipped in front
     pad: 0, padT: 0,            // felt pad hinge + its settle target
     screw: 1, screwOut: false,  // 1 snug .. 0 free
+    aside: 0,                   // 0..1 as the freed spring is laid beside the bore
     autoTurn: 0,                // tap-to-auto screw direction
     stub: true, stubHop: 0,     // worn flint in the tube / eject animation
     flintNew: false,            // fresh flint dropped in this service
+    flintDrop: 0,               // 0..1 as the fresh flint slides down the bore
     can: 0, squirt: 0,          // fluid can slide-in + squirting envelope
     overHold: 0, squirtT: 0,    // overfill dwell + squirt audio cadence
     seatK: 0,                   // one-shot clunk latch while seating
@@ -1464,7 +1511,7 @@ const Actions = {
     S.yV = 0;   // S.y keeps its pull height and drains out during the float
     S.screw = 1; S.screwOut = false; S.autoTurn = 0;
     S.stub = !sim.flintMissing;   // an emptied tube stays visibly empty
-    S.stubHop = 0; S.flintNew = false;
+    S.stubHop = 0; S.flintNew = false; S.flintDrop = 0; S.aside = 0;
     S.pad = 0; S.padT = 0; S.can = 0; S.squirt = 0; S.overHold = 0;
     S.seatK = 0;
     sim.disc.service = true;
@@ -1714,10 +1761,11 @@ function spawnSparks(n, speedK) {
     s.max = s.life = 0.16 + Math.random() * 0.26;
   }
 }
-// fluid stream + splash for the refuel squirt
-svcParts.stream = makeSprite(TEX.core, [1.5, 1.6, 1.8]);
-svcParts.splash = makeSprite(TEX.glow, [1.1, 1.2, 1.4]);
-svcParts.stream.material.rotation = 0;
+// service sprites (need TEX/makeSprite, which live below the model)
+// cool blue, matching the target ring: this is a part to fit, not something hot
+svcParts.flintGlow = makeSprite(TEX.core, [0.55, 0.85, 1.35]);
+svcParts.splash = makeSprite(TEX.glow, [0.55, 0.75, 1.0]);
+svcParts.splash.renderOrder = 11;
 const smoke = [];
 for (let i = 0; i < 16; i++) {
   const spr = makeSprite(TEX.smoke, [1, 1, 1]);
@@ -2090,56 +2138,126 @@ function updateFrame(dt, tSec) {
     svcParts.opening.visible = S.y > 0.03 || e > 0.02;
     // felt pad hinge
     svcParts.padG.rotation.z = -S.pad * 2.5;
-    // screw + spring: walks out as it unscrews, dangles above the tube when free
+
+    /* ---- flint assembly: one connected story, mouth -> spring -> screw ---- */
+    const BX = svcParts.BORE_X, BY = svcParts.BORE_Y;
     const sg = svcParts.screwG;
-    if (S.screwOut) {
-      // free: hovers well off the tube mouth, lowering back as it re-screws
-      sg.position.set(1.3, 0.1 - 0.95 + S.screw * 0.88 - 0.05 * Math.sin(tSec * 2.6), 0);
-    } else {
-      sg.position.set(1.3, 0.1 - (1 - S.screw) * 0.5, 0);
-    }
+    // Once free, the assembly is lifted and set aside — exactly what you'd do
+    // with it — which leaves the bore clear so the old flint is plainly visible.
+    const asideT = S.screwOut ? 1 - S.screw : 0;
+    S.aside = clamp01((S.aside || 0) + (asideT - (S.aside || 0)) * (1 - Math.exp(-7 * dt)));
+    // laid down on the LEFT of the bore; the fresh flint waits on the right,
+    // so the two never read as one confusing object
+    const asideX = -S.aside * 0.62;
+    // how far the screw has withdrawn (local -Y is "out" once flipped over)
+    const outDist = S.screwOut
+      ? 0.5 - S.screw * 0.44 + 0.03 * Math.sin(tSec * 2.4)   // free: hovers, breathing
+      : (1 - S.screw) * 0.42;                                 // threading out
+    sg.position.set(BX + asideX, BY - outDist, 0);
     sg.rotation.y = (1 - S.screw) * CFG.SVC_TURNS * Math.PI * 2;
-    // worn stub: revealed when the spring is out, hops away when tapped
-    svcParts.stub.visible = S.state === 'out' && S.screwOut && (S.stub || S.stubHop > 0);
+    sg.rotation.z = -S.aside * 0.5;   // tips over as it's laid down
+    // The spring hangs off the screw and stretches as it's drawn out, so it
+    // clears the bore exactly as the screw comes free — leaving the flint in
+    // plain sight down the tube.
+    const springTop = BY - outDist + 0.16;
+    const springBot = springTop + 0.34 + 0.05 * (outDist / 0.5);
+    svcParts.coils.forEach((c, i) => {
+      const k = (i + 0.5) / svcParts.coils.length;
+      c.position.set(BX + asideX - S.aside * k * 0.22, lerp(springTop, springBot, k), 0);
+      c.rotation.z = 0.16 * Math.sin(k * Math.PI * 2 + tSec * 0.6) * (S.screwOut ? 1 : 0.3)
+        - S.aside * 0.5;
+      c.visible = S.state !== 'seated' || S.pose > 0.02;
+    });
+    // worn stub: sits proud in the bore, then rises out and tumbles away
+    const stubShown = S.state === 'out' && S.screwOut && (S.stub || S.stubHop > 0);
+    svcParts.stub.visible = stubShown;
     if (S.stubHop > 0 && !S.stub) {
-      const k = 1 - S.stubHop;
-      svcParts.stub.position.set(1.3 + k * 0.9, 0.06 - k * 1.1 + Math.sin(k * Math.PI) * -0.45, 0.2 * k);
+      const k = 1 - S.stubHop;                       // 0 -> 1 over the eject
+      const rise = Math.min(1, k * 3);               // lifts clear of the bore first
+      svcParts.stub.position.set(
+        BX + Math.max(0, k - 0.33) * 1.6,
+        BY + 0.02 - rise * 0.3 - Math.max(0, k - 0.33) * 0.5,
+        Math.max(0, k - 0.33) * 0.5);
+      svcParts.stub.rotation.set(k * 5.5, 0, k * 3.4);
     } else {
-      svcParts.stub.position.set(1.3, 0.06, 0);
+      // proud of the mouth once the spring is off it: unmistakably "the old one"
+      svcParts.stub.position.set(BX, BY + 0.02, 0);
+      svcParts.stub.rotation.set(0, 0, 0);
     }
-    // fresh flint + tray appear once the tube is clear
-    const wantTray = S.state === 'out' && S.screwOut && !S.stub && S.stubHop <= 0;
-    svcParts.tray.visible = wantTray && !S.flintNew;
-    svcParts.flintNew.visible = wantTray;
-    if (wantTray && S.flintNew) svcParts.flintNew.position.set(1.3, 0.22, 0);
-    else if (wantTray && !flintDragging) svcParts.flintNew.position.set(2.45, 0.22, 0);
-    // fluid can slides in over the open pad
-    const cg = svcParts.canG;
-    cg.visible = S.can > 0.02;
-    if (cg.visible) {
-      const ck = S.can * S.can * (3 - 2 * S.can);
-      cg.position.set(lerp(3.6, 0.55, ck), lerp(7.0, 6.05, ck), 3.5);
-      cg.rotation.z = -0.2 - 0.7 * S.squirt;
-      // stream: spout tip down to the cotton
-      const tipW = cg.localToWorld(_v3.set(-0.5, 1.05, 0));
-      insertG.updateWorldMatrix(true, false);
-      const packW = insertG.localToWorld(_v4.set(-0.62, 0.06, 0));
-      const st = svcParts.stream, sp = svcParts.splash;
-      st.visible = sp.visible = S.squirt > 0.03;
-      if (st.visible) {
-        st.position.copy(tipW).add(packW).multiplyScalar(0.5);
-        _v5.subVectors(packW, tipW);
-        const len = _v5.length();
-        const vr = _v5.dot(cam.right), vu = _v5.dot(cam.up);
-        st.material.rotation = Math.atan2(-vr, vu);
-        st.scale.set(0.055 + 0.02 * vnoise(tSec * 21), len * 0.6, 1);
-        st.material.opacity = 0.5 * S.squirt;
-        sp.position.copy(packW);
-        sp.scale.set(0.34 + 0.06 * vnoise(tSec * 17), 0.2, 1);
-        sp.material.opacity = 0.4 * S.squirt;
+    // fresh flint: waits lit beside the bore, then slides down into it
+    const tubeClear = S.state === 'out' && S.screwOut && !S.stub && S.stubHop <= 0;
+    const fn = svcParts.flintNew, fg = svcParts.flintGlow;
+    fn.visible = tubeClear;
+    if (tubeClear) {
+      if (S.flintNew) {
+        // seated: drop down the bore, then let the spring cover it
+        S.flintDrop = Math.min(1, (S.flintDrop || 0) + dt * 3.4);
+        const d = S.flintDrop * S.flintDrop;
+        fn.position.set(BX, BY + 0.02 + d * 0.34, 0);
+        fn.rotation.set(0, 0, 0);
+        fn.visible = S.flintDrop < 0.97;
+      } else if (!flintDragging) {
+        S.flintDrop = 0;
+        fn.position.set(2.0, -0.42 - 0.03 * Math.sin(tSec * 2.2), 0);
+        fn.rotation.set(0, 0, Math.PI / 2 * 0.12);
+      }
+      fg.visible = !S.flintNew;
+      if (fg.visible) {
+        fn.getWorldPosition(_v3);
+        fg.position.copy(_v3);
+        fg.scale.setScalar(0.85 + 0.08 * Math.sin(tSec * 3.1));
+        fg.material.opacity = 0.5 + 0.12 * Math.sin(tSec * 3.1);
       }
     } else {
-      svcParts.stream.visible = svcParts.splash.visible = false;
+      fg.visible = false;
+    }
+    // target ring: pulses on the bore whenever the bore is the next step
+    const wantTarget = S.state === 'out' && S.screwOut
+      && (S.stub || (tubeClear && !S.flintNew));
+    const bt = svcParts.boreTarget;
+    bt.visible = wantTarget;
+    if (wantTarget) {
+      const p = 0.5 + 0.5 * Math.sin(tSec * 3.4);
+      bt.material.opacity = 0.45 + 0.45 * p;
+      bt.scale.setScalar(1 + 0.16 * p);
+    }
+
+    /* ---- the pour: tin aimed nozzle-down, with a real fluid column ---- */
+    const cg = svcParts.canG;
+    cg.visible = S.can > 0.02;
+    const st = svcParts.stream, sp = svcParts.splash;
+    if (cg.visible) {
+      const ck = S.can * S.can * (3 - 2 * S.can);
+      insertG.updateWorldMatrix(true, false);
+      // where the fluid should land, in the can's parent space
+      const packW = insertG.localToWorld(_v4.set(-0.62, 0.02, 0));
+      const target = squash.worldToLocal(_v5.copy(packW));
+      // tilt from upright-ish to nearly inverted as it starts pouring
+      const tilt = lerp(0.55, Math.PI * 0.86, S.squirt);
+      cg.rotation.set(0, 0, tilt);
+      // hold the nozzle a little above the target, offset back as it arrives
+      const hover = lerp(2.2, 0.82, ck);
+      const nozzle = _v6.set(0, svcParts.CAN_TIP, 0).applyEuler(cg.rotation);
+      cg.position.set(
+        target.x - nozzle.x + lerp(2.2, 0.15, ck),
+        target.y - nozzle.y + hover,
+        target.z - nozzle.z + 1.15);
+      // fluid column from the nozzle opening down to the cotton
+      const tip = _v3.set(0, svcParts.CAN_TIP, 0).applyEuler(cg.rotation).add(cg.position);
+      st.visible = sp.visible = S.squirt > 0.04;
+      if (st.visible) {
+        _v6.subVectors(target, tip);
+        const len = Math.max(0.05, _v6.length());
+        st.position.copy(tip).addScaledVector(_v6, 0.5);
+        st.quaternion.setFromUnitVectors(_vUp.set(0, 1, 0), _v6.normalize());
+        st.scale.set(1 + 0.13 * vnoise(tSec * 23), len, 1 + 0.13 * vnoise(tSec * 19));
+        st.material.opacity = 0.85 * S.squirt;
+        sp.position.copy(packW);
+        sp.scale.set(0.5 + 0.09 * vnoise(tSec * 17), 0.3, 1);
+        sp.material.opacity = 0.42 * S.squirt;
+      }
+    } else {
+      st.visible = sp.visible = false;
     }
     svcDoneBtn.classList.toggle('show', S.state === 'out');
   }
@@ -2687,16 +2805,19 @@ function onPointerMove(e) {
       break;
     }
     case 'flintNew': {
-      // carry the flint across the underside toward the tube
+      // carry the flint across the underside toward the bore, in its own plane
       camera.getWorldDirection(_v1);
-      anchorWorld('svcTube', _v2);
+      svcParts.flintNew.getWorldPosition(_v2);
       wickPlane.setFromNormalAndCoplanarPoint(_v1, _v2);
       raycaster.setFromCamera(_v6.set((tr.x / window.innerWidth) * 2 - 1,
         -(tr.y / window.innerHeight) * 2 + 1, 0).clone(), camera);
       if (raycaster.ray.intersectPlane(wickPlane, _v4)) {
         const local = insertG.worldToLocal(_v4.clone());
         svcParts.flintNew.position.set(
-          clamp(local.x, 0.6, 2.9), 0.2, clamp(local.z, -1.0, 1.0));
+          clamp(local.x, 0.5, 2.6), clamp(local.y, -0.75, -0.2), clamp(local.z, -1.0, 1.0));
+        // tip it upright as it nears the bore: "this end goes in"
+        const near = 1 - clamp01(Math.hypot(local.x - svcParts.BORE_X, local.z) / 0.9);
+        svcParts.flintNew.rotation.set(0, 0, (1 - near) * Math.PI / 2 * 0.12);
       }
       break;
     }
