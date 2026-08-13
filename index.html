@@ -71,12 +71,11 @@
 <button id="motionBtn" type="button">Enable motion</button>
 <noscript><p style="color:#ccc;padding:2em;text-align:center">This lighter needs JavaScript.</p></noscript>
 <script>
-  // A previous deployment on this origin registered a service worker; we don't
-  // use one, so drop any stale registration that could serve dead cached files.
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations()
-      .then(function (rs) { rs.forEach(function (r) { r.unregister(); }); })
-      .catch(function () {});
+  // Offline support for the home-screen app (network-first worker, never
+  // stale when online). Registered only where a sw.js is actually served.
+  if ('serviceWorker' in navigator &&
+      (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+    navigator.serviceWorker.register('./sw.js').catch(function () {});
   }
   // Boot failure fallback (old browsers without import maps, CDN unreachable).
   window.addEventListener('error', function () {
@@ -553,7 +552,7 @@ const sim = {
     state: OUT,
     bend: new THREE.Vector3(),      // world-space bend offset (spring)
     bendVel: new THREE.Vector3(),
-    turb: 0, flare: 0, ignite: 0, cover: 0, out: 1,
+    turb: 0, flare: 0, ignite: 0, cover: 0, out: 1, maxBend: 0,
   },
   ember: { t: 0 },
   upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
@@ -562,6 +561,8 @@ const sim = {
   disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false },
   counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0 },
 };
+// discovered tricks persist, so returning players skip the beginner hints
+try { Object.assign(sim.disc, JSON.parse(localStorage.getItem('lighter.disc') || '{}')); } catch (e) { /* ignore */ }
 const lidIsOpen = () => sim.lid.theta > CFG.LID_OPEN * 0.75;
 const lidIsClosed = () => sim.lid.theta < 0.12;
 function after(t, fn) { sim.timers.push({ t, fn }); }
@@ -1004,10 +1005,12 @@ function updateCamera(dt, tSec) {
   if (Math.abs(cam.pitchVel) < 1e-3) cam.pitchVel = 0;
   const d = cam.fit * cam.zoom;
   const cp = Math.cos(cam.pitch);
+  // barely-there sway while burning keeps the scene alive (render-only offset)
+  const yawEff = cam.yaw + smoothFlameLevel * 0.014 * Math.sin(tSec * 0.7);
   camera.position.set(
-    cam.target.x + d * Math.sin(cam.yaw) * cp,
+    cam.target.x + d * Math.sin(yawEff) * cp,
     cam.target.y + d * Math.sin(cam.pitch),
-    cam.target.z + d * Math.cos(cam.yaw) * cp);
+    cam.target.z + d * Math.cos(yawEff) * cp);
   if (sim.camShake > 0) {
     const s = sim.camShake * 0.06;
     camera.position.x += vnoise(tSec * 47) * s;
@@ -1090,12 +1093,14 @@ function stepPhysics(h) {
       lid.theta = 0;
       if (lid.omega < 0) {
         if (-lid.omega > 1.5) { Audio.lid(false, -lid.omega / 16); buzz(12); }
+        sim.camShake = Math.max(sim.camShake, Math.min(0.45, -lid.omega / 70));
         lid.omega = -lid.omega < CFG.LID_BOUNCE_MIN ? 0 : -lid.omega * CFG.LID_BOUNCE;
       }
     } else if (lid.theta >= CFG.LID_OPEN) {
       lid.theta = CFG.LID_OPEN;
       if (lid.omega > 0) {
         if (lid.omega > 1.5) { Audio.lid(true, lid.omega / 16); buzz(lid.omega > 22 ? 24 : 12); }
+        sim.camShake = Math.max(sim.camShake, Math.min(0.45, lid.omega / 70));
         lid.omega = lid.omega < CFG.LID_BOUNCE_MIN ? 0 : -lid.omega * CFG.LID_BOUNCE;
       }
       if (!lid.everOpened) { lid.everOpened = true; sim.disc.open = true; updateHints(); }
@@ -1134,6 +1139,7 @@ function stepPhysics(h) {
   // keep the bend perpendicular to "up"
   F.bend.addScaledVector(sim.upDir, -F.bend.dot(sim.upDir));
   if (F.bend.length() > 1.8) F.bend.setLength(1.8);
+  if (F.bend.lengthSq() > F.maxBend * F.maxBend) F.maxBend = F.bend.length();
   F.turb = Math.max(0, F.turb - h / CFG.TURB_TIME);
   F.flare = Math.max(0, F.flare - h / 0.38);
   F.ignite = Math.max(0, F.ignite - h / 0.16);
@@ -1580,6 +1586,23 @@ function onPointerMove(e) {
       break;
     }
   }
+  // brushing a finger through the flame pushes it around
+  if (sim.flame.state === LIT && (tr.gesture === 'case' || tr.gesture === 'orbit')) {
+    toScreen(spineA, _s1);
+    toScreen(spineC, _s2);
+    const abx = _s2.x - _s1.x, aby = _s2.y - _s1.y;
+    const tSeg = clamp01(((tr.x - _s1.x) * abx + (tr.y - _s1.y) * aby)
+      / Math.max(1, abx * abx + aby * aby));
+    const ox = _s1.x + abx * tSeg - tr.x, oy = _s1.y + aby * tSeg - tr.y;
+    if (ox * ox + oy * oy < Math.pow(52 * uiScale(), 2)) {
+      _v4.copy(cam.right).multiplyScalar(dx).addScaledVector(cam.up, -dy);
+      if (_v4.lengthSq() > 0.5) {
+        // time-scaled: the push is the same whatever the pointer event rate
+        sim.flame.bendVel.addScaledVector(_v4.normalize(), Math.min(3, tr.speed / vmin()) * 12 * dt);
+        sim.flame.turb = Math.max(sim.flame.turb, 0.3);
+      }
+    }
+  }
   // scooping upward pulls a hidden ember back up to full flame (fires live,
   // mid-swipe, so it feels immediate; works on the case, chimney or open air)
   if (sim.flame.state === EMBER && !tr.relit
@@ -1840,6 +1863,7 @@ function currentHints() {
     && (h.id !== 'squeeze' || sim.disc.lit));
 }
 function updateHints() {
+  try { localStorage.setItem('lighter.disc', JSON.stringify(sim.disc)); } catch (e) { /* ignore */ }
   const hs = currentHints();
   if (sim.flame.state === EMBER && !sim.disc.relight) {
     hintEl.textContent = relightHint();
