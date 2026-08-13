@@ -161,6 +161,21 @@ const CFG = {
   SHAKE_EMA: 7.5,            // sustained accel level -> snuff
   SHAKE_HOLD: 0.75,          // s the level must hold
 
+  // fuel & flint (both renewed by the refill hold on the closed base)
+  FUEL_BURN_S: 420,          // full tank = ~7 min of cumulative LIT burn
+  FUEL_LOW: 0.2,             // below this: shrink + sputter + crackle
+  FUEL_MIN_H: 0.55,          // flame height factor as the tank empties
+  FUEL_SPUTTER_DIP: 0.5,     // height lost during a sputter dip
+  REFILL_HOLD: 1.5,          // s press-and-hold on the closed base-bottom
+  R_REFILL: 60,              // px refill hold zone (x uiScale)
+  HOLD_SLOP_PX: 18,          // movement that cancels a hold
+  FLINT_LIFE: 60,            // strikes before dud chance begins
+  FLINT_FADE: 40,            // strikes over which dud chance ramps up
+  FLINT_DUD_MAX: 0.65,       // a worn flint still catches sometimes
+  FLINT_DUD_RUN: 2,          // never more consecutive duds than this
+  FINISH_HOLD: 0.6,          // s press-and-hold on the closed case front
+  MOTION_LINGER: 2.5,        // s sensors stay live after the flame dies
+
   // physics
   H: 1 / 120,                // fixed timestep
 };
@@ -176,7 +191,8 @@ function vnoise(t) {
   return (lerp(hashN(i), hashN(i + 1), u)) * 2 - 1;
 }
 const vmin = () => Math.min(window.innerWidth, window.innerHeight);
-const uiScale = () => Math.max(0.85, vmin() / 420);
+// capped: tablet-sized viewports get bigger touch targets, not comically big ones
+const uiScale = () => clamp(vmin() / 420, 0.85, 1.6);
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3(), _v5 = new THREE.Vector3(), _v6 = new THREE.Vector3();
@@ -553,16 +569,99 @@ const sim = {
     bend: new THREE.Vector3(),      // world-space bend offset (spring)
     bendVel: new THREE.Vector3(),
     turb: 0, flare: 0, ignite: 0, cover: 0, out: 1, maxBend: 0,
+    sputter: 0, lastCause: '',
   },
   ember: { t: 0 },
+  fuel: 1, flint: 0, flintDudRun: 0, sputterNext: 0,
+  finish: 'chrome', finishFlash: 0,
   upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
   gWorld: new THREE.Vector3(0, -1, 0),
   timers: [],
-  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false },
-  counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0 },
+  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false },
+  counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0, duds: 0, refills: 0 },
 };
 // discovered tricks persist, so returning players skip the beginner hints
 try { Object.assign(sim.disc, JSON.parse(localStorage.getItem('lighter.disc') || '{}')); } catch (e) { /* ignore */ }
+// fuel level, flint wear, chosen finish and lifetime stats persist too
+function saveStats() {
+  try {
+    localStorage.setItem('lighter.stats', JSON.stringify({
+      v: 1, fuel: sim.fuel, flint: sim.flint, finish: sim.finish, counts: sim.counts,
+    }));
+  } catch (e) { /* ignore */ }
+}
+try {
+  const s = JSON.parse(localStorage.getItem('lighter.stats') || 'null');
+  if (s && s.v === 1) {
+    if (Number.isFinite(+s.fuel)) sim.fuel = clamp01(+s.fuel);
+    if (Number.isFinite(+s.flint)) sim.flint = Math.max(0, s.flint | 0);
+    if (typeof s.finish === 'string') sim.finish = s.finish;
+    Object.assign(sim.counts, s.counts || {});
+  }
+} catch (e) { /* ignore */ }
+
+/* ============================== CASE FINISHES ============================== */
+const FINISHES = {
+  chrome: {
+    chrome: { color: 0xd9dee3, rough: 0.55, map: true, metal: 1.0, env: 1.0 },
+    dark: { color: 0xb8c0c7, rough: 0.36, map: true, metal: 1.0, env: 1.5 },
+    insert: 0x757b82,
+  },
+  matte: {
+    chrome: { color: 0x23262a, rough: 0.86, map: false, metal: 0.85, env: 0.6 },
+    dark: { color: 0x2e3236, rough: 0.7, map: false, metal: 0.9, env: 0.8 },
+    insert: 0x5a5f66,
+  },
+  brass: {
+    chrome: { color: 0xd6a84f, rough: 0.5, map: true, metal: 1.0, env: 1.0 },
+    dark: { color: 0xb8913f, rough: 0.34, map: true, metal: 1.0, env: 1.45 },
+    insert: 0x8a7a55,
+  },
+  gunmetal: {
+    chrome: { color: 0x62686f, rough: 0.44, map: true, metal: 1.0, env: 1.15 },
+    dark: { color: 0x4d5359, rough: 0.3, map: true, metal: 1.0, env: 1.6 },
+    insert: 0x565c63,
+  },
+};
+const FINISH_ORDER = ['chrome', 'matte', 'brass', 'gunmetal'];
+function applyFinish(name) {
+  if (!FINISHES[name]) name = 'chrome';
+  sim.finish = name;
+  const fp = FINISHES[name];
+  for (const [m, p] of [[matChrome, fp.chrome], [matChromeDark, fp.dark]]) {
+    m.color.setHex(p.color);
+    m.roughness = p.rough;
+    m.metalness = p.metal;
+    m.envMapIntensity = p.env;
+    const map = p.map ? brushed : null;
+    // dropping/adding the roughness map changes the shader: recompile only then
+    if (m.roughnessMap !== map) { m.roughnessMap = map; m.needsUpdate = true; }
+  }
+  matInsert.color.setHex(fp.insert);
+}
+function cycleFinish() {
+  const i = FINISH_ORDER.indexOf(sim.finish);
+  applyFinish(FINISH_ORDER[(i + 1) % FINISH_ORDER.length]);
+  sim.finishFlash = 1;
+  sim.disc.finish = true;
+  Audio.polish();
+  buzz([8, 30, 8]);
+  saveStats();
+  updateHints();
+}
+function doRefill() {
+  sim.fuel = 1;
+  sim.flint = 0;            // the same top-up drops in a fresh flint
+  sim.flintDudRun = 0;
+  sim.counts.refills++;
+  sim.disc.refuel = true;
+  sim.squash.v += 0.5;      // the case settles as the cotton soaks
+  Audio.glugFinish();
+  buzz([10, 40, 16]);
+  saveStats();
+  updateHints();
+}
+applyFinish(sim.finish);
 const lidIsOpen = () => sim.lid.theta > CFG.LID_OPEN * 0.75;
 const lidIsClosed = () => sim.lid.theta < 0.12;
 function after(t, fn) { sim.timers.push({ t, fn }); }
@@ -658,6 +757,28 @@ const Audio = {
   },
   puff() { this.burst({ type: 'lowpass', f: 520, dur: 0.24, vol: 0.16, att: 0.02 }); },
   igniteTick() { this.burst({ type: 'lowpass', f: 300, f1: 800, dur: 0.12, vol: 0.14, att: 0.02 }); },
+  crackle(k) {   // low-tank spit: a couple of dry snaps
+    if (!this.ctx) return;
+    const t0 = this.t(), n = 2 + (Math.random() * 2 | 0);
+    for (let i = 0; i < n; i++) {
+      this.burst({
+        f: 1400 + Math.random() * 1800, Q: 3, dur: 0.03,
+        vol: 0.08 + 0.08 * k, t0: t0 + i * (0.03 + Math.random() * 0.05),
+      });
+    }
+  },
+  glug() {       // one swallow of fluid going into the cotton
+    if (!this.ctx) return;
+    const t0 = this.t();
+    this.tone(200, 90, 'sine', 0.12, 0.22, t0);
+    this.burst({ type: 'lowpass', f: 600, dur: 0.07, vol: 0.1, t0 });
+  },
+  glugFinish() { // the cap clicks back on
+    if (!this.ctx) return;
+    const t0 = this.t();
+    [1900, 2600].forEach((f, i) => this.tone(f, 0, 'triangle', 0.05, 0.08, t0 + i * 0.07));
+  },
+  polish() { this.burst({ type: 'bandpass', f: 2200, f1: 3800, Q: 1.2, dur: 0.22, vol: 0.12, att: 0.03 }); },
   burnEnsure() {
     if (this.burn || !this.ctx) return;
     try {
@@ -730,6 +851,7 @@ function releaseWake() {
 function setFlame(next, cause) {
   const prev = sim.flame.state;
   if (prev === next) return;
+  sim.flame.lastCause = cause || '';
   sim.flame.state = next;
   if (next === LIT) {
     sim.flame.ignite = 1;
@@ -746,25 +868,32 @@ function setFlame(next, cause) {
       Audio.igniteTick();
       buzz([8, 25, 14]);
     }
+    if (Motion.allowed) attachMotion();   // sensors only run while there's a flame
     requestWake();
   } else if (next === EMBER) {      // the flame hides inside the chimney
     sim.ember.t = CFG.EMBER_LIFE;
     sim.counts.steals++;
     sim.disc.ember = true;
     buzz(8);
+    if (Motion.allowed) attachMotion();
     requestWake();
   } else {                          // OUT
     if (prev === LIT) {
       if (cause === 'smother') { sim.counts.smothers++; sim.disc.smother = true; spawnSmoke(7, 1); Audio.puff(); buzz(6); }
       else if (cause === 'shake') { sim.counts.snuffs++; spawnSmoke(6, 0.9); Audio.puff(); buzz(6); }
+      else if (cause === 'dry') { spawnSmoke(5, 0.8); Audio.puff(); buzz([6, 60, 6]); }
       else if (cause !== 'lid') { spawnSmoke(4, 0.7); }
     }
     if (prev === EMBER && cause === 'decay') spawnSmoke(3, 0.45);
+    // sensors linger briefly so a quick relight jerk still lands, then sleep
+    after(CFG.MOTION_LINGER, () => { if (sim.flame.state === OUT) detachMotion(); });
     releaseWake();
   }
+  saveStats();
   updateHints();
 }
 function tryIgniteFromSparks() {
+  if (sim.fuel <= 0) { updateHints(); return; }  // dry tank: plenty of sparks, no catch
   if (!lidIsOpen()) return;                      // sparks only catch with the lid open
   if (sim.flame.state === LIT) return;
   after(CFG.IGNITE_DELAY, () => {
@@ -782,6 +911,21 @@ const Actions = {
     if (now - sim.wheel.lastSpark < CFG.SPARK_REFRACTORY) return false;
     sim.wheel.lastSpark = now;
     sim.wheel.omega = clamp(speedVminPerS * 8, 10, 30);
+    sim.flint++;
+    // a worn flint fizzles sometimes: weak shower, no catch — but never a long
+    // streak of duds, so a stubborn thumb always wins in the end
+    const wear = clamp01((sim.flint - CFG.FLINT_LIFE) / Math.max(1, CFG.FLINT_FADE));
+    if (wear > 0 && sim.flintDudRun < CFG.FLINT_DUD_RUN
+      && Math.random() < wear * CFG.FLINT_DUD_MAX) {
+      sim.flintDudRun++;
+      sim.counts.duds++;
+      sim.wheel.flash = 0.5;
+      spawnSparks(2 + (Math.random() * 2 | 0), 0.7);
+      Audio.strike(0.3);
+      buzz(6);
+      return false;
+    }
+    sim.flintDudRun = 0;
     sim.wheel.flash = 1;
     sim.counts.sparks++;
     spawnSparks(9 + (Math.random() * 6 | 0), speedVminPerS);
@@ -1131,8 +1275,27 @@ function stepPhysics(h) {
     sim.ember.t -= h;
     if (sim.ember.t <= 0) setFlame(OUT, 'decay');
   }
+  // ---- fuel: burns down while lit; a low tank sputters, an empty one dies ----
+  if (sim.flame.state === LIT) {
+    sim.fuel = Math.max(0, sim.fuel - h / CFG.FUEL_BURN_S);
+    if (sim.fuel <= 0) {
+      setFlame(OUT, 'dry');
+    } else if (sim.fuel < CFG.FUEL_LOW) {
+      sim.sputterNext -= h;
+      if (sim.sputterNext <= 0) {
+        const k = 1 - sim.fuel / CFG.FUEL_LOW;   // 0 at the low mark -> 1 at empty
+        sim.sputterNext = 0.5 + Math.random() * (2.2 - 1.6 * k);
+        sim.flame.sputter = 1;
+        sim.flame.turb = Math.max(sim.flame.turb, 0.4 * k);
+        Audio.crackle(k);
+        buzz(4);
+      }
+    }
+  }
   // ---- flame bend spring ----
   const F = sim.flame;
+  F.sputter = Math.max(0, F.sputter - h / 0.3);
+  sim.finishFlash = Math.max(0, sim.finishFlash - h / 0.45);
   F.bendVel.addScaledVector(F.bend, -CFG.FLAME_BEND_K * h);
   F.bendVel.multiplyScalar(Math.max(0, 1 - CFG.FLAME_BEND_C * h));
   F.bend.addScaledVector(F.bendVel, h);
@@ -1151,6 +1314,25 @@ function stepPhysics(h) {
     if (F.cover >= 1) { F.cover = 0; chimneyHold = null; setFlame(OUT, 'smother'); }
   } else {
     F.cover = Math.max(0, F.cover - h * 3);
+  }
+  // press-and-hold on the closed case: base-bottom refills, anywhere else swaps finish
+  if (caseHold) {
+    const tr = caseHold;
+    const heldFor = perfNow - tr.holdStart;
+    if (!lidIsClosed() || Math.hypot(tr.x - tr.startX, tr.y - tr.startY) > CFG.HOLD_SLOP_PX * uiScale()) {
+      caseHold = null;
+    } else if (tr.holdZone === 'refill') {
+      if (heldFor > 0.45 && perfNow - (tr.lastGlug || -9) > 0.35) {
+        tr.lastGlug = perfNow;
+        sim.squash.v += 0.3;        // the case "gulps" while it drinks
+        Audio.glug();
+        buzz(4);
+      }
+      if (heldFor >= CFG.REFILL_HOLD) { caseHold = null; doRefill(); }
+    } else if (heldFor >= CFG.FINISH_HOLD) {
+      caseHold = null;
+      cycleFinish();
+    }
   }
   sim.camShake = Math.max(0, sim.camShake - h / 0.3);
   // ---- wick straightening animation (pull taut) ----
@@ -1202,6 +1384,15 @@ function updateFrame(dt, tSec) {
   const F = sim.flame;
   const bent = wickBentness();
   const flick = 0.86 + 0.19 * vnoise(tSec * 9.5) + 0.1 * vnoise(tSec * 23 + 7);
+  // a low tank starves the flame; each sputter dips it further
+  const fuelK = lerp(CFG.FUEL_MIN_H, 1, clamp01(sim.fuel / CFG.FUEL_LOW))
+    * (1 - CFG.FUEL_SPUTTER_DIP * F.sputter);
+
+  // finish tint + the brief extra sparkle right after a swap
+  const finP = FINISHES[sim.finish] || FINISHES.chrome;
+  const shineK = 1 + 1.6 * sim.finishFlash * sim.finishFlash;
+  matChrome.envMapIntensity = finP.chrome.env * shineK;
+  matChromeDark.envMapIntensity = finP.dark.env * shineK;
 
   // flame direction: real-world up + bend spring + a bit of wick tangent when bent
   flameDir.copy(sim.upDir).add(F.bend);
@@ -1220,7 +1411,7 @@ function updateFrame(dt, tSec) {
   if (F.state === LIT) {
     const grow = 1 - F.ignite * F.ignite;
     // stays visible over the windshield even from a bent wick down inside
-    const len = CFG.FLAME_H * (1 - 0.22 * bent) * (0.9 + 0.14 * vnoise(tSec * 3.1))
+    const len = CFG.FLAME_H * fuelK * (1 - 0.22 * bent) * (0.9 + 0.14 * vnoise(tSec * 3.1))
       * (0.25 + 0.75 * grow) * (1 + 1.15 * F.flare) * (1 - 0.35 * F.turb * Math.abs(vnoise(tSec * 31)))
       * (1 - 0.78 * F.cover);
     level = clamp01(len / CFG.FLAME_H);
@@ -1294,7 +1485,7 @@ function updateFrame(dt, tSec) {
 
   // burn loop audio
   if (Audio.ctx) {
-    if (F.state === LIT) Audio.burnSet(0.11 * smoothFlameLevel * (0.75 + 0.3 * vnoise(tSec * 8)), 480 + 140 * vnoise(tSec * 5));
+    if (F.state === LIT) Audio.burnSet(0.11 * smoothFlameLevel * (0.75 + 0.3 * vnoise(tSec * 8)) * (0.7 + 0.3 * fuelK), 480 + 140 * vnoise(tSec * 5) - 120 * (1 - fuelK));
     else if (F.state === EMBER) Audio.burnSet(0.016 * (0.6 + 0.5 * vnoise(tSec * 17)), 300);
     else Audio.burnSet(smoothFlameLevel > 0.01 ? 0.05 * smoothFlameLevel : 0, 420);
   }
@@ -1338,6 +1529,7 @@ const pointers = new Map();  // pointerId -> tracker
 let twoMode = null;          // null | {kind:'squeeze'|'zoom', ...}
 let lastTap = null;
 let chimneyHold = null;      // chimney-gesture tracker dwelling over the mouth
+let caseHold = null;         // press-and-hold tracker on the closed case (refill / finish)
 const squeezeState = { popped: false };
 
 function pxSpeedOf(tr) {  // smoothed speed px/s
@@ -1364,6 +1556,8 @@ function classify(px, py) {
   if (hitsLid.length) return 'lid';
   const lc = anchorScreen(lidIsOpen() ? 'lidCenter' : 'lidTop');
   if (!lidIsOpen() && Math.hypot(px - lc.x, py - lc.y) < CFG.R_LID_PAD * S) return 'lid';
+  const bb = anchorScreen('baseBottom');
+  if (Math.hypot(px - bb.x, py - bb.y) < CFG.R_REFILL * S) return 'case';
   const bc = anchorScreen('baseCenter');
   if (Math.hypot(px - bc.x, py - bc.y) < vmin() * 0.22) return 'case';
   return 'orbit';
@@ -1389,6 +1583,13 @@ function beginGesture(tr) {
     chimneyHold = tr;
   } else if (tr.gesture === 'wheel') {
     tr.wheelSpeed = 0;
+  } else if (tr.gesture === 'case' && lidIsClosed()) {
+    // hold near the base bottom = refill; hold anywhere else on the case = finish
+    const bb = anchorScreen('baseBottom');
+    tr.holdZone = Math.hypot(tr.x - bb.x, tr.y - bb.y) < CFG.R_REFILL * uiScale()
+      ? 'refill' : 'finish';
+    tr.holdStart = perfNow;
+    caseHold = tr;
   }
 }
 // The drag axis is captured ONCE at grab time and kept frozen: the grab point's
@@ -1408,6 +1609,7 @@ function releaseDecay(tr) {
 }
 function endGesture(tr, cancelled) {
   if (chimneyHold === tr) chimneyHold = null;
+  if (caseHold === tr) caseHold = null;
   if (tr.gesture === 'lid') {
     sim.lid.dragging = false;
     sim.lid.omega = cancelled ? 0 : clamp(tr.omegaEst * releaseDecay(tr), -45, 45);
@@ -1438,7 +1640,7 @@ function cancelSingleGestures() {
   for (const tr of pointers.values()) if (tr.gesture && tr.gesture !== 'dead') endGesture(tr, true);
 }
 function trySqueezeStart(a, b) {
-  const R = Math.max(58, vmin() * CFG.SQZ_ZONE_FRAC);
+  const R = Math.max(58, Math.min(vmin(), 672) * CFG.SQZ_ZONE_FRAC);
   const lt = anchorScreen('lidTop');
   const bb = anchorScreen('baseBottom');
   const near = (p, q) => Math.hypot(p.x - q.x, p.y - q.y) < R;
@@ -1744,6 +1946,8 @@ window.addEventListener('keydown', e => {
 const Motion = {
   hasOrient: false, beta: 0, gamma: 0,
   emaAcc: 0, shakeT: 0, lastJerk: -9, lastEvT: 0,
+  attached: false,   // listeners currently registered
+  allowed: false,    // sensors available (and, on iOS, permission granted)
   lpG: new THREE.Vector3(),
   accWorld: new THREE.Vector3(),
 };
@@ -1800,9 +2004,20 @@ function onMotion(e) {
     Motion.shakeT = Math.min(0, Motion.shakeT + dtE);
   }
 }
+// sensors fire ~60 events/s whether or not anyone cares, so they only stay
+// attached while a flame (or ember) needs them — see setFlame
 function attachMotion() {
+  if (Motion.attached) return;
+  Motion.attached = true;
   window.addEventListener('deviceorientation', onOrient);
   window.addEventListener('devicemotion', onMotion);
+}
+function detachMotion() {
+  if (!Motion.attached) return;
+  Motion.attached = false;
+  // hasOrient/sawMotion survive on purpose: the hint copy remembers the device
+  window.removeEventListener('deviceorientation', onOrient);
+  window.removeEventListener('devicemotion', onMotion);
 }
 const needsMotionPermission =
   typeof DeviceMotionEvent !== 'undefined' &&
@@ -1817,11 +2032,14 @@ if (needsMotionPermission) {
         typeof DeviceOrientationEvent.requestPermission === 'function') {
         try { await DeviceOrientationEvent.requestPermission(); } catch (e) { /* one prompt usually covers both */ }
       }
-      if (r === 'granted') attachMotion();
+      if (r === 'granted') {
+        Motion.allowed = true;
+        if (sim.flame.state !== OUT) attachMotion();
+      }
     } catch (e) { /* denied -> pointer fallbacks keep working */ }
   });
 } else if (typeof DeviceMotionEvent !== 'undefined' || typeof DeviceOrientationEvent !== 'undefined') {
-  attachMotion();
+  Motion.allowed = true;
 }
 function updateGravity(dt) {
   if (Motion.hasOrient) {
@@ -1853,6 +2071,8 @@ const HINTS = [
   { id: 'smother', text: () => 'swipe slowly across the flame to snuff it', done: () => sim.disc.smother },
   { id: 'ember', text: () => 'bend the wick low, then swipe the flame away…', done: () => sim.disc.ember },
   { id: 'relight', text: relightHint, done: () => sim.disc.relight },
+  { id: 'refuel', text: () => 'tank’s low — close the lid, hold the base to refill', done: () => sim.disc.refuel },
+  { id: 'finish', text: () => 'hold a finger on the closed case to change its finish', done: () => sim.disc.finish },
 ];
 let hintIdx = 0, hintTimer = 0;
 function currentHints() {
@@ -1860,11 +2080,18 @@ function currentHints() {
   return HINTS.filter(h => !h.done()
     && (h.id !== 'relight' || sim.flame.state === EMBER)
     && ((h.id !== 'smother' && h.id !== 'ember') || sim.flame.state === LIT)
-    && (h.id !== 'squeeze' || sim.disc.lit));
+    && (h.id !== 'squeeze' || sim.disc.lit)
+    && (h.id !== 'refuel' || sim.fuel < CFG.FUEL_LOW)
+    && (h.id !== 'finish' || (sim.disc.lit && sim.disc.pop && lidIsClosed())));
 }
 function updateHints() {
   try { localStorage.setItem('lighter.disc', JSON.stringify(sim.disc)); } catch (e) { /* ignore */ }
   const hs = currentHints();
+  if (sim.fuel <= 0 && sim.flame.state === OUT) {
+    hintEl.textContent = 'out of fuel — close it and hold the base to refill';
+    hintEl.classList.add('show');
+    return;
+  }
   if (sim.flame.state === EMBER && !sim.disc.relight) {
     hintEl.textContent = relightHint();
     hintEl.classList.add('show');
@@ -1880,6 +2107,7 @@ function tickHints(dt) {
     hintTimer = 0;
     hintIdx++;
     updateHints();
+    saveStats();   // periodic checkpoint: fuel/flint survive a surprise exit
   }
 }
 
@@ -1912,7 +2140,7 @@ function simIsIdle() {
     && sim.hop.y === 0 && sim.hop.v === 0 && Math.abs(sim.squash.s) < 1e-4 && sim.squash.target === 0
     && sim.camShake === 0 && sim.timers.length === 0 && !wick.straightening
     && Math.abs(sim.wheel.omega) < 0.01 && sim.wheel.flash === 0
-    && cam.yawVel === 0 && cam.pitchVel === 0
+    && cam.yawVel === 0 && cam.pitchVel === 0 && sim.finishFlash === 0
     && sparks.every(s => s.life <= 0) && smoke.every(s => s.life <= 0);
 }
 function loop(tms) {
@@ -1946,6 +2174,7 @@ document.addEventListener('visibilitychange', () => {
     cancelAnimationFrame(rafId);
     Audio.suspend();
     resetPointers();
+    saveStats();
   } else {
     running = true;
     lastT = 0;
@@ -1967,12 +2196,23 @@ window.LIGHTER = {
   get frames() { return frames; },
   get fps() { return fpsEma; },
   get bloomOn() { return bloomOn; },
+  get fuel() { return sim.fuel; },
+  get flint() { return sim.flint; },
+  get finish() { return sim.finish; },
+  get motionAttached() { return Motion.attached; },
+  refill: doRefill,
+  cycleFinish,
+  setFinish: n => { applyFinish(n); saveStats(); },
+  save: saveStats,
+  uiScale,
   lidOpen: lidIsOpen,
   wickBent: wickIsBent,
   wickTipLocalY,
   bendWick: setWickBend,
   straighten: () => { wick.straightening = true; },
   anchor: name => anchorScreen(name),
+  classifyAt: (x, y) => classify(x, y),
+  get holdZone() { return caseHold ? caseHold.holdZone : null; },
   jerk: () => Actions.jerk(),
   shake: () => Actions.shake(),
   strike: v => Actions.strike(v ?? 3),

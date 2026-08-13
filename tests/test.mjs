@@ -31,6 +31,15 @@ await page.goto(URL);
 await page.waitForFunction(() => window.__booted && window.LIGHTER && window.LIGHTER.frames > 10, null, { timeout: 30000 });
 console.log('booted, frames rendering');
 
+// pin the wear systems out of the way so every legacy check stays deterministic;
+// the fuel/flint sections below unpin (and re-pin) around themselves
+const pinCfg = () => page.evaluate(() => {
+  LIGHTER.CFG.FLINT_LIFE = 1e9;
+  LIGHTER.CFG.FUEL_BURN_S = 1e9;
+});
+await pinCfg();
+check('motion sensors idle at boot', await page.evaluate(() => LIGHTER.motionAttached) === false);
+
 // helpers injected into the page
 await page.evaluate(() => {
   const c = document.getElementById('c');
@@ -324,12 +333,145 @@ await page.waitForTimeout(400);
 }
 await settleLid(false);
 
+/* 9 ── fuel: burns while lit, dies dry, sparks never catch on an empty tank */
+await settleLid(true);
+await L('(LIGHTER.CFG.FUEL_BURN_S = 6, LIGHTER.sim.fuel = 1, 0)');
+await lightIt();
+check('motion sensors attach while LIT', await L('LIGHTER.motionAttached') === true);
+await page.waitForTimeout(600);
+{
+  const f1 = await L('LIGHTER.fuel');
+  check('fuel burns down while LIT', f1 < 0.995, `fuel=${f1}`);
+}
+await L('LIGHTER.sim.fuel = 0.12');           // fast-forward to nearly dry
+await waitL('LIGHTER.state === "OUT"', 20000);
+check('tank runs dry -> OUT (cause "dry")', await L('LIGHTER.sim.flame.lastCause') === 'dry');
+{ // dry tank: the wheel still sparks, but nothing catches
+  const sp0 = await L('LIGHTER.sim.counts.sparks');
+  await page.waitForFunction(s0 => {
+    const LG = window.LIGHTER;
+    if (LG.sim.counts.sparks > s0) return true;
+    LG.strike(3);
+    return false;
+  }, sp0, { timeout: 15000, polling: 500 });
+  await page.waitForTimeout(800);
+  check('dry tank sparks but never catches', await L('LIGHTER.state') === 'OUT');
+}
+await L('LIGHTER.sim.fuel = 0.5');
+await page.waitForTimeout(600);
+check('fuel is stable while OUT', await L('LIGHTER.fuel') === 0.5);
+await L('(LIGHTER.sim.fuel = 0.05, LIGHTER.CFG.FUEL_BURN_S = 1e9, 0)');
+
+/* 10 ── refill: press-and-hold the closed base bottom */
+await settleLid(false);
+await waitL('!LIGHTER.motionAttached', 20000);
+check('motion sensors sleep again after the flame dies', true);
+{
+  const refills0 = await L('LIGHTER.sim.counts.refills');
+  const bb = await L('LIGHTER.anchor("baseBottom")');
+  // hold until the refill actually lands: sim time crawls under SwiftShader
+  // (dt is clamped per frame), so a fixed wall-clock sleep can undershoot
+  await page.evaluate(([p]) => window.__pt('pointerdown', 91, p.x, p.y), [bb]);
+  await waitL('LIGHTER.fuel === 1', 25000);
+  await page.evaluate(([p]) => window.__pt('pointerup', 91, p.x, p.y), [bb]);
+  check('refill hold fills the tank', true);
+  check('refill counted + discovered',
+    await L('LIGHTER.sim.counts.refills') > refills0 && await L('LIGHTER.sim.disc.refuel') === true);
+}
+
+/* 11 ── worn flint: guaranteed dud under pinned odds */
+await settleLid(true);
+await L(`(LIGHTER.CFG.FLINT_LIFE = 0, LIGHTER.CFG.FLINT_FADE = 1,
+  LIGHTER.CFG.FLINT_DUD_MAX = 1, LIGHTER.CFG.FLINT_DUD_RUN = 99, LIGHTER.sim.flint = 5, 0)`);
+{
+  const duds0 = await L('LIGHTER.sim.counts.duds');
+  await page.waitForFunction(d0 => {
+    const LG = window.LIGHTER;
+    if (LG.sim.counts.duds > d0) return true;
+    LG.strike(3);
+    return false;
+  }, duds0, { timeout: 15000, polling: 500 });
+  await page.waitForTimeout(700);
+  check('worn flint duds instead of sparking', true);
+  check('a dud never ignites', await L('LIGHTER.state') === 'OUT');
+}
+await L('(LIGHTER.CFG.FLINT_LIFE = 1e9, LIGHTER.sim.flintDudRun = 0, 0)');
+await L('LIGHTER.refill()');                   // fresh flint + full tank
+
+/* 12 ── a short hold on the base is a no-op */
+await settleLid(false);
+{
+  const before = await L('({f: LIGHTER.fuel, r: LIGHTER.sim.counts.refills, fin: LIGHTER.finish})');
+  const bb = await L('LIGHTER.anchor("baseBottom")');
+  await page.evaluate(async ([p]) => {
+    window.__pt('pointerdown', 92, p.x, p.y);
+    await window.__sleep(400);
+    window.__pt('pointerup', 92, p.x, p.y);
+  }, [bb]);
+  const after = await L('({f: LIGHTER.fuel, r: LIGHTER.sim.counts.refills, fin: LIGHTER.finish})');
+  check('short hold on the base is a no-op',
+    before.f === after.f && before.r === after.r && before.fin === after.fin);
+}
+
+/* 13 ── finishes: API cycle round-trips through all four */
+{
+  const hex0 = await L('LIGHTER.mats.chrome.color.getHexString()');
+  await L('LIGHTER.cycleFinish()');
+  check('cycleFinish changes the case material',
+    await L('LIGHTER.mats.chrome.color.getHexString()') !== hex0 && await L('LIGHTER.finish') === 'matte');
+  await L('LIGHTER.cycleFinish()');
+  await L('LIGHTER.cycleFinish()');
+  await L('LIGHTER.cycleFinish()');
+  check('four cycles round-trip to chrome',
+    await L('LIGHTER.finish') === 'chrome' && await L('LIGHTER.mats.chrome.color.getHexString()') === hex0);
+}
+
+/* 14 ── press-and-hold the closed case swaps finish; the refill zone never does */
+{
+  const bc = await L('LIGHTER.anchor("baseCenter")');
+  const bb = await L('LIGHTER.anchor("baseBottom")');
+  // make sure the hold point sits clearly outside the refill zone
+  const S = await L('LIGHTER.uiScale()');
+  const d = Math.hypot(bc.x - bb.x, bc.y - bb.y);
+  const need = 60 * S + 12;
+  const pt = d >= need ? bc : { x: bb.x, y: bb.y - need };
+  const fin0 = await L('LIGHTER.finish');
+  await page.evaluate(([p]) => window.__pt('pointerdown', 93, p.x, p.y), [pt]);
+  await waitL(`LIGHTER.finish !== ${JSON.stringify(fin0)}`, 20000);
+  await page.evaluate(([p]) => window.__pt('pointerup', 93, p.x, p.y), [pt]);
+  check('press-and-hold the closed case swaps finish', true);
+  const fin1 = await L('LIGHTER.finish');
+  const refills1 = await L('LIGHTER.sim.counts.refills');
+  await page.evaluate(async ([p]) => {
+    window.__pt('pointerdown', 94, p.x, p.y);
+    await window.__sleep(1100);
+    window.__pt('pointerup', 94, p.x, p.y);
+  }, [bb]);
+  check('refill-zone hold does not swap finish',
+    await L('LIGHTER.finish') === fin1 && await L('LIGHTER.sim.counts.refills') === refills1);
+}
+
+/* 15 ── uiScale is capped on tablet-sized viewports */
+await page.setViewportSize({ width: 1024, height: 1366 });
+await page.waitForTimeout(300);
+check('uiScale is capped on tablets', Math.abs(await L('LIGHTER.uiScale()') - 1.6) < 1e-6,
+  `uiScale=${await L('LIGHTER.uiScale()')}`);
+await page.setViewportSize({ width: 390, height: 844 });
+await page.waitForTimeout(300);
+
 /* discovered tricks persist across sessions */
+await L('LIGHTER.sim.fuel = 0.42');
+await L('LIGHTER.setFinish("brass")');
 await page.evaluate(() => localStorage.setItem('lighter.disc', JSON.stringify({ lit: true, pop: true })));
 await page.reload();
 await page.waitForFunction(() => window.__booted && window.LIGHTER && window.LIGHTER.frames > 5, null, { timeout: 30000 });
+await pinCfg();
 check('discovered tricks persist across reload',
   await L('LIGHTER.sim.disc.lit === true && LIGHTER.sim.disc.pop === true'));
+check('fuel level persists across reload', Math.abs(await L('LIGHTER.fuel') - 0.42) < 0.02,
+  `fuel=${await L('LIGHTER.fuel')}`);
+check('finish persists across reload',
+  await L('LIGHTER.finish') === 'brass' && await L('LIGHTER.mats.chrome.color.getHexString()') === 'd6a84f');
 
 /* 8 ── no console errors */
 check('no console errors', consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 6)));
