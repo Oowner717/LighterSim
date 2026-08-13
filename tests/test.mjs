@@ -335,13 +335,43 @@ await L('LIGHTER.straighten()');
   check('fast wheel swipe sparks and ignites', await L('LIGHTER.sim.counts.sparks') > sparks0);
   await page.screenshot({ path: 'shot-lit.png' });
 }
-{ // wick drag bends plastically
-  const y0 = await L('LIGHTER.wickTipLocalY()');
+{ // the wick only bends cold, and only along its guided arc
+  // still LIT from the wheel swipe above: a live flame locks the wick
+  const yLit = await L('LIGHTER.wickTipLocalY()');
   const tip = await L('LIGHTER.anchor("tip")');
-  await page.evaluate(([p]) => window.__swipe(p.x, p.y, p.x - 70, p.y + 90, 450, 71), [tip]);
+  await page.evaluate(([p]) => window.__swipe(p.x, p.y, p.x - 40, p.y + 140, 450, 70), [tip]);
+  await page.waitForTimeout(250);
+  check('a burning wick refuses to bend',
+    Math.abs(await L('LIGHTER.wickTipLocalY()') - yLit) < 0.02);
+  // the drag may land as a smother instead; relight so the poke below is locked
+  await lightIt();
+  // a poke at the locked wick explains itself instead of doing nothing
+  await page.evaluate(async ([p]) => {
+    window.__pt('pointerdown', 69, p.x, p.y);
+    await window.__sleep(60);
+    window.__pt('pointerup', 69, p.x, p.y);
+  }, [tip]);
+  await page.waitForTimeout(200);
+  check('the locked wick says why',
+    await L('/wick only bends cold|ember die/.test(document.getElementById("hint").textContent)'));
+
+  // put it out, and the same drag now works
+  await settleLid(false);
+  await waitL('LIGHTER.state === "OUT"');
+  await settleLid(true);
+  const y0 = await L('LIGHTER.wickTipLocalY()');
+  const tip2 = await L('LIGHTER.anchor("tip")');
+  await page.evaluate(([p]) => window.__swipe(p.x, p.y, p.x - 40, p.y + 140, 450, 71), [tip2]);
   await page.waitForTimeout(200);
   const y1 = await L('LIGHTER.wickTipLocalY()');
-  check('dragging the wick tip bends it down', y1 < y0 - 0.2, `y ${y0.toFixed(2)} -> ${y1.toFixed(2)}`);
+  check('a cold wick bends when dragged down', y1 < y0 - 0.2, `y ${y0.toFixed(2)} -> ${y1.toFixed(2)}`);
+  // guided, not free-form: re-posing from the arc parameter alone reproduces
+  // the exact pose the drag left, so the drag never left the rail
+  const k = await L('LIGHTER.wickK');
+  await L(`(LIGHTER.bendWick(${k}), 0)`);
+  const yArc = await L('LIGHTER.wickTipLocalY()');
+  check('the bend stayed on its guided arc', Math.abs(yArc - y1) < 0.01,
+    `k=${k.toFixed(3)} y ${y1.toFixed(3)} vs ${yArc.toFixed(3)}`);
   await page.waitForTimeout(600);
   const y2 = await L('LIGHTER.wickTipLocalY()');
   check('bend is plastic (no spring-back)', Math.abs(y2 - y1) < 0.06, `y1=${y1.toFixed(2)} y2=${y2.toFixed(2)}`);

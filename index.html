@@ -316,9 +316,12 @@
           chimney. The tip slowly chars with use.</p>
         <p>Maintenance: tug the wick up with pliers to expose fresh braid, snip it level
           with the chimney, and it&rsquo;s good for years.</p>
-        <p class="how">Here: drag the wick tip to bend it &mdash; bend it low and swipe the
-          flame away to hide it as an ember (tap the lighter, scoop upward, or snap the
-          phone to call it back). Drag the tip up past the rim to pull it straight.</p>
+        <p class="how">Here: with the flame <em>out</em>, drag the wick tip down to fold it
+          over. The wire core only lets it fold one way, so the tip follows that arc however
+          you drag &mdash; drag back up to pull it straight again. It won&rsquo;t budge while
+          anything is still burning.</p>
+        <p class="how">Bend it low and swipe the flame away to hide it as an ember (tap the
+          lighter, scoop upward, or snap the phone to call it back).</p>
       </section>
       <section>
         <h3>The case</h3>
@@ -403,7 +406,6 @@ const CFG = {
 
   // wick
   WICK_SEGS: 4, WICK_SEG_LEN: 0.345, WICK_R: 0.12,
-  WICK_JOINT_MAX: [0.32, 0.95, 1.0, 0.9],   // per-joint plastic bend limit (rad)
 
   // flame
   FLAME_H: 2.0,
@@ -616,34 +618,69 @@ const matWickTip = new THREE.MeshStandardMaterial({
   emissive: 0xff6a1a, emissiveIntensity: 0,   // glows while burning, smolders out
 });
 const matFelt = new THREE.MeshStandardMaterial({ color: 0xcfc6b2, metalness: 0, roughness: 1 });
-// packing cotton: canvas texture repainted as fluid soaks in
+// Packing cotton: canvas texture repainted as fluid soaks in.
+// Painted at 4x the old resolution and STRAND-first — the old version drew a
+// few soft blobs and then flooded them with an 85%-opaque brown wash, so a full
+// tank left a near-flat dark rectangle that read as a machined metal plate.
+// Now the wash is a light tan glaze and a second pass of strands is laid back
+// over the top, so the wadding stays fibrous wet or dry.
 const soakCv = document.createElement('canvas');
-soakCv.width = 128; soakCv.height = 64;
+soakCv.width = 512; soakCv.height = 256;
 const soakTex = new THREE.CanvasTexture(soakCv);
 soakTex.colorSpace = THREE.SRGBColorSpace;
+// one pass of teased-out fibres: short pale strands at shallow angles
+function paintFibres(g, n, seed, alpha) {
+  g.lineCap = 'round';
+  for (let i = 0; i < n; i++) {
+    const h1 = hashN(i * 3.1 + seed), h2 = hashN(i * 7.7 + seed), h3 = hashN(i * 1.7 + seed);
+    const h4 = hashN(i * 5.3 + seed), h5 = hashN(i * 11.9 + seed);
+    const x = h1 * 512, y = h2 * 256;
+    const ang = (h3 - 0.5) * 1.5 + (h4 < 0.5 ? 0 : Math.PI);   // mostly cross-wise
+    const len = 14 + h5 * 46;
+    // half the strands catch the light, half sit in shadow between the tufts
+    const lit = h4 < 0.5;
+    g.strokeStyle = lit
+      ? `rgba(255,252,244,${(0.30 + h5 * 0.42) * alpha})`
+      : `rgba(150,138,116,${(0.16 + h5 * 0.26) * alpha})`;
+    g.lineWidth = 1 + h3 * 2.6;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.quadraticCurveTo(x + Math.cos(ang) * len * 0.5 + (h2 - 0.5) * 12,
+      y + Math.sin(ang) * len * 0.5 + (h1 - 0.5) * 10,
+      x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+    g.stroke();
+  }
+}
 function paintSoak(level) {
   const g = soakCv.getContext('2d');
-  g.fillStyle = '#e8e0cd';
-  g.fillRect(0, 0, 128, 64);
-  for (let i = 0; i < 60; i++) {   // wadding texture
-    g.fillStyle = `rgba(190,180,158,${0.12 + hashN(i) * 0.12})`;
+  g.fillStyle = '#f4efe3';                 // bright raw cotton
+  g.fillRect(0, 0, 512, 256);
+  for (let i = 0; i < 90; i++) {           // soft tufts underneath the strands
+    g.fillStyle = `rgba(214,206,188,${0.10 + hashN(i * 2.3) * 0.14})`;
     g.beginPath();
-    g.arc(hashN(i * 3.1) * 128, hashN(i * 7.7) * 64, 3 + hashN(i * 1.7) * 6, 0, Math.PI * 2);
+    g.arc(hashN(i * 3.1) * 512, hashN(i * 7.7) * 256, 12 + hashN(i * 1.7) * 30, 0, Math.PI * 2);
     g.fill();
   }
-  if (level > 0.01) {              // the wet blot spreads with the fill level
-    const r = Math.sqrt(clamp01(level)) * 95;
-    const gr = g.createRadialGradient(70, 34, 0, 70, 34, r);
-    gr.addColorStop(0, 'rgba(96,82,58,0.85)');
-    gr.addColorStop(0.75, 'rgba(112,96,68,0.55)');
-    gr.addColorStop(1, 'rgba(120,104,74,0)');
+  paintFibres(g, 340, 0, 1);
+  if (level > 0.01) {                      // the damp patch spreads with the fill
+    const k = clamp01(level);
+    const r = Math.sqrt(k) * 340;
+    const gr = g.createRadialGradient(280, 132, 0, 280, 132, r);
+    gr.addColorStop(0, `rgba(150,124,80,${0.44 * k})`);
+    gr.addColorStop(0.7, `rgba(163,138,96,${0.26 * k})`);
+    gr.addColorStop(1, 'rgba(170,146,104,0)');
     g.fillStyle = gr;
-    g.fillRect(0, 0, 128, 64);
+    g.fillRect(0, 0, 512, 256);
+    paintFibres(g, 150, 41, 0.75);         // fibres still show through the damp
   }
   soakTex.needsUpdate = true;
 }
 paintSoak(1);
-const matCotton = new THREE.MeshStandardMaterial({ map: soakTex, metalness: 0, roughness: 1 });
+// bumpMap off the same canvas: the strands catch real shading, so the wad reads
+// as fibre rather than a printed picture of fibre
+const matCotton = new THREE.MeshStandardMaterial({
+  map: soakTex, bumpMap: soakTex, bumpScale: 0.9, metalness: 0, roughness: 1,
+});
 // a fluid tin reads instantly if it's warm and bright against the dark scene
 const matCan = new THREE.MeshStandardMaterial({ color: 0xd8a12a, metalness: 0.45, roughness: 0.42 });
 const matCanBand = new THREE.MeshStandardMaterial({ color: 0xf2e7cf, metalness: 0.2, roughness: 0.6 });
@@ -661,6 +698,17 @@ const matFluid = new THREE.MeshBasicMaterial({
   color: 0xbfd6e8, transparent: true, opacity: 0.75, depthWrite: false,
 });
 
+// Service work light: dark by default, driven only by the service pose.
+// Confined to layer SVC_LAYER, which only the soft props (cotton, felt, flint,
+// tin) join. Lighting the mirror-finish shell instead throws a specular far
+// over the bloom threshold and washes the entire frame white.
+const SVC_LAYER = 2;
+const svcLight = new THREE.PointLight(0xfff4e2, 0, 16, 2);
+svcLight.layers.set(SVC_LAYER);
+scene.add(svcLight);
+function litByWorkLight(...objs) {
+  for (const o of objs) o.traverse(n => n.layers.enable(SVC_LAYER));
+}
 /* ============================== MODEL ============================== */
 const lighter = new THREE.Group();      // world root: recoil hop lives here
 const squash = new THREE.Group();       // squeeze scale, pivot at the base bottom
@@ -690,6 +738,30 @@ function roundedPlanGeo(w, d, r, h) {
   const g = new THREE.ExtrudeGeometry(roundedOutline(new THREE.Shape(), w, d, r),
     { depth: h, bevelEnabled: false, curveSegments: 12 });
   g.rotateX(-Math.PI / 2);
+  return g;
+}
+// A box whose OUTWARD face (local -Y, the side you see once the insert flips)
+// is pushed into overlapping domes: cotton wadding, not a milled plate. Two
+// octaves of hash noise plus a dome falloff so the tufts sag toward the rim.
+function cottonWadGeo(w, h, d) {
+  const g = new THREE.BoxGeometry(w, h, d, 26, 1, 12);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    if (y > -h / 2 + 1e-4) continue;                    // only the exposed face
+    const u = x / w + 0.5, v = z / d + 0.5;
+    const lump = hashN(Math.floor(u * 7) * 3.7 + Math.floor(v * 4) * 11.3) - 0.5;
+    const fine = hashN(Math.floor(u * 19) * 5.1 + Math.floor(v * 11) * 2.9) - 0.5;
+    // domed so the middle stands proud and the edges tuck under the rim
+    const dome = Math.cos(Math.min(1, Math.hypot(u - 0.5, v - 0.5) * 1.9) * Math.PI * 0.5);
+    // amplitude caps at 0.0975: the wad has to stay clear of the felt pad when
+    // the pad folds shut, or tufts poke straight through the felt
+    p.setY(i, y - (0.06 + lump * 0.055 + fine * 0.02) * dome);
+    p.setX(i, x + lump * 0.03);
+    p.setZ(i, z + fine * 0.03);
+  }
+  g.computeVertexNormals();
+  g.userData.cotton = true;   // lets probes find the wad without a global handle
   return g;
 }
 // the same profile as a wall ring: an open-topped shell you can see down into
@@ -855,7 +927,10 @@ const wheelSpin = new THREE.Mesh(
 }
 
 // --- bendable wick: 4-segment plastic chain (wire core -> holds its shape) ---
-const wick = { joints: [], tipObj: null, base: null, straightening: false };
+// k is the single parameter the whole bend rides on: every pose the wick can
+// hold is setWickBend(k) for some k in 0..1, so "how bent is it" is one number
+// and dragging is a slide along that one arc rather than free-form posing.
+const wick = { joints: [], tipObj: null, base: null, straightening: false, k: 0 };
 {
   const L = CFG.WICK_SEG_LEN;
   wick.base = new THREE.Group();
@@ -892,37 +967,36 @@ function wickTangent(out) {
   const j = wick.joints[wick.joints.length - 1].getWorldPosition(_v6);
   return out.sub(j).normalize();
 }
-function clampQuat(q, maxAngle) {
-  const ang = 2 * Math.acos(clamp(q.w, -1, 1));
-  if (ang > maxAngle) q.slerp(_qI.identity(), 1 - maxAngle / ang);
-  q.normalize();
-}
-function solveWickIK(targetWorld) {
-  for (let iter = 0; iter < 3; iter++) {
-    for (let j = wick.joints.length - 1; j >= 0; j--) {
-      const joint = wick.joints[j];
-      wick.base.updateWorldMatrix(true, true);
-      const jp = _v1.setFromMatrixPosition(joint.matrixWorld);
-      const tip = wickTipWorld(_v2);
-      const a = _v3.subVectors(tip, jp);
-      const b = _v4.subVectors(targetWorld, jp);
-      if (a.lengthSq() < 1e-6 || b.lengthSq() < 1e-6) continue;
-      const q = _q1.setFromUnitVectors(a.normalize(), b.normalize());
-      _q3.identity().slerp(q, 0.55);                        // damped step
-      const pq = joint.parent.getWorldQuaternion(_q2);
-      const lq = _q1.copy(pq).invert().multiply(_q3).multiply(pq);
-      joint.quaternion.premultiply(lq);
-      clampQuat(joint.quaternion, CFG.WICK_JOINT_MAX[j]);
-    }
-  }
-  wick.base.updateWorldMatrix(true, true);
-}
+const WICK_BEND_ANGLES = [0.25, 0.75, 0.85, 0.6];
 function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the debug/test path)
-  const angles = [0.25, 0.75, 0.85, 0.6];
   const axis = _v1.set(0, 0, 1);
+  wick.k = clamp01(k);
   // bend away from the hinge so the riding flame sits over the chimney middle
-  wick.joints.forEach((j, i) => j.quaternion.setFromAxisAngle(axis, -angles[i] * clamp01(k)));
+  wick.joints.forEach((j, i) => j.quaternion.setFromAxisAngle(axis, -WICK_BEND_ANGLES[i] * wick.k));
   wick.base.updateWorldMatrix(true, true);
+}
+// where the tip lands on screen for a given k — the rail the finger slides along
+function wickTipScreenAt(k, out) {
+  setWickBend(k);
+  wickTipWorld(_v2);
+  return toScreen(_v2, out);
+}
+// rebuilt every move so the rail keeps tracking a drifting camera
+function sampleWickArc(A) {
+  const kSave = wick.k;
+  for (let i = 0; i < A.length; i++) wickTipScreenAt(i / (A.length - 1), A[i]);
+  setWickBend(kSave);
+  return A;
+}
+// How far along the arc the finger has pushed, measured as travel projected on
+// the arc's overall screen direction. Deliberately NOT nearest-point-on-curve:
+// the tip leaves the wick sideways before it dips, so a nearest-point match
+// ignores the plain downward drag everyone actually makes. Projection answers
+// "did you push the way the wick folds", which is the question worth asking.
+function wickArcProgress(A, dx, dy) {
+  const cx = A[A.length - 1].x - A[0].x, cy = A[A.length - 1].y - A[0].y;
+  const c2 = cx * cx + cy * cy;
+  return c2 > 4 ? (dx * cx + dy * cy) / c2 : null;   // null = arc is edge-on
 }
 
 /* ---- service ritual hardware: only meaningful once the insert comes out ---- */
@@ -948,9 +1022,14 @@ const svcParts = {};
     roundedWallGeo(2.34, CFG.BODY_D - 0.38, 0.12, 0.09, 0.16), matChromeDark);
   wellRim.position.set(-0.62, 0.06, 0);
   underG.add(wellRim);
-  // packing cotton: sits down in the well, so peeling the pad reveals it
-  const packing = new THREE.Mesh(new THREE.BoxGeometry(2.16, 0.075, CFG.BODY_D - 0.54), matCotton);
-  packing.position.set(-0.62, 0.185, 0);
+  // Packing cotton: sits down in the well, so peeling the pad reveals it.
+  // A flat slab reads as sheet metal no matter how it's textured, so the
+  // exposed face is displaced into soft tufts — wadding stuffed into a well,
+  // standing a little proud of the rim the way overfilled packing actually does.
+  // 0.19 thick + up to 0.0975 of tufting; position.y is re-derived per frame so
+  // the wad relaxes as the pad peels back and packs down when it folds shut
+  const packing = new THREE.Mesh(cottonWadGeo(2.16, 0.19, CFG.BODY_D - 0.54), matCotton);
+  packing.position.set(-0.62, 0.245, 0);
   underG.add(packing);
   // Felt pad: hinged along its LONG edge, so it flips back across the narrow
   // side of the insert and lies over the body instead of swinging out like a
@@ -1037,6 +1116,9 @@ const svcParts = {};
   const stream = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.058, 1, 8), matFluid);
   stream.visible = false;
   squash.add(stream);
+  // the soft, matte props are what the work light is for; everything chrome
+  // stays lit by the environment alone so no specular blows out
+  litByWorkLight(packing, padG, stub, flintNew, canG);
   Object.assign(svcParts, {
     underG, padG, packing, screwG, coils, stub, flintNew, opening,
     canG, stream, boreTarget, BORE_X, BORE_Y, CAN_TIP, caseSolid, caseShellG,
@@ -1710,7 +1792,7 @@ function smokeTex() {   // a few overlapping lobes: wispy, not a perfect disc
 }
 // Flame colour schemes: 'classic' reproduces the original burn exactly; the
 // others recolour the whole pipeline (teardrop ramp, halo, root, glow, layer
-// tints, point light, floor pool). Sparks and the charred wick stay orange —
+// tints, point light). Sparks and the charred wick stay orange —
 // hot steel and glowing char don't care what the flame burns like.
 const FLAME_COLS = {
   classic: {
@@ -1725,7 +1807,7 @@ const FLAME_COLS = {
     glow: [[0, 'rgba(255,175,80,0.6)'], [0.5, 'rgba(255,130,40,0.25)'], [1, 'rgba(255,110,30,0)']],
     layers: [[1.5, 0.8, 0.38], [1.9, 1.5, 1.2], [2.5, 2.1, 1.6], [0.75, 1.15, 2.6], [2.8, 1.7, 0.7]],
     pilot: [2.4, 1.4, 0.55], pilotGlow: [1.9, 0.85, 0.3],
-    light: 0xff9a3c, floor: [1.1, 0.5, 0.18],
+    light: 0xff9a3c,
   },
   blue: {
     swatch: '#5f9dff',
@@ -1738,7 +1820,7 @@ const FLAME_COLS = {
     glow: [[0, 'rgba(110,180,255,0.6)'], [0.5, 'rgba(60,130,255,0.25)'], [1, 'rgba(40,110,255,0)']],
     layers: [[0.5, 0.95, 1.6], [1.2, 1.6, 2.1], [1.6, 2.0, 2.6], [1.1, 0.95, 2.6], [0.8, 1.6, 2.8]],
     pilot: [0.8, 1.5, 2.4], pilotGlow: [0.5, 1.0, 1.9],
-    light: 0x5f9dff, floor: [0.32, 0.55, 1.3],
+    light: 0x5f9dff,
   },
   emerald: {
     swatch: '#57e084',
@@ -1751,7 +1833,7 @@ const FLAME_COLS = {
     glow: [[0, 'rgba(130,255,170,0.6)'], [0.5, 'rgba(70,220,120,0.25)'], [1, 'rgba(50,200,110,0)']],
     layers: [[0.75, 1.5, 0.8], [1.4, 2.0, 1.5], [1.7, 2.5, 1.8], [0.8, 2.5, 1.5], [1.0, 2.8, 1.2]],
     pilot: [1.0, 2.3, 1.2], pilotGlow: [0.7, 1.8, 0.85],
-    light: 0x57e084, floor: [0.35, 1.05, 0.45],
+    light: 0x57e084,
   },
   violet: {
     swatch: '#b46aff',
@@ -1764,7 +1846,7 @@ const FLAME_COLS = {
     glow: [[0, 'rgba(210,140,255,0.6)'], [0.5, 'rgba(170,80,255,0.25)'], [1, 'rgba(150,60,255,0)']],
     layers: [[1.3, 0.75, 1.6], [1.8, 1.4, 2.1], [2.2, 1.7, 2.6], [2.5, 1.1, 1.9], [2.2, 1.0, 2.8]],
     pilot: [2.0, 1.1, 2.4], pilotGlow: [1.5, 0.8, 1.9],
-    light: 0xb46aff, floor: [0.85, 0.4, 1.25],
+    light: 0xb46aff,
   },
 };
 const FLAME_ORDER = ['classic', 'blue', 'emerald', 'violet'];
@@ -1817,15 +1899,11 @@ const pilotSpr = makeSprite(TEX.core, [2.4, 1.4, 0.55]);
 const pilotGlow = makeSprite(TEX.glow, [1.9, 0.85, 0.3]);   // inside the chimney: leaks via the holes
 const flameLight = new THREE.PointLight(0xff9a3c, 0, 11, 2);
 scene.add(flameLight);
-// warm pool of light on the ground while burning (fake GI for one quad)
-const floorGlow = new THREE.Mesh(new THREE.PlaneGeometry(7, 7), new THREE.MeshBasicMaterial({
-  map: TEX.glow, transparent: true, depthWrite: false,
-  blending: THREE.AdditiveBlending, opacity: 0,
-}));
-floorGlow.material.color.setRGB(1.1, 0.5, 0.18);
-floorGlow.rotation.x = -Math.PI / 2;
-floorGlow.position.y = -0.68;
-scene.add(floorGlow);
+// No warm floor pool: faking bounce light with one horizontal quad only works
+// from a narrow band of camera angles. Orbit low and it shears into a bright
+// ellipse behind a lighter that is visibly floating above it; orbit high and it
+// flares across the whole frame. The flame's point light already spills onto
+// the case, which is the part that actually sells the burn.
 
 function applyFlameCol(name) {
   if (!FLAME_COLS[name]) name = 'classic';
@@ -1841,8 +1919,6 @@ function applyFlameCol(name) {
   pilotGlow.material.map = tx.glow;
   pilotGlow.material.color.setRGB(fc.pilotGlow[0], fc.pilotGlow[1], fc.pilotGlow[2]);
   flameLight.color.setHex(fc.light);
-  floorGlow.material.map = tx.glow;
-  floorGlow.material.color.setRGB(fc.floor[0], fc.floor[1], fc.floor[2]);
   const sw = document.getElementById('flameSwatch');
   if (sw) {
     sw.style.backgroundColor = fc.swatch;
@@ -1980,7 +2056,7 @@ function anchorWorld(name, out) {
     case 'baseCenter': return caseG.localToWorld(out.set(0, CFG.BASE_H / 2, 0));
     case 'svcScrew': return svcParts.underG.localToWorld(out.copy(svcParts.screwG.position));
     case 'svcTube': return svcParts.underG.localToWorld(out.set(1.3, 0.1, 0));
-    case 'svcPacking': return svcParts.underG.localToWorld(out.set(-0.62, 0.13, 0));
+    case 'svcPacking': return svcParts.underG.localToWorld(out.set(-0.62, -0.06, 0));
     case 'svcPadEdge': {
       svcParts.padG.updateWorldMatrix(true, false);
       return svcParts.padG.localToWorld(out.set(0, -0.04, -0.94));
@@ -2225,9 +2301,11 @@ function stepPhysics(h) {
       j.quaternion.slerp(_qI.identity(), 1 - Math.exp(-14 * h));
       if (2 * Math.acos(clamp(j.quaternion.w, -1, 1)) > 0.02) done = false;
     }
+    wick.k *= Math.exp(-14 * h);   // the arc parameter unwinds with the joints
     if (done) {
       wick.joints.forEach(j => j.quaternion.identity());
       wick.straightening = false;
+      wick.k = 0;
     }
     wick.base.updateWorldMatrix(true, true);
   }
@@ -2263,7 +2341,11 @@ function updateFrame(dt, tSec) {
     const lift = liftK * liftK * (3 - 2 * liftK);
     const flipK = clamp01((S.pose - 0.34) / 0.66);
     const e = flipK * flipK * (3 - 2 * flipK);
-    insertG.rotation.set(-2.4 * e, 0, 0);
+    // ~112 deg, not 137: past horizontal far enough to read as "turned over",
+    // but leaving the underside pointing at the camera instead of at the
+    // ceiling. At 137 the whole service face — cotton, bore, screw — was
+    // foreshortened into a sliver above a big slab of tank.
+    insertG.rotation.set(-1.95 * e, 0, 0);
     // rotate about the insert's middle, then carry it to the service spot
     _v1.set(0, 2.1, 0);
     _v2.copy(_v1).applyEuler(insertG.rotation);
@@ -2272,8 +2354,27 @@ function updateFrame(dt, tSec) {
     const bodyOpen = S.state !== 'seated' || S.y > 0.02 || S.pose > 0.005;
     svcParts.caseSolid.visible = !bodyOpen;
     svcParts.caseShellG.visible = bodyOpen;
+    // Work light. The insert's underside turns AWAY from every baked softbox,
+    // so the whole service tableau — cotton, bore, screw — sat in near-darkness
+    // and pale cotton read as grey metal. This rides on the camera side of the
+    // tableau, fading in with the pose, and touches nothing while seated.
+    const svcK = Math.max(S.pose, clamp01(S.y * 2));
+    svcLight.intensity = 34 * svcK;
+    if (svcK > 0.001) {
+      svcParts.underG.getWorldPosition(_v3);
+      // over the viewer's shoulder, kicked up and left so the cotton tufts cast
+      // their own little shadows instead of flattening under head-on light
+      _v4.copy(camera.position).sub(_v3).normalize();
+      svcLight.position.copy(_v3).addScaledVector(_v4, 4.4)
+        .addScaledVector(cam.up, 2.4).addScaledVector(cam.right, -1.8);
+    }
     // felt pad peels OUTWARD off the packing (local -y is the exposed side)
     svcParts.padG.rotation.x = -S.pad * 2.6;
+    // the felt presses the wadding flat; lift it and the cotton springs back up.
+    // Scaled about the buried face so only the exposed tufts move.
+    const puff = 1 + 0.24 * S.pad;
+    svcParts.packing.scale.y = puff;
+    svcParts.packing.position.y = 0.34 - puff * 0.095;
 
     /* ---- flint assembly: one connected story, mouth -> spring -> screw ---- */
     const BX = svcParts.BORE_X, BY = svcParts.BORE_Y;
@@ -2367,7 +2468,7 @@ function updateFrame(dt, tSec) {
       insertG.updateMatrix();
       insertG.updateWorldMatrix(true, false);
       // where the fluid should land, in the can's parent space
-      const packW = svcParts.underG.localToWorld(_v4.set(-0.62, 0.13, 0));
+      const packW = svcParts.underG.localToWorld(_v4.set(-0.62, -0.06, 0));
       const target = squash.worldToLocal(_v5.copy(packW));
       // Stand the tin off the packing along the insert's OWN outward normal —
       // the insert is flipped, so "up" in world would just park it on the
@@ -2528,7 +2629,6 @@ function updateFrame(dt, tSec) {
     matWickTip.emissiveIntensity = Math.max(0, matWickTip.emissiveIntensity - 6 * dt);
   }
   smoothFlameLevel = lerp(smoothFlameLevel, level, 1 - Math.exp(-8 * dt));
-  floorGlow.material.opacity = 0.5 * smoothFlameLevel * (0.8 + 0.2 * flick);
   shadowMesh.material.opacity = 1 / (1 + sim.hop.y * 1.2);
   shadowMesh.scale.setScalar(1 + sim.hop.y * 0.12);
 
@@ -2617,7 +2717,10 @@ function classify(px, py) {
     // a bent wick is tucked inside the chimney: shrink its grab zone so the
     // steal-the-flame swipe across the mouth can't accidentally drag it
     const tipR = CFG.R_TIP * S * (wickIsBent() ? 0.55 : 1);
-    if (Math.hypot(px - tp.x, py - tp.y) < tipR) return 'wick';
+    // You only ever adjust a wick cold — you'd burn your fingers otherwise, and
+    // a drag through a live flame means the steal/smother swipe, not a bend. So
+    // while anything is burning the tip zone falls through to those gestures.
+    if (Math.hypot(px - tp.x, py - tp.y) < tipR && sim.flame.state === OUT) return 'wick';
     const wh = anchorScreen('wheel');
     if (Math.hypot(px - wh.x, py - wh.y) < CFG.R_WHEEL * S) return 'wheel';
     const mo = anchorScreen('mouth');
@@ -2643,6 +2746,13 @@ function classify(px, py) {
 }
 function beginGesture(tr) {
   tr.gesture = classify(tr.x, tr.y);
+  // remember a poke that LANDED on the wick even when the cold-only gate sent
+  // the gesture elsewhere, so pointerup can explain the refusal
+  if (lidIsOpen() && sim.svc.state === 'seated' && sim.flame.state !== OUT) {
+    const tpw = anchorScreen('tip');
+    tr.nearWick = Math.hypot(tr.x - tpw.x, tr.y - tpw.y)
+      < CFG.R_TIP * uiScale() * (wickIsBent() ? 0.55 : 1);
+  }
   // grabbing the chimney with the flame out starts the service pull
   if (tr.gesture === 'chimney' && sim.flame.state === OUT && sim.svc.state === 'seated') {
     tr.gesture = 'svcPull';
@@ -2691,6 +2801,10 @@ function beginGesture(tr) {
     tr.wheelSpeed = 0;
   } else if (tr.gesture === 'wick') {
     tr.wickWasBent = wickIsBent();   // latch: a bent-wick drag never becomes a pull
+    // the bend is measured as travel FROM here, so the wick never jumps to meet
+    // the finger the moment it moves
+    tr.wickArc = Array.from({ length: 14 }, () => ({ x: 0, y: 0 }));
+    tr.wickX0 = tr.x; tr.wickY0 = tr.y; tr.wickK0 = wick.k;
   } else if (tr.gesture === 'case' && lidIsClosed() && sim.svc.state === 'seated') {
     // press-and-hold near the base bottom of the closed case = refill
     const bb = anchorScreen('baseBottom');
@@ -2958,10 +3072,10 @@ function onPointerMove(e) {
       // carry the flint across the underside toward the bore, in its own plane
       camera.getWorldDirection(_v1);
       svcParts.flintNew.getWorldPosition(_v2);
-      wickPlane.setFromNormalAndCoplanarPoint(_v1, _v2);
+      dragPlane.setFromNormalAndCoplanarPoint(_v1, _v2);
       raycaster.setFromCamera(_v6.set((tr.x / window.innerWidth) * 2 - 1,
         -(tr.y / window.innerHeight) * 2 + 1, 0).clone(), camera);
-      if (raycaster.ray.intersectPlane(wickPlane, _v4)) {
+      if (raycaster.ray.intersectPlane(dragPlane, _v4)) {
         const local = svcParts.underG.worldToLocal(_v4.clone());
         svcParts.flintNew.position.set(
           clamp(local.x, 0.5, 2.6), clamp(local.y, -0.75, -0.2), clamp(local.z, -1.0, 1.0));
@@ -3038,7 +3152,7 @@ function onPointerMove(e) {
           break;
         }
       }
-      dragWick(e.clientX, e.clientY);
+      dragWickArc(tr, e.clientX, e.clientY);
       break;
     }
     case 'chimney': {
@@ -3134,6 +3248,14 @@ function onPointerUp(e) {
   }
   // taps & double-tap = auto open + strike (real single-finger gestures only)
   if (hadGesture && dur < CFG.TAP_MS && tr.moved < CFG.TAP_PX) {
+    // a deliberate poke at the wick while it's burning: say why it won't budge
+    // rather than letting the gate read as a dead spot on the screen
+    if (tr.nearWick && sim.flame.state !== OUT) {
+      toast(sim.flame.state === EMBER
+        ? 'let the ember die before touching the wick'
+        : 'put the flame out first — the wick only bends cold');
+      return;
+    }
     // service taps: toggle the pad, tip out the stub, or seat the insert
     if (sim.svc.state === 'out') {
       if (gestName === 'pad') {
@@ -3213,30 +3335,17 @@ function resetPointers() {   // heal any tracker whose release event we never re
   sim.lid.dragging = false;
 }
 window.addEventListener('blur', resetPointers);
-const wickPlane = new THREE.Plane();
-function dragWick(px, py) {
-  camera.getWorldDirection(_v1);
-  wick.base.getWorldPosition(_v2);
-  wickPlane.setFromNormalAndCoplanarPoint(_v1, _v2);
-  raycaster.setFromCamera(_v3.set((px / window.innerWidth) * 2 - 1, -(py / window.innerHeight) * 2 + 1, 0).clone(), camera);
-  if (!raycaster.ray.intersectPlane(wickPlane, _v4)) return;
-  // clamp the target into believable space (inside the chimney when below the rim)
-  const local = insertG.worldToLocal(_v4.clone());
-  local.y = clamp(local.y, CFG.BASE_H + 0.22, RIM_Y + 1.5);
-  if (local.y < RIM_Y) {
-    local.x = clamp(local.x, CFG.CHIM_X - CFG.CHIM_W / 2 + 0.15, CFG.CHIM_X + CFG.CHIM_W / 2 - 0.15);
-    local.z = clamp(local.z, -CFG.CHIM_D / 2 + 0.14, CFG.CHIM_D / 2 - 0.14);
-  } else {
-    local.x = clamp(local.x, CFG.CHIM_X - 1.7, CFG.CHIM_X + 1.7);
-    local.z = clamp(local.z, -0.9, 0.9);
-  }
-  const target = insertG.localToWorld(local);
-  solveWickIK(target);
-  // dragging up past the rim pulls the wick taut again
-  if (local.y > RIM_Y + 0.45) {
-    for (const j of wick.joints) j.quaternion.slerp(_qI.identity(), 0.09);
-    wick.base.updateWorldMatrix(true, true);
-  }
+const dragPlane = new THREE.Plane();
+// Guided arc, not free posing: the finger picks the nearest point on the wick's
+// one bend arc and the wick slides to it. Real tweezers bend a wick along the
+// path its wire core allows — and it means a sloppy diagonal drag still tucks
+// the wick cleanly instead of leaving it kinked at some unreachable angle.
+function dragWickArc(tr, px, py) {
+  // measured from the grab, not accumulated per move: no drift, and dragging
+  // back the way you came unbends it exactly the way it bent
+  const prog = wickArcProgress(sampleWickArc(tr.wickArc), px - tr.wickX0, py - tr.wickY0);
+  if (prog === null) return;
+  setWickBend(tr.wickK0 + prog);
   wick.straightening = false;
 }
 canvas.addEventListener('pointerdown', onPointerDown);
@@ -3684,6 +3793,7 @@ window.LIGHTER = {
   uiScale,
   lidOpen: lidIsOpen,
   wickBent: wickIsBent,
+  get wickK() { return wick.k; },   // the arc parameter every bend rides on
   wickTipLocalY,
   bendWick: setWickBend,
   straighten: () => { wick.straightening = true; },
