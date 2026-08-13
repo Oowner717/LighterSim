@@ -316,10 +316,10 @@
           chimney. The tip slowly chars with use.</p>
         <p>Maintenance: tug the wick up with pliers to expose fresh braid, snip it level
           with the chimney, and it&rsquo;s good for years.</p>
-        <p class="how">Here: with the flame <em>out</em>, drag the wick tip down to fold it
-          over. The wire core only lets it fold one way, so the tip follows that arc however
-          you drag &mdash; drag back up to pull it straight again. It won&rsquo;t budge while
-          anything is still burning.</p>
+        <p class="how">Here: with the flame <em>out</em>, drag the wick tip sideways to fold it
+          over &mdash; either way, left or right. The wire core makes it follow one arc, so the
+          tip stays on that path however you drag; drag back the other way to pull it straight.
+          It won&rsquo;t budge while anything is still burning.</p>
         <p class="how">Bend it low and swipe the flame away to hide it as an ember (tap the
           lighter, scoop upward, or snap the phone to call it back).</p>
       </section>
@@ -408,8 +408,8 @@ const CFG = {
   WICK_SEGS: 4, WICK_SEG_LEN: 0.345, WICK_R: 0.12,
 
   // flame
-  FLAME_H: 2.0,
-  FLAME_W: 0.95,             // width factor: a real flame is far more slender than tall
+  FLAME_H: 2.35,
+  FLAME_W: 1.14,             // width factor applied on top of the height scaling
   FLAME_BEND_K: 26, FLAME_BEND_C: 6.0,
   FLAME_LIGHT: 8,            // point light intensity while LIT (11 bloomed orange smears onto the lid)
   EMBER_LIFE: 12,            // s of unattended pilot before it dies
@@ -924,8 +924,8 @@ const wheelSpin = new THREE.Mesh(
 
 // --- bendable wick: 4-segment plastic chain (wire core -> holds its shape) ---
 // k is the single parameter the whole bend rides on: every pose the wick can
-// hold is setWickBend(k) for some k in 0..1, so "how bent is it" is one number
-// and dragging is a slide along that one arc rather than free-form posing.
+// hold is setWickBend(k) for some k in -1..+1 — sign is which way it folds — so
+// dragging is a slide along that one arc rather than free-form posing.
 const wick = { joints: [], tipObj: null, base: null, straightening: false, k: 0 };
 {
   const L = CFG.WICK_SEG_LEN;
@@ -964,10 +964,11 @@ function wickTangent(out) {
   return out.sub(j).normalize();
 }
 const WICK_BEND_ANGLES = [0.25, 0.75, 0.85, 0.6];
-function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the debug/test path)
+// k is SIGNED: -1 folded hard one way, 0 straight up, +1 folded hard the other.
+// The wick sits on the chimney's centre line, so both sides have the same room.
+function setWickBend(k) {
   const axis = _v1.set(0, 0, 1);
-  wick.k = clamp01(k);
-  // bend away from the hinge so the riding flame sits over the chimney middle
+  wick.k = clamp(k, -1, 1);
   wick.joints.forEach((j, i) => j.quaternion.setFromAxisAngle(axis, -WICK_BEND_ANGLES[i] * wick.k));
   wick.base.updateWorldMatrix(true, true);
 }
@@ -977,22 +978,29 @@ function wickTipScreenAt(k, out) {
   wickTipWorld(_v2);
   return toScreen(_v2, out);
 }
-// rebuilt every move so the rail keeps tracking a drifting camera
+// The whole rail, k = -1 .. +1. Odd length so the middle sample is dead upright.
 function sampleWickArc(A) {
   const kSave = wick.k;
-  for (let i = 0; i < A.length; i++) wickTipScreenAt(i / (A.length - 1), A[i]);
+  for (let i = 0; i < A.length; i++) wickTipScreenAt(i / (A.length - 1) * 2 - 1, A[i]);
   setWickBend(kSave);
   return A;
 }
-// How far along the arc the finger has pushed, measured as travel projected on
-// the arc's overall screen direction. Deliberately NOT nearest-point-on-curve:
-// the tip leaves the wick sideways before it dips, so a nearest-point match
-// ignores the plain downward drag everyone actually makes. Projection answers
-// "did you push the way the wick folds", which is the question worth asking.
+// How far along the arc the finger has pushed. The rail is an arch — upright at
+// the apex, dipping away to either side — so SIDEWAYS travel is what picks a
+// side and drives the fold, and the dive the tip makes on the way down is added
+// as extra reach once a side is chosen. Deliberately NOT nearest-point-on-curve:
+// that leaves dead zones wherever the finger strays off the drawn arc.
 function wickArcProgress(A, dx, dy) {
-  const cx = A[A.length - 1].x - A[0].x, cy = A[A.length - 1].y - A[0].y;
-  const c2 = cx * cx + cy * cy;
-  return c2 > 4 ? (dx * cx + dy * cy) / c2 : null;   // null = arc is edge-on
+  const n = A.length, mid = (n - 1) >> 1;
+  const hx = A[n - 1].x - A[0].x, hy = A[n - 1].y - A[0].y;   // full left->right span
+  const h2 = hx * hx + hy * hy;
+  if (h2 < 16) return null;                                   // arc edge-on: no leverage
+  let p = 2 * (dx * hx + dy * hy) / h2;                        // the span covers k -1..+1
+  // apex -> mean of the two ends: straight "down the dip", sides cancelling out
+  const sx = (A[n - 1].x + A[0].x) / 2 - A[mid].x, sy = (A[n - 1].y + A[0].y) / 2 - A[mid].y;
+  const s2 = sx * sx + sy * sy;
+  if (s2 > 16) p += Math.sign(p) * 0.55 * Math.max(0, (dx * sx + dy * sy) / s2);
+  return p;
 }
 
 /* ---- service ritual hardware: only meaningful once the insert comes out ---- */
@@ -1742,14 +1750,15 @@ function teardropTex(ramp) {
   for (let y = 0; y < H; y++) {
     const t = 1 - y / (H - 1);                       // 0 at base .. 1 at tip
     let w;
-    if (t < 0.26) {                                  // rounded bulb at the wick
-      const k = (0.26 - t) / 0.335;
+    if (t < 0.28) {                                  // rounded bulb at the wick
+      const k = (0.28 - t) / 0.40;
       w = Math.sqrt(Math.max(0, 1 - k * k));
     } else {                                         // long CONCAVE taper to a fine point
-      // exponent > 1 curves the sides inward; < 1 gave a fat convex cone
-      w = Math.pow(1 - (t - 0.26) / 0.74, 1.35);
+      // >1 curves the sides inward, but only just: at 1.35 the body was a
+      // spike, and a real windproof flame carries its width most of the way up
+      w = Math.pow(1 - (t - 0.28) / 0.72, 1.12);
     }
-    w *= 1 - 0.09 * Math.exp(-Math.pow((t - 0.36) / 0.13, 2));   // slight waist
+    w *= 1 - 0.05 * Math.exp(-Math.pow((t - 0.38) / 0.13, 2));   // slight waist
     for (let x = 0; x < W; x++) {
       const u = (x / (W - 1)) * 2 - 1;
       const i = (y * W + x) * 4;
@@ -1790,10 +1799,14 @@ function smokeTex() {   // a few overlapping lobes: wispy, not a perfect disc
 const FLAME_COLS = {
   classic: {
     swatch: '#ff9a3c',
-    // hot yellow-white low down, cooling to orange at the tip
+    // Hot yellow-white low down, cooling to orange at the tip — and blue right
+    // at the wick, where vapour burns clean before it starts making soot. That
+    // blue collar is the single most recognisable thing about a real flame.
     tear: (a, t) => {
       const heat = Math.pow(a, 1.25) * (1 - 0.42 * t);
-      return [255, 104 + 150 * heat, 22 + 168 * Math.pow(heat, 2.1)];
+      const r = 255, g = 104 + 150 * heat, b = 22 + 168 * Math.pow(heat, 2.1);
+      const cool = Math.pow(clamp01(1 - t / 0.26), 1.5) * Math.pow(a, 0.5);
+      return [lerp(r, 88, cool * 0.95), lerp(g, 172, cool * 0.74), lerp(b, 255, cool * 0.97)];
     },
     flame: [[0, 'rgba(255,255,255,1)'], [0.22, 'rgba(255,225,150,0.95)'], [0.55, 'rgba(255,140,40,0.5)'], [1, 'rgba(255,70,10,0)']],
     core: [[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(170,205,255,0.85)'], [1, 'rgba(60,90,255,0)']],
@@ -1881,12 +1894,17 @@ function makeSprite(tex, colorArr, depthTest = true) {
 // Levels are kept just over the bloom threshold rather than far above it: the
 // old values saturated the low-res bloom buffer into a white slab.
 const flameLayers = [
-  { t: 0.42, sx: 1.25, sy: 1.9, tex: 'glow', col: [1.15, 0.58, 0.26], op: 0.24, nf: 5, na: 0.05 },
-  { t: 0.5, sx: 0.52, sy: 1.16, tex: 'tear', col: [1.32, 1.0, 0.76], op: 0.95, nf: 9, na: 0.05, rot: true },
-  { t: 0.4, sx: 0.29, sy: 0.78, tex: 'tear', col: [1.62, 1.35, 1.0], op: 0.8, nf: 13, na: 0.055, rot: true },
-  { t: 0.105, sx: 0.17, sy: 0.17, tex: 'core', col: [0.5, 0.85, 1.9], op: 0.7, nf: 7, na: 0.015 },
-  // tip flicker hugs the spine (na kept small: at 0.13 it drifted off as a blob)
-  { t: 0.8, sx: 0.1, sy: 0.32, tex: 'flame', col: [1.5, 0.92, 0.4], op: 0.42, nf: 19, na: 0.045, rot: true },
+  // halo sits high so it wraps the bright body without washing out the blue root
+  { t: 0.52, sx: 1.3, sy: 1.85, tex: 'glow', col: [1.15, 0.58, 0.26], op: 0.24, nf: 5, na: 0.075 },
+  { t: 0.5, sx: 0.6, sy: 1.2, tex: 'tear', col: [1.32, 1.0, 0.76], op: 0.95, nf: 9, na: 0.075, rot: true },
+  { t: 0.4, sx: 0.35, sy: 0.82, tex: 'tear', col: [1.62, 1.35, 1.0], op: 0.8, nf: 13, na: 0.08, rot: true },
+  // the blue collar around the wick: wide and low, sitting under the yellow
+  // body. Kept dim on purpose — pushed bright it stops being a collar and
+  // becomes a glowing white disc sitting on the chimney.
+  { t: 0.06, sx: 0.25, sy: 0.25, tex: 'core', col: [0.3, 0.6, 1.9], op: 0.5, nf: 7, na: 0.02 },
+  // tip flicker hugs the spine (na kept small: much past 0.05 and it sheds a
+  // visibly detached blob instead of licking off the tip)
+  { t: 0.82, sx: 0.13, sy: 0.38, tex: 'flame', col: [1.5, 0.92, 0.4], op: 0.44, nf: 19, na: 0.05, rot: true },
 ].map(L => ({ ...L, spr: makeSprite(TEX[L.tex], L.col), ph: Math.random() * 100 }));
 const pilotSpr = makeSprite(TEX.core, [2.4, 1.4, 0.55]);
 const pilotGlow = makeSprite(TEX.glow, [1.9, 0.85, 0.3]);   // inside the chimney: leaks via the holes
@@ -2534,6 +2552,11 @@ function updateFrame(dt, tSec) {
     spineA.copy(tipWorld).addScaledVector(flameDir, -0.19);
     spineC.copy(tipWorld).addScaledVector(flameDir, len);
     spineB.copy(tipWorld).addScaledVector(sim.upDir, len * 0.28).addScaledVector(flameDir, len * 0.24);
+    // the whole column leans and recovers on its own slow drift, so the flame
+    // wanders as a body instead of only jittering layer by layer
+    const lean = (vnoise(tSec * 0.9 + 5) * 0.7 + vnoise(tSec * 2.2 + 17) * 0.3) * 0.11 * len;
+    spineB.addScaledVector(cam.right, lean * 0.6);
+    spineC.addScaledVector(cam.right, lean);
     const wob = 1 + 2.4 * F.turb;
     // screen-space spine tilt so the teardrop bodies lean with the bend
     toScreen(spineA, _s1);
@@ -2541,7 +2564,8 @@ function updateFrame(dt, tSec) {
     const spineRot = Math.atan2(-(_s2.x - _s1.x), _s1.y - _s2.y);
     // a flame is anchored at the wick and loose at the tip: the higher a layer
     // sits on the spine, the more it wanders and the harder it flickers
-    const sway = vnoise(tSec * 1.7) * 0.5 + vnoise(tSec * 4.3 + 11) * 0.3;
+    const sway = vnoise(tSec * 1.7) * 0.5 + vnoise(tSec * 4.3 + 11) * 0.3
+      + vnoise(tSec * 8.1 + 23) * 0.18;
     for (const L of flameLayers) {
       const spr = L.spr;
       spr.visible = true;
@@ -2785,7 +2809,7 @@ function beginGesture(tr) {
     tr.wickWasBent = wickIsBent();   // latch: a bent-wick drag never becomes a pull
     // the bend is measured as travel FROM here, so the wick never jumps to meet
     // the finger the moment it moves
-    tr.wickArc = Array.from({ length: 14 }, () => ({ x: 0, y: 0 }));
+    tr.wickArc = Array.from({ length: 21 }, () => ({ x: 0, y: 0 }));   // odd: index 10 is upright
     tr.wickX0 = tr.x; tr.wickY0 = tr.y; tr.wickK0 = wick.k;
   } else if (tr.gesture === 'case' && lidIsClosed() && sim.svc.state === 'seated') {
     // press-and-hold near the base bottom of the closed case = refill
