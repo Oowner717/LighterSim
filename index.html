@@ -316,10 +316,11 @@
           chimney. The tip slowly chars with use.</p>
         <p>Maintenance: tug the wick up with pliers to expose fresh braid, snip it level
           with the chimney, and it&rsquo;s good for years.</p>
-        <p class="how">Here: with the flame <em>out</em>, drag the wick tip sideways to fold it
-          over &mdash; either way, left or right. The wire core makes it follow one arc, so the
-          tip stays on that path however you drag; drag back the other way to pull it straight.
-          It won&rsquo;t budge while anything is still burning.</p>
+        <p class="how">Here: with the flame <em>out</em>, a blue ball appears on a thread above
+          the wick. Drag it left or right and the wick folds that way, like a joystick &mdash; it
+          sits clear of the lighter so your finger never covers what you&rsquo;re adjusting. Drag
+          back the other way to pull the wick straight. The ball only appears when bending is
+          possible: it won&rsquo;t budge while anything is still burning.</p>
         <p class="how">Bend it low and swipe the flame away to hide it as an ember (tap the
           lighter, scoop upward, or snap the phone to call it back).</p>
       </section>
@@ -951,13 +952,45 @@ const wick = { joints: [], tipObj: null, base: null, straightening: false, k: 0 
   wick.tipObj.position.y = L;
   parent.add(wick.tipObj);
 }
+// The bend handle: a ball riding an imaginary extension of the wick, so the
+// wick swings under it like a joystick. Grabbing the tip itself was fiddly and
+// put your fingertip straight over the thing you were trying to see.
+const HANDLE_EXT = 2.6;
 function wickTipWorld(out) { return wick.tipObj.getWorldPosition(out); }
+// ext 1 = the tip itself; >1 slides out along the wick's own line
+function wickPointWorld(ext, out) {
+  wickTipWorld(out);
+  if (ext === 1) return out;
+  wick.base.getWorldPosition(_v3);
+  return out.sub(_v3).multiplyScalar(ext).add(_v3);
+}
 function wickTipLocalY() {
   wickTipWorld(_v1);
   return insertG.worldToLocal(_v1).y;
 }
 function wickIsBent() { return wickTipLocalY() < RIM_Y - 0.06; }
 function wickBentness() { return clamp01((RIM_Y + 0.1 - wickTipLocalY()) / 0.55); }
+// The handle itself: a ball on a hairline stem, drawn on top of everything so
+// it can never end up behind the lid, and shown only when the bend is legal.
+const bendHandle = new THREE.Group();
+{
+  const col = 0x6ec0ff;   // unmistakably a control, not a part of the lighter
+  const mk = (geo, op) => {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: col, transparent: true, opacity: op, depthTest: false, depthWrite: false,
+    }));
+    m.renderOrder = 20;
+    return m;
+  };
+  const ball = mk(new THREE.SphereGeometry(0.19, 18, 12), 0.85);
+  const ring = mk(new THREE.TorusGeometry(0.30, 0.022, 8, 26), 0.5);   // grab target
+  const stem = mk(new THREE.CylinderGeometry(0.018, 0.018, 1, 6), 0.32);
+  stem.name = 'stem';
+  bendHandle.add(ball, ring, stem);
+  bendHandle.visible = false;
+  scene.add(bendHandle);
+}
+let bendHandleK = 0;   // 0..1 fade, so it never pops in or out
 function wickTangent(out) {
   wickTipWorld(out);
   const j = wick.joints[wick.joints.length - 1].getWorldPosition(_v6);
@@ -972,16 +1005,14 @@ function setWickBend(k) {
   wick.joints.forEach((j, i) => j.quaternion.setFromAxisAngle(axis, -WICK_BEND_ANGLES[i] * wick.k));
   wick.base.updateWorldMatrix(true, true);
 }
-// where the tip lands on screen for a given k — the rail the finger slides along
-function wickTipScreenAt(k, out) {
-  setWickBend(k);
-  wickTipWorld(_v2);
-  return toScreen(_v2, out);
-}
-// The whole rail, k = -1 .. +1. Odd length so the middle sample is dead upright.
-function sampleWickArc(A) {
+// The whole rail, k = -1 .. +1, at whatever radius the grabbed thing sits on.
+// Odd length so the middle sample is dead upright.
+function sampleWickArc(A, ext) {
   const kSave = wick.k;
-  for (let i = 0; i < A.length; i++) wickTipScreenAt(i / (A.length - 1) * 2 - 1, A[i]);
+  for (let i = 0; i < A.length; i++) {
+    setWickBend(i / (A.length - 1) * 2 - 1);
+    toScreen(wickPointWorld(ext, _v2), A[i]);
+  }
   setWickBend(kSave);
   return A;
 }
@@ -1190,7 +1221,7 @@ const sim = {
   upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
   gWorld: new THREE.Vector3(0, -1, 0),
   timers: [],
-  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false, flameCol: false, service: false },
+  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false, flameCol: false, service: false, bend: false },
   counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0, duds: 0, refills: 0, services: 0 },
 };
 // discovered tricks persist, so returning players skip the beginner hints
@@ -2058,6 +2089,7 @@ function anchorWorld(name, out) {
   lidG.updateWorldMatrix(true, false);
   switch (name) {
     case 'tip': return wickTipWorld(out);
+    case 'bendHandle': return wickPointWorld(HANDLE_EXT, out);
     case 'mouth': return insertG.localToWorld(out.set(CFG.CHIM_X, RIM_Y, 0));
     case 'mouthX': return insertG.localToWorld(out.set(CFG.CHIM_X + 1, RIM_Y, 0));
     case 'wheel': return insertG.localToWorld(out.set(CFG.WHEEL_X, CFG.WHEEL_Y + 0.2, 0));
@@ -2338,6 +2370,34 @@ function bezier(t, out) {
 function updateFrame(dt, tSec) {
   // pose the rig (side hinge: the lid swings left, in the plane of the face)
   lidG.rotation.z = sim.lid.theta;
+  // ---- bend handle: only up when bending is actually allowed ----
+  {
+    const want = lidIsOpen() && sim.svc.state === 'seated' && sim.flame.state === OUT
+      && sim.svc.y < 0.01 ? 1 : 0;
+    bendHandleK += (want - bendHandleK) * (1 - Math.exp(-9 * dt));
+    if (bendHandleK < 0.02) bendHandleK = want ? bendHandleK : 0;
+    bendHandle.visible = bendHandleK > 0.02;
+    if (bendHandle.visible) {
+      wickPointWorld(HANDLE_EXT, _v1);
+      bendHandle.position.copy(_v1);
+      // hairline back to the tip, so it reads as attached to the wick
+      wickTipWorld(_v2);
+      const stem = bendHandle.children[2];
+      const d = _v3.subVectors(_v2, _v1);
+      const len = d.length() || 1e-4;
+      stem.position.copy(d).multiplyScalar(0.5);
+      stem.scale.set(1, len, 1);
+      stem.quaternion.setFromUnitVectors(_v4.set(0, 1, 0), d.divideScalar(len));
+      // idle breathing draws the eye; it settles the moment you grab it
+      const idle = pointers.size ? 0 : 0.5 + 0.5 * Math.sin(perfNow * 2.4);
+      const a = bendHandleK * bendHandleK;
+      bendHandle.children[0].material.opacity = 0.85 * a;
+      bendHandle.children[1].material.opacity = (0.34 + 0.3 * idle) * a;
+      bendHandle.children[1].scale.setScalar(1 + 0.11 * idle);
+      stem.material.opacity = 0.3 * a;
+      bendHandle.children[1].quaternion.copy(camera.quaternion);   // ring faces you
+    }
+  }
   // solid lid while shut (seamless shading); hollow shell once it cracks open
   const lidAjar = sim.lid.theta > 0.06;
   lidShellG.visible = lidAjar;
@@ -2716,6 +2776,12 @@ function classify(px, py) {
     }
   }
   if (lidIsOpen() && V.state === 'seated') {
+    // the bend handle outranks everything under it: it is only ever on screen
+    // when the bend is legal, and it exists precisely to be grabbed
+    if (bendHandleK > 0.4) {
+      const bh = anchorScreen('bendHandle');
+      if (Math.hypot(px - bh.x, py - bh.y) < CFG.R_TIP * S * 1.25) return 'bend';
+    }
     const tp = anchorScreen('tip');
     // a bent wick is tucked inside the chimney: shrink its grab zone so the
     // steal-the-flame swipe across the mouth can't accidentally drag it
@@ -2748,6 +2814,11 @@ function classify(px, py) {
   const bc = anchorScreen('baseCenter');
   if (Math.hypot(px - bc.x, py - bc.y) < vmin() * 0.22) return 'case';
   return 'orbit';
+}
+// the bend is measured as travel FROM here, so nothing jumps to meet the finger
+function beginBendDrag(tr, ext) {
+  tr.wickArc = Array.from({ length: 21 }, () => ({ x: 0, y: 0 }));   // odd: index 10 is upright
+  tr.wickX0 = tr.x; tr.wickY0 = tr.y; tr.wickK0 = wick.k; tr.wickExt = ext;
 }
 function beginGesture(tr) {
   tr.gesture = classify(tr.x, tr.y);
@@ -2803,14 +2874,14 @@ function beginGesture(tr) {
     tr.crossed = false;
     tr.holdStart = perfNow;
     chimneyHold = tr;
+  } else if (tr.gesture === 'bend') {
+    beginBendDrag(tr, HANDLE_EXT);
+    buzz(4);
   } else if (tr.gesture === 'wheel') {
     tr.wheelSpeed = 0;
   } else if (tr.gesture === 'wick') {
     tr.wickWasBent = wickIsBent();   // latch: a bent-wick drag never becomes a pull
-    // the bend is measured as travel FROM here, so the wick never jumps to meet
-    // the finger the moment it moves
-    tr.wickArc = Array.from({ length: 21 }, () => ({ x: 0, y: 0 }));   // odd: index 10 is upright
-    tr.wickX0 = tr.x; tr.wickY0 = tr.y; tr.wickK0 = wick.k;
+    beginBendDrag(tr, 1);
   } else if (tr.gesture === 'case' && lidIsClosed() && sim.svc.state === 'seated') {
     // press-and-hold near the base bottom of the closed case = refill
     const bb = anchorScreen('baseBottom');
@@ -2922,11 +2993,9 @@ function endGesture(tr, cancelled) {
       cam.yawVel = clamp((tr.orbitVyaw || 0) * d, -5, 5);
       cam.pitchVel = clamp((tr.orbitVpitch || 0) * d, -5, 5);
     }
-  } else if (tr.gesture === 'wick') {
+  } else if (tr.gesture === 'wick' || tr.gesture === 'bend') {
     // plastic: holds the bend; snap fully straight if it's nearly straight
-    let total = 0;
-    for (const j of wick.joints) total += 2 * Math.acos(clamp(j.quaternion.w, -1, 1));
-    if (total < 0.35) wick.straightening = true;
+    if (Math.abs(wick.k) < 0.09) wick.straightening = true;
   } else if (tr.gesture === 'wheel') {
     // a near-miss swipe fizzles: "right idea, more speed" (never ignites)
     if (!cancelled && (tr.wheelDown || 0) > CFG.SPARK_SPEED_VMIN * vmin() * 0.4
@@ -3161,6 +3230,11 @@ function onPointerMove(e) {
       if (sim.flame.state === OUT) dragWickArc(tr, e.clientX, e.clientY);
       break;
     }
+    case 'bend': {
+      dragWickArc(tr, e.clientX, e.clientY);
+      sim.disc.bend = true;
+      break;
+    }
     case 'chimney': {
       if (tr.crossed) break;
       const sNow = (tr.x - tr.mouthPt.x) * tr.mouthAxis.x + (tr.y - tr.mouthPt.y) * tr.mouthAxis.y;
@@ -3346,8 +3420,10 @@ const dragPlane = new THREE.Plane();
 // the wick cleanly instead of leaving it kinked at some unreachable angle.
 function dragWickArc(tr, px, py) {
   // measured from the grab, not accumulated per move: no drift, and dragging
-  // back the way you came unbends it exactly the way it bent
-  const prog = wickArcProgress(sampleWickArc(tr.wickArc), px - tr.wickX0, py - tr.wickY0);
+  // back the way you came unbends it exactly the way it bent. The rail is
+  // sampled at the grabbed object's own radius, so the ball keeps pace with
+  // the finger instead of racing ahead of it.
+  const prog = wickArcProgress(sampleWickArc(tr.wickArc, tr.wickExt), px - tr.wickX0, py - tr.wickY0);
   if (prog === null) return;
   setWickBend(tr.wickK0 + prog);
   wick.straightening = false;
@@ -3623,6 +3699,7 @@ const HINTS = [
   { id: 'open', text: () => 'flip the lid • flick down the wheel', done: () => sim.disc.lit },
   { id: 'squeeze', text: () => 'try the squeeze: pinch lid-top + base-bottom', done: () => sim.disc.pop },
   { id: 'smother', text: () => 'swipe slowly across the flame to snuff it', done: () => sim.disc.smother },
+  { id: 'bend', text: () => 'drag the blue ball to fold the wick — either way', done: () => sim.disc.bend },
   { id: 'ember', text: () => 'bend the wick low, then swipe the flame away…', done: () => sim.disc.ember },
   { id: 'relight', text: relightHint, done: () => sim.disc.relight },
   { id: 'refuel', text: () => 'tank’s low — close the lid, hold the base to refill', done: () => sim.disc.refuel },
@@ -3637,6 +3714,7 @@ function currentHints() {
     && (h.id !== 'relight' || sim.flame.state === EMBER)
     && ((h.id !== 'smother' && h.id !== 'ember') || sim.flame.state === LIT)
     && (h.id !== 'squeeze' || sim.disc.lit)
+    && (h.id !== 'bend' || (sim.disc.lit && bendHandleK > 0.5))
     && (h.id !== 'refuel' || sim.fuel < CFG.FUEL_LOW)
     && (h.id !== 'service' || (sim.disc.lit
       && (sim.fuel < CFG.FUEL_LOW || sim.flintMissing || flintCond() < 0.5)))
@@ -3798,6 +3876,7 @@ window.LIGHTER = {
   lidOpen: lidIsOpen,
   wickBent: wickIsBent,
   get wickK() { return wick.k; },   // the arc parameter every bend rides on
+  get bendHandleShown() { return bendHandleK > 0.5; },
   wickTipLocalY,
   bendWick: setWickBend,
   straighten: () => { wick.straightening = true; },

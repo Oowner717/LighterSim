@@ -389,27 +389,45 @@ await L('LIGHTER.straighten()');
   const yArc = await L('LIGHTER.wickTipLocalY()');
   check('the bend stayed on its guided arc', Math.abs(yArc - y1) < 0.01,
     `k=${k.toFixed(3)} y ${y1.toFixed(3)} vs ${yArc.toFixed(3)}`);
-  { // the wick folds either way: the drag's sideways direction picks the side
-    const sides = [];
-    for (const [id, dx] of [[91, 70], [92, -70]]) {
-      await L('LIGHTER.straighten()');
-      await waitL('!LIGHTER.wickBent()');
-      const p = await L('LIGHTER.anchor("tip")');
-      await page.evaluate(([p, dx, id]) => window.__swipe(p.x, p.y, p.x + dx, p.y + 70, 400, id),
-        [p, dx, id]);
-      await page.waitForTimeout(200);
-      sides.push(await L('LIGHTER.wickK'));
-    }
-    check('dragging right folds the wick one way, left folds it the other',
-      sides[0] > 0.3 && sides[1] < -0.3, `k right=${sides[0].toFixed(2)} left=${sides[1].toFixed(2)}`);
-    check('both folds tuck the tip below the rim',
-      await L('LIGHTER.wickBent()') === true);
-  }
   await page.waitForTimeout(600);
   const y2 = await L('LIGHTER.wickTipLocalY()');
   check('bend is plastic (no spring-back)', Math.abs(y2 - y1) < 0.06, `y1=${y1.toFixed(2)} y2=${y2.toFixed(2)}`);
   await L('LIGHTER.straighten()');
   await waitL('!LIGHTER.wickBent()');
+  { // the bend handle: a ball on a thread, clear of the lighter, dragged either way
+    await L('LIGHTER.straighten()');
+    await waitL('!LIGHTER.wickBent()');
+    const ball = await L('LIGHTER.anchor("bendHandle")');
+    const tip0 = await L('LIGHTER.anchor("tip")');
+    check('the bend handle sits clear of the wick',
+      tip0.y - ball.y > 60, `gap ${(tip0.y - ball.y).toFixed(0)}px`);
+    check('the handle is what you grab there',
+      await L(`LIGHTER.classifyAt(${ball.x}, ${ball.y})`) === 'bend');
+    const sides = [];
+    for (const [id, dx] of [[91, 95], [92, -95]]) {
+      await L('LIGHTER.straighten()');
+      await waitL('!LIGHTER.wickBent()');
+      const p = await L('LIGHTER.anchor("bendHandle")');
+      await page.evaluate(([p, dx, id]) => window.__swipe(p.x, p.y, p.x + dx, p.y + 25, 400, id),
+        [p, dx, id]);
+      await page.waitForTimeout(200);
+      sides.push(await L('LIGHTER.wickK'));
+    }
+    check('dragging the ball right folds the wick one way, left folds it the other',
+      sides[0] > 0.3 && sides[1] < -0.3, `k right=${sides[0].toFixed(2)} left=${sides[1].toFixed(2)}`);
+    check('both folds tuck the tip below the rim', await L('LIGHTER.wickBent()') === true);
+    // and it only exists while bending is legal
+    await L('LIGHTER.straighten()');
+    await waitL('!LIGHTER.wickBent()');
+    await lightIt();
+    await waitL('LIGHTER.bendHandleShown === false', 8000);
+    check('the handle is gone while the flame is lit', true);
+    await settleLid(false);
+    await waitL('LIGHTER.state === "OUT"');
+    await settleLid(true);
+    await waitL('LIGHTER.bendHandleShown === true', 8000);
+    check('the handle comes back once the flame is out', true);
+  }
 }
 { // double-tap = auto open + strike
   await settleLid(false);
