@@ -4,3 +4,4 @@ tests/index.html
 tests/sw.js
 tests/*.png
 tests/package-lock.json
+tests/index-base.html
