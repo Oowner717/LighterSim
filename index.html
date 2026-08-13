@@ -87,7 +87,6 @@
 </script>
 <script type="module">
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -100,21 +99,23 @@ const CFG = {
   MAX_DPR: 1.75,
   FOV: 34,
   FIT_HALF_H: 4.45,          // world half-height the camera must frame
-  FIT_HALF_W: 3.1,
+  FIT_HALF_W: 3.4,
   CAM_TARGET_Y: 3.45,
   ZOOM_MIN: 0.62, ZOOM_MAX: 1.9,
-  BLOOM_STRENGTH: 0.5, BLOOM_RADIUS: 0.55, BLOOM_THRESHOLD: 1.25, // HDR flame only, not chrome
-  BLOOM_RES: 288,            // max dimension of bloom buffers (kept low-res)
+  BLOOM_STRENGTH: 0.38, BLOOM_RADIUS: 0.55, BLOOM_THRESHOLD: 1.25, // HDR flame only, not chrome
+  BLOOM_RES: 384,            // max dimension of bloom buffers (kept low-res)
   FPS_BLOOM_OFF: 45,         // sustained fps below this disables bloom
 
-  // body dimensions (≈ millimetres / 10)
-  BODY_W: 3.8, BODY_D: 1.42, BASE_H: 4.35, LID_H: 1.7, EDGE_R: 0.34,
+  // body dimensions (≈ millimetres / 10, real Zippo: 38 x 13 x 57mm).
+  // The lid box overlaps the base by 0.12 so the mating roundings close
+  // into a tight seam line; visible lid height stays 1.5.
+  BODY_W: 3.8, BODY_D: 1.31, BASE_H: 4.2, LID_H: 1.62, LID_OVERLAP: 0.12, EDGE_R: 0.34,
   CHIM_X: -0.35, CHIM_W: 2.3, CHIM_D: 1.02, CHIM_H: 1.22,
-  WHEEL_X: 1.30, WHEEL_Y: 4.83, WHEEL_R: 0.52, WHEEL_T: 0.40,
+  WHEEL_X: 1.30, WHEEL_Y: 4.68, WHEEL_R: 0.52, WHEEL_T: 0.40,
 
-  // lid hinge (over-center cam). Flicks >~17 rad/s carry through the cam;
+  // lid hinge (over-center cam). Flicks >~16 rad/s carry through the cam;
   // anything weaker falls back to the nearest end. Pop is the hardest snap.
-  LID_OPEN: 2.0,             // rad, fully open
+  LID_OPEN: 1.75,            // rad (~100 deg), fully open sideways
   LID_CAM_K: 190,            // over-center torque strength
   LID_DAMP: 2.6,
   LID_BOUNCE: 0.14,          // restitution at the stops
@@ -128,15 +129,15 @@ const CFG = {
   SQZ_MAX_SQUASH: 0.03,      // <=3% elastic squash
   SQZ_ZONE_FRAC: 0.16,       // zone radius as a fraction of vmin
 
-  // flint wheel
-  WHEEL_FRICTION: 5.5,
+  // flint wheel (spring-loaded against the flint: stops almost with the thumb)
+  WHEEL_FRICTION: 15,
   WHEEL_GAIN: 0.055,         // rad/s per px/s of swipe
   SPARK_SPEED_VMIN: 1.7,     // swipe speed (vmin/s) needed to spark
   SPARK_REFRACTORY: 0.22,    // s between spark bursts
   IGNITE_DELAY: 0.07,        // s from spark burst to catching
 
   // wick
-  WICK_SEGS: 4, WICK_SEG_LEN: 0.345, WICK_R: 0.088,
+  WICK_SEGS: 4, WICK_SEG_LEN: 0.345, WICK_R: 0.12,
   WICK_JOINT_MAX: [0.32, 0.95, 1.0, 0.9],   // per-joint plastic bend limit (rad)
 
   // flame
@@ -195,9 +196,31 @@ renderer.toneMappingExposure = 1.06;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(CFG.FOV, 1, 0.1, 120);
 
-{ // studio environment for the chrome + soft gradient backdrop
+{ // dark product-studio environment: off-axis softboxes so flat faces reflect
+  // mostly darkness while rounded edges catch defined light strips. A bright
+  // generic room blows the chrome to white at normal incidence.
+  const env = new THREE.Scene();
+  const shell = new THREE.Mesh(new THREE.BoxGeometry(60, 60, 60),
+    new THREE.MeshBasicMaterial({ side: THREE.BackSide }));
+  shell.material.color.setRGB(0.095, 0.1, 0.11);
+  env.add(shell);
+  const panels = [
+    { w: 14, h: 10, pos: [-8, 9, 6], c: [2.2, 2.2, 2.25] },     // key softbox, up-left-front
+    { w: 8, h: 6, pos: [9, 5, -7], c: [1.6, 1.75, 2.05] },      // cool rim, right-back
+    { w: 12, h: 3, pos: [0, 13, 2], c: [2.0, 2.0, 2.05] },      // top strip (lid-top line)
+    { w: 16, h: 1.1, pos: [0, 4.5, 11], c: [1.0, 1.0, 1.05] },  // thin frontal band for the brushed face
+    { w: 10, h: 6, pos: [0, -8, 4], c: [0.7, 0.7, 0.75] },      // floor bounce
+  ];
+  for (const p of panels) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(p.w, p.h),
+      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+    m.material.color.setRGB(p.c[0], p.c[1], p.c[2]);
+    m.position.set(p.pos[0], p.pos[1], p.pos[2]);
+    m.lookAt(0, 3, 0);
+    env.add(m);
+  }
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.05).texture;
+  scene.environment = pmrem.fromScene(env, 0.09).texture;
   pmrem.dispose();
 }
 function radialCanvas(size, stops, inner = 0) {
@@ -267,10 +290,10 @@ function knurlTex() {
 }
 const brushed = brushedRoughnessTex();
 const matChrome = new THREE.MeshStandardMaterial({
-  color: 0xd9dee3, metalness: 1.0, roughness: 0.55, roughnessMap: brushed, envMapIntensity: 1.25,
+  color: 0xd9dee3, metalness: 1.0, roughness: 0.55, roughnessMap: brushed, envMapIntensity: 1.0,
 });
 const matChromeDark = new THREE.MeshStandardMaterial({
-  color: 0x9aa1a8, metalness: 1.0, roughness: 0.5, roughnessMap: brushed, envMapIntensity: 1.1,
+  color: 0xaeb5bc, metalness: 1.0, roughness: 0.45, roughnessMap: brushed, envMapIntensity: 1.35,
 });
 const matSteel = new THREE.MeshStandardMaterial({
   color: 0xc8ccd2, metalness: 1.0, roughness: 0.62, bumpMap: knurlTex(), bumpScale: 0.6, envMapIntensity: 1.0,
@@ -288,10 +311,24 @@ const lidG = new THREE.Group();         // pivots at the hinge
 lighter.add(squash); squash.add(caseG); squash.add(lidG);
 scene.add(lighter);
 
-const HINGE_Y = CFG.BASE_H, HINGE_Z = -CFG.BODY_D / 2 - 0.06;
+// Real Zippos hinge on the narrow SIDE next to the flint wheel; the lid swings
+// sideways in the plane of the wide face.
+const HINGE_Y = CFG.BASE_H - CFG.LID_OVERLAP, HINGE_X = CFG.BODY_W / 2 + 0.06;
 const RIM_Y = CFG.BASE_H + CFG.CHIM_H;
-lidG.position.set(0, HINGE_Y, HINGE_Z);
+lidG.position.set(HINGE_X, HINGE_Y, 0);
 
+// rounded-rectangle plan profile (case footprint), extruded upward
+function roundedPlanGeo(w, d, r, h) {
+  const s = new THREE.Shape();
+  const hw = w / 2, hd = d / 2;
+  s.moveTo(-hw + r, -hd); s.lineTo(hw - r, -hd); s.quadraticCurveTo(hw, -hd, hw, -hd + r);
+  s.lineTo(hw, hd - r); s.quadraticCurveTo(hw, hd, hw - r, hd);
+  s.lineTo(-hw + r, hd); s.quadraticCurveTo(-hw, hd, -hw, hd - r);
+  s.lineTo(-hw, -hd + r); s.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
+  const g = new THREE.ExtrudeGeometry(s, { depth: h, bevelEnabled: false, curveSegments: 12 });
+  g.rotateX(-Math.PI / 2);
+  return g;
+}
 { // base body
   const geo = new RoundedBoxGeometry(CFG.BODY_W, CFG.BASE_H, CFG.BODY_D, 4, CFG.EDGE_R);
   const base = new THREE.Mesh(geo, matChrome);
@@ -300,27 +337,33 @@ lidG.position.set(0, HINGE_Y, HINGE_Z);
 }
 const lidMesh = new THREE.Mesh(
   new RoundedBoxGeometry(CFG.BODY_W, CFG.LID_H, CFG.BODY_D, 4, CFG.EDGE_R), matChrome);
-lidMesh.position.set(0, CFG.LID_H / 2, CFG.BODY_D / 2 + 0.06);
+lidMesh.position.set(-HINGE_X, CFG.LID_H / 2, 0);
 lidG.add(lidMesh);
-
-{ // hinge knuckles + cam
-  const kg = new THREE.CylinderGeometry(0.1, 0.1, 0.17, 10);
-  kg.rotateZ(Math.PI / 2);
-  for (const x of [-0.38, 0, 0.38]) {
-    const k = new THREE.Mesh(kg, matChromeDark);
-    k.position.set(x, HINGE_Y, HINGE_Z); caseG.add(k);
-  }
-  for (const x of [-0.19, 0.19]) {
-    const k = new THREE.Mesh(kg, matChromeDark);
-    k.position.set(x, 0, 0); lidG.add(k);
-  }
-  const cam = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.4, 0.34), matInsert);
-  cam.position.set(0, -0.06, 0.16);
-  lidG.add(cam);
+{ // dark underside = the open lid's cavity
+  const inner = new THREE.Mesh(
+    new THREE.BoxGeometry(CFG.BODY_W - 0.24, 0.05, CFG.BODY_D - 0.24), matDark);
+  inner.position.set(-HINGE_X, -0.02, 0);
+  lidG.add(inner);
 }
-{ // insert top plate + dark inner floor
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(CFG.BODY_W - 0.8, 0.1, CFG.BODY_D - 0.44), matInsert);
-  plate.position.set(0, CFG.BASE_H - 0.03, 0);
+{ // 5-knuckle hinge along the narrow side + cam tab on the lid
+  const kg = new THREE.CylinderGeometry(0.12, 0.12, 0.2, 10);
+  kg.rotateX(Math.PI / 2);                 // barrel axis along z
+  for (const z of [-0.45, 0, 0.45]) {
+    const k = new THREE.Mesh(kg, matChromeDark);
+    k.position.set(HINGE_X, HINGE_Y, z); caseG.add(k);
+  }
+  for (const z of [-0.225, 0.225]) {
+    const k = new THREE.Mesh(kg, matChromeDark);
+    k.position.set(0, 0, z); lidG.add(k);
+  }
+  const camBar = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.4, 0.3), matInsert);
+  camBar.position.set(-0.32, -0.04, 0);
+  lidG.add(camBar);
+}
+{ // insert shoulder fills the case mouth + dark inner floor
+  const plate = new THREE.Mesh(
+    roundedPlanGeo(CFG.BODY_W - 0.16, CFG.BODY_D - 0.16, CFG.EDGE_R - 0.07, 0.1), matInsert);
+  plate.position.set(0, CFG.BASE_H - 0.08, 0);
   caseG.add(plate);
   const floor = new THREE.Mesh(new THREE.BoxGeometry(CFG.CHIM_W - 0.14, 0.05, CFG.CHIM_D - 0.14), matDark);
   floor.position.set(CFG.CHIM_X, CFG.BASE_H + 0.05, 0);
@@ -328,31 +371,34 @@ lidG.add(lidMesh);
 }
 { // chimney with perforated windshield plates (real holes via extruded shapes)
   const W = CFG.CHIM_W, H = CFG.CHIM_H, TH = 0.06;
-  function perforatedPlate() {
+  function perforatedPlate(w, holes) {
     const s = new THREE.Shape();
-    const r = 0.1, hw = W / 2, hh = H / 2;
+    const r = 0.1, hw = w / 2, hh = H / 2;
     s.moveTo(-hw + r, -hh); s.lineTo(hw - r, -hh); s.quadraticCurveTo(hw, -hh, hw, -hh + r);
     s.lineTo(hw, hh - r); s.quadraticCurveTo(hw, hh, hw - r, hh);
     s.lineTo(-hw + r, hh); s.quadraticCurveTo(-hw, hh, -hw, hh - r);
     s.lineTo(-hw, -hh + r); s.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
-    const addHole = (x, y, hr) => {
+    for (const [x, y, hr] of holes) {
       const p = new THREE.Path(); p.absarc(x, y, hr, 0, Math.PI * 2, true); s.holes.push(p);
-    };
-    for (let i = 0; i < 4; i++) addHole(-0.75 + i * 0.5, 0.28, 0.105);
-    for (let i = 0; i < 3; i++) addHole(-0.5 + i * 0.5, -0.14, 0.105);
+    }
     const g = new THREE.ExtrudeGeometry(s, { depth: TH, bevelEnabled: false, curveSegments: 10 });
     g.translate(0, 0, -TH / 2);
     return g;
   }
-  const pg = perforatedPlate();
+  // classic Zippo windscreen: two aligned rows of four holes per broad face,
+  // the rows continuing as one column of two on each narrow end
+  const broadHoles = [];
+  for (let i = 0; i < 4; i++) broadHoles.push([-0.75 + i * 0.5, 0.23, 0.1], [-0.75 + i * 0.5, -0.23, 0.1]);
+  const pg = perforatedPlate(W, broadHoles);
   const front = new THREE.Mesh(pg, matChromeDark);
   front.position.set(CFG.CHIM_X, CFG.BASE_H + H / 2, CFG.CHIM_D / 2 - TH / 2);
   const back = new THREE.Mesh(pg, matChromeDark);
   back.position.set(CFG.CHIM_X, CFG.BASE_H + H / 2, -CFG.CHIM_D / 2 + TH / 2);
   caseG.add(front, back);
-  const sideG = new THREE.BoxGeometry(TH, H, CFG.CHIM_D - TH * 2);
+  const eg = perforatedPlate(CFG.CHIM_D - TH * 2, [[0, 0.23, 0.1], [0, -0.23, 0.1]]);
+  eg.rotateY(Math.PI / 2);
   for (const sx of [-1, 1]) {
-    const side = new THREE.Mesh(sideG, matChromeDark);
+    const side = new THREE.Mesh(eg, matChromeDark);
     side.position.set(CFG.CHIM_X + sx * (W / 2 - TH / 2), CFG.BASE_H + H / 2, 0);
     caseG.add(side);
   }
@@ -463,7 +509,7 @@ function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the deb
 const OUT = 'OUT', LIT = 'LIT', EMBER = 'EMBER';
 const sim = {
   lid: { theta: 0, omega: 0, dragging: false, everOpened: false },
-  wheel: { angle: 0, omega: 0, lastSpark: -9 },
+  wheel: { angle: 0, omega: 0, lastSpark: -9, lastTick: -9 },
   squash: { s: 0, v: 0, target: 0 },
   hop: { y: 0, v: 0 },
   camShake: 0,
@@ -471,7 +517,7 @@ const sim = {
     state: OUT,
     bend: new THREE.Vector3(),      // world-space bend offset (spring)
     bendVel: new THREE.Vector3(),
-    turb: 0, flare: 0, ignite: 0, out: 1,
+    turb: 0, flare: 0, ignite: 0, cover: 0, out: 1,
   },
   ember: { t: 0 },
   upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
@@ -675,7 +721,11 @@ function tryIgniteFromSparks() {
   if (!lidIsOpen()) return;                      // sparks only catch with the lid open
   if (sim.flame.state === LIT) return;
   after(CFG.IGNITE_DELAY, () => {
-    if (lidIsOpen() && sim.flame.state !== LIT) setFlame(LIT, 'strike');
+    if (!lidIsOpen() || sim.flame.state === LIT) return;
+    // sparks land at the chimney: a wick dragged far away doesn't catch
+    wickTipWorld(_v1);
+    const lp = caseG.worldToLocal(_v1);
+    if (lp.y < RIM_Y || Math.abs(lp.x - CFG.CHIM_X) < 0.95) setFlame(LIT, 'strike');
   });
 }
 const Actions = {
@@ -684,7 +734,7 @@ const Actions = {
     const now = perfT();
     if (now - sim.wheel.lastSpark < CFG.SPARK_REFRACTORY) return false;
     sim.wheel.lastSpark = now;
-    sim.wheel.omega = clamp(speedVminPerS * 11, 16, 55);
+    sim.wheel.omega = clamp(speedVminPerS * 8, 10, 30);
     sim.counts.sparks++;
     spawnSparks(9 + (Math.random() * 6 | 0), speedVminPerS);
     Audio.strike(clamp01(speedVminPerS / 3));
@@ -840,6 +890,9 @@ function computeFit() {
   cam.fit = Math.max(dH, dW) + 0.6;
 }
 function updateCamera(dt, tSec) {
+  // the open lid hangs off to the right: slide the framing over a touch
+  cam.target.x += (clamp01(sim.lid.theta / CFG.LID_OPEN) * 0.55 - cam.target.x)
+    * (1 - Math.exp(-6 * dt));
   cam.yaw += cam.yawVel * dt;
   cam.pitch = clamp(cam.pitch + cam.pitchVel * dt, -0.45, 0.6);
   const dk = Math.exp(-3.2 * dt);
@@ -879,8 +932,8 @@ function anchorWorld(name, out) {
     case 'mouth': return caseG.localToWorld(out.set(CFG.CHIM_X, RIM_Y, 0));
     case 'mouthX': return caseG.localToWorld(out.set(CFG.CHIM_X + 1, RIM_Y, 0));
     case 'wheel': return caseG.localToWorld(out.set(CFG.WHEEL_X, CFG.WHEEL_Y + 0.2, 0));
-    case 'lidTop': return lidG.localToWorld(out.set(0, CFG.LID_H, CFG.BODY_D / 2 + 0.06));
-    case 'lidCenter': return lidG.localToWorld(out.set(0, CFG.LID_H / 2, CFG.BODY_D / 2 + 0.06));
+    case 'lidTop': return lidG.localToWorld(out.set(-HINGE_X, CFG.LID_H, 0));
+    case 'lidCenter': return lidG.localToWorld(out.set(-HINGE_X, CFG.LID_H / 2, 0));
     case 'baseBottom': return caseG.localToWorld(out.set(0, 0.08, 0));
     case 'baseCenter': return caseG.localToWorld(out.set(0, CFG.BASE_H / 2, 0));
   }
@@ -894,12 +947,13 @@ function rayHit(px, py, meshes) {
 }
 // grab-point screen tracking for natural lid dragging from any camera angle
 function lidPointScreen(theta, out) {
-  const save = lidG.rotation.x;
-  lidG.rotation.x = -theta;
+  const save = lidG.rotation.z;
+  lidG.rotation.z = -theta;
   lidG.updateWorldMatrix(true, false);
-  const p = lidG.localToWorld(_v5.set(0, CFG.LID_H * 0.95, CFG.BODY_D + 0.1));
+  // far top corner, away from the hinge
+  const p = lidG.localToWorld(_v5.set(-HINGE_X - CFG.BODY_W / 2 + 0.2, CFG.LID_H * 0.95, 0));
   toScreen(p, out);
-  lidG.rotation.x = save;
+  lidG.rotation.z = save;
   lidG.updateWorldMatrix(true, false);
   return out;
 }
@@ -942,8 +996,11 @@ function stepPhysics(h) {
       if (!lid.everOpened) { lid.everOpened = true; sim.disc.open = true; updateHints(); }
     }
   }
-  // closing the lid from ANY state kills flame and ember (same band as lidIsClosed)
-  if (lid.theta < 0.12 && sim.flame.state !== OUT) setFlame(OUT, 'lid');
+  // a lid sweeping shut disturbs the flame, then caps it before fully seating
+  if (sim.flame.state === LIT && lid.omega < -3 && lid.theta < 1.0) {
+    sim.flame.turb = Math.max(sim.flame.turb, 0.5);
+  }
+  if (lid.theta < 0.3 && sim.flame.state !== OUT) setFlame(OUT, 'lid');
   // ---- squeeze squash spring ----
   const sq = sim.squash;
   sq.v += ((sq.target - sq.s) * 420 - sq.v * 24) * h;
@@ -974,6 +1031,15 @@ function stepPhysics(h) {
   F.turb = Math.max(0, F.turb - h / CFG.TURB_TIME);
   F.flare = Math.max(0, F.flare - h / 0.38);
   F.ignite = Math.max(0, F.ignite - h / 0.16);
+  // capping the chimney with a held finger slowly smothers the flame
+  if (chimneyHold && !chimneyHold.crossed && F.state === LIT
+    && Math.hypot(chimneyHold.x - chimneyHold.mouthPt.x, chimneyHold.y - chimneyHold.mouthPt.y)
+      < chimneyHold.mouthHalf + 40) {
+    F.cover = clamp01((perfNow - chimneyHold.holdStart - 0.15) / 0.5);
+    if (F.cover >= 1) { F.cover = 0; chimneyHold = null; setFlame(OUT, 'smother'); }
+  } else {
+    F.cover = Math.max(0, F.cover - h * 3);
+  }
   sim.camShake = Math.max(0, sim.camShake - h / 0.3);
   // ---- wick straightening animation (pull taut) ----
   if (wick.straightening) {
@@ -1004,8 +1070,8 @@ function bezier(t, out) {
     it * it * spineA.z + 2 * it * t * spineB.z + t * t * spineC.z);
 }
 function updateFrame(dt, tSec) {
-  // pose the rig
-  lidG.rotation.x = -sim.lid.theta;
+  // pose the rig (side hinge: the lid swings right, in the plane of the face)
+  lidG.rotation.z = -sim.lid.theta;
   const s = sim.squash.s;
   squash.scale.set(1 + s * 0.55, 1 - s, 1 + s * 0.55);
   lighter.position.y = sim.hop.y;
@@ -1032,12 +1098,18 @@ function updateFrame(dt, tSec) {
     flameDir.lerp(_v2, 0.4 * bent);
   }
   flameDir.normalize();
+  // an inverted lighter's flame licks around the outside of the case
+  if (flameDir.y < -0.25) {
+    _v6.set(0, 0, 1).transformDirection(caseG.matrixWorld);
+    flameDir.addScaledVector(_v6, (-flameDir.y - 0.25) * 1.6).normalize();
+  }
 
   let level = 0;  // 0..1 flame presence for audio/light
   if (F.state === LIT) {
     const grow = 1 - F.ignite * F.ignite;
     const len = CFG.FLAME_H * (1 - 0.42 * bent) * (0.9 + 0.14 * vnoise(tSec * 3.1))
-      * (0.25 + 0.75 * grow) * (1 + 1.15 * F.flare) * (1 - 0.35 * F.turb * Math.abs(vnoise(tSec * 31)));
+      * (0.25 + 0.75 * grow) * (1 + 1.15 * F.flare) * (1 - 0.35 * F.turb * Math.abs(vnoise(tSec * 31)))
+      * (1 - 0.78 * F.cover);
     level = clamp01(len / CFG.FLAME_H);
     spineA.copy(tipWorld);
     spineC.copy(tipWorld).addScaledVector(flameDir, len);
@@ -1130,6 +1202,7 @@ function updateFrame(dt, tSec) {
 const pointers = new Map();  // pointerId -> tracker
 let twoMode = null;          // null | {kind:'squeeze'|'zoom', ...}
 let lastTap = null;
+let chimneyHold = null;      // chimney-gesture tracker dwelling over the mouth
 const squeezeState = { popped: false };
 
 function pxSpeedOf(tr) {  // smoothed speed px/s
@@ -1174,6 +1247,8 @@ function beginGesture(tr) {
     tr.mouthHalf = n * 1.15;
     tr.sSign = Math.sign((tr.x - mo.x) * tr.mouthAxis.x + (tr.y - mo.y) * tr.mouthAxis.y) || 1;
     tr.crossed = false;
+    tr.holdStart = perfNow;
+    chimneyHold = tr;
   } else if (tr.gesture === 'wheel') {
     tr.wheelSpeed = 0;
   }
@@ -1194,6 +1269,7 @@ function releaseDecay(tr) {
   return Math.exp(-Math.max(0, (tr.releaseDwell ?? 0) - 20) / 60);
 }
 function endGesture(tr, cancelled) {
+  if (chimneyHold === tr) chimneyHold = null;
   if (tr.gesture === 'lid') {
     sim.lid.dragging = false;
     sim.lid.omega = cancelled ? 0 : clamp(tr.omegaEst * releaseDecay(tr), -45, 45);
@@ -1313,9 +1389,16 @@ function onPointerMove(e) {
     case 'wheel': {
       const sp = (Math.abs(dy) + Math.abs(dx) * 0.35) / dt;   // px/s, mostly vertical
       tr.wheelSpeed = lerp(tr.wheelSpeed || 0, sp, 0.5);
+      // real Zippo strike: the thumb rolls the wheel DOWNWARD against the flint;
+      // upward or sideways rolls just spin it with a gritty scratch, no sparks
+      const down = dy > 0 && dy > Math.abs(dx) * 0.6;
+      tr.wheelDown = lerp(tr.wheelDown || 0, down ? sp : 0, 0.5);
       sim.wheel.omega = clamp(tr.wheelSpeed * CFG.WHEEL_GAIN * Math.sign(dy || 1), -60, 60);
-      if (tr.wheelSpeed > CFG.SPARK_SPEED_VMIN * vmin()) {
-        Actions.strike(tr.wheelSpeed / vmin());
+      if (tr.wheelDown > CFG.SPARK_SPEED_VMIN * vmin()) {
+        Actions.strike(tr.wheelDown / vmin());
+      } else if (tr.wheelSpeed > 50 && perfT() - sim.wheel.lastTick > 0.09) {
+        sim.wheel.lastTick = perfT();
+        Audio.burst({ type: 'bandpass', f: 900 + Math.random() * 500, Q: 2, dur: 0.02, vol: 0.028 });
       }
       break;
     }
@@ -1568,7 +1651,7 @@ function relightHint() {
     : 'the flame is hiding — flick across the screen!';
 }
 const HINTS = [
-  { id: 'open', text: () => 'flip the lid • swipe the wheel — fast', done: () => sim.disc.lit },
+  { id: 'open', text: () => 'flip the lid • flick down the wheel', done: () => sim.disc.lit },
   { id: 'squeeze', text: () => 'try the squeeze: pinch lid-top + base-bottom', done: () => sim.disc.pop },
   { id: 'smother', text: () => 'swipe slowly across the flame to snuff it', done: () => sim.disc.smother },
   { id: 'ember', text: () => 'bend the wick low, then swipe the flame away…', done: () => sim.disc.ember },
@@ -1656,7 +1739,8 @@ updateHints();
 
 /* ============================== DEBUG / TEST API ============================== */
 window.LIGHTER = {
-  CFG, sim, Actions, cam,
+  CFG, sim, Actions, cam, renderer, scene, THREE,
+  mats: { chrome: matChrome, chromeDark: matChromeDark, steel: matSteel, insert: matInsert },
   get state() { return sim.flame.state; },
   get lidTheta() { return sim.lid.theta; },
   get frames() { return frames; },
