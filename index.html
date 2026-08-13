@@ -197,9 +197,12 @@ renderer.toneMappingExposure = 1.06;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(CFG.FOV, 1, 0.1, 120);
 
-{ // dark product-studio environment: off-axis softboxes so flat faces reflect
-  // mostly darkness while rounded edges catch defined light strips. A bright
-  // generic room blows the chrome to white at normal incidence.
+// Dark product-studio environment: off-axis softboxes so flat faces reflect
+// mostly darkness while rounded edges catch defined light strips. A bright
+// generic room blows the chrome to white at normal incidence. Rebaked on
+// WebGL context restore (the PMREM target has no CPU-side copy to restore).
+let envRT = null;
+function bakeEnvironment() {
   const env = new THREE.Scene();
   const shell = new THREE.Mesh(new THREE.BoxGeometry(60, 60, 60),
     new THREE.MeshBasicMaterial({ side: THREE.BackSide }));
@@ -221,9 +224,13 @@ const camera = new THREE.PerspectiveCamera(CFG.FOV, 1, 0.1, 120);
     env.add(m);
   }
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(env, 0.09).texture;
+  const rt = pmrem.fromScene(env, 0.09);
   pmrem.dispose();
+  if (envRT) envRT.dispose();
+  envRT = rt;
+  scene.environment = rt.texture;
 }
+bakeEnvironment();
 function radialCanvas(size, stops, inner = 0) {
   const cv = document.createElement('canvas'); cv.width = cv.height = size;
   const g = cv.getContext('2d');
@@ -233,9 +240,16 @@ function radialCanvas(size, stops, inner = 0) {
   return cv;
 }
 {
-  const bg = new THREE.CanvasTexture(radialCanvas(512, [
-    [0, '#222933'], [0.5, '#151a21'], [1, '#07090c'],
-  ]));
+  // ±2/255 noise dithers the gradient so OLED screens don't show banding rings
+  const cv = radialCanvas(512, [[0, '#222933'], [0.5, '#151a21'], [1, '#07090c']]);
+  const g = cv.getContext('2d');
+  const id = g.getImageData(0, 0, 512, 512);
+  for (let i = 0; i < id.data.length; i += 4) {
+    const n = (Math.random() - 0.5) * 5;
+    id.data[i] += n; id.data[i + 1] += n; id.data[i + 2] += n;
+  }
+  g.putImageData(id, 0, 0);
+  const bg = new THREE.CanvasTexture(cv);
   bg.colorSpace = THREE.SRGBColorSpace;
   scene.background = bg;
 }
@@ -302,7 +316,10 @@ const matSteel = new THREE.MeshStandardMaterial({
 const matInsert = new THREE.MeshStandardMaterial({ color: 0x757b82, metalness: 0.95, roughness: 0.5, envMapIntensity: 0.9 });
 const matDark = new THREE.MeshStandardMaterial({ color: 0x101214, metalness: 0.2, roughness: 0.9 });
 const matWick = new THREE.MeshStandardMaterial({ color: 0xece2cc, metalness: 0, roughness: 0.95 });
-const matWickTip = new THREE.MeshStandardMaterial({ color: 0x272120, metalness: 0, roughness: 0.95 });
+const matWickTip = new THREE.MeshStandardMaterial({
+  color: 0x272120, metalness: 0, roughness: 0.95,
+  emissive: 0xff6a1a, emissiveIntensity: 0,   // glows while burning, smolders out
+});
 
 /* ============================== MODEL ============================== */
 const lighter = new THREE.Group();      // world root: recoil hop lives here
@@ -493,8 +510,8 @@ function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the deb
   wick.base.updateWorldMatrix(true, true);
 }
 
-// contact shadow
-{
+// contact shadow (lifts and fades with the squeeze-pop hop)
+const shadowMesh = (() => {
   const t = new THREE.CanvasTexture(radialCanvas(256, [
     [0, 'rgba(0,0,0,0.55)'], [0.6, 'rgba(0,0,0,0.25)'], [1, 'rgba(0,0,0,0)'],
   ]));
@@ -504,13 +521,14 @@ function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the deb
   m.position.y = -0.7;
   m.renderOrder = -1;
   scene.add(m);
-}
+  return m;
+})();
 
 /* ============================== SIM STATE ============================== */
 const OUT = 'OUT', LIT = 'LIT', EMBER = 'EMBER';
 const sim = {
   lid: { theta: 0, omega: 0, dragging: false, everOpened: false },
-  wheel: { angle: 0, omega: 0, lastSpark: -9, lastTick: -9 },
+  wheel: { angle: 0, omega: 0, lastSpark: -9, lastTick: -9, flash: 0 },
   squash: { s: 0, v: 0, target: 0 },
   hop: { y: 0, v: 0 },
   camShake: 0,
@@ -552,12 +570,19 @@ const Audio = {
   // 'interrupted' is a WebKit extension state (phone call, Siri) that also needs resuming
   resume() { if (this.ctx && this.ctx.state !== 'running') this.ctx.resume().catch(() => {}); },
   suspend() { if (this.ctx && this.ctx.state === 'running') this.ctx.suspend().catch(() => {}); },
+  // auto-suspend when nothing has sounded for a while: frees the audio session
+  // (input handlers all call resume(), so the next touch wakes it instantly)
+  maybeIdle(level) {
+    if (this.ctx && this.ctx.state === 'running' && sim.flame.state === OUT
+      && level < 0.01 && !this.creak && this.t() > (this.busyUntil || 0) + 3) this.suspend();
+  },
   t() { return this.ctx.currentTime; },
   tone(f0, f1, type, dur, vol, t0) {
     if (!this.ctx) return;
     try {
       const o = this.ctx.createOscillator(), g = this.ctx.createGain();
       o.type = type; t0 = t0 ?? this.t();
+      this.busyUntil = Math.max(this.busyUntil || 0, t0 + dur + 0.2);
       o.frequency.setValueAtTime(Math.max(20, f0), t0);
       if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
       g.gain.setValueAtTime(Math.max(0.0001, vol), t0);
@@ -570,6 +595,7 @@ const Audio = {
     if (!this.ctx) return;
     try {
       t0 = t0 ?? this.t();
+      this.busyUntil = Math.max(this.busyUntil || 0, t0 + dur + 0.2);
       const s = this.ctx.createBufferSource();
       s.buffer = this.noiseBuf; s.loop = true;
       const fl = this.ctx.createBiquadFilter();
@@ -697,8 +723,10 @@ function setFlame(next, cause) {
       sim.disc.relight = true;
       Audio.fwoomp();
       buzz([10, 40, 25]);
-    } else {
+    } else {                        // the catch gets its own little whoomph
+      sim.flame.flare = 0.45;
       Audio.igniteTick();
+      buzz([8, 25, 14]);
     }
     requestWake();
   } else if (next === EMBER) {      // the flame hides inside the chimney
@@ -709,8 +737,8 @@ function setFlame(next, cause) {
     requestWake();
   } else {                          // OUT
     if (prev === LIT) {
-      if (cause === 'smother') { sim.counts.smothers++; sim.disc.smother = true; spawnSmoke(7, 1); Audio.puff(); }
-      else if (cause === 'shake') { sim.counts.snuffs++; spawnSmoke(6, 0.9); Audio.puff(); }
+      if (cause === 'smother') { sim.counts.smothers++; sim.disc.smother = true; spawnSmoke(7, 1); Audio.puff(); buzz(6); }
+      else if (cause === 'shake') { sim.counts.snuffs++; spawnSmoke(6, 0.9); Audio.puff(); buzz(6); }
       else if (cause !== 'lid') { spawnSmoke(4, 0.7); }
     }
     if (prev === EMBER && cause === 'decay') spawnSmoke(3, 0.45);
@@ -736,6 +764,7 @@ const Actions = {
     if (now - sim.wheel.lastSpark < CFG.SPARK_REFRACTORY) return false;
     sim.wheel.lastSpark = now;
     sim.wheel.omega = clamp(speedVminPerS * 8, 10, 30);
+    sim.wheel.flash = 1;
     sim.counts.sparks++;
     spawnSparks(9 + (Math.random() * 6 | 0), speedVminPerS);
     Audio.strike(clamp01(speedVminPerS / 3));
@@ -789,7 +818,7 @@ const Actions = {
     sim.disc.pop = true;
     sim.lid.theta = Math.max(sim.lid.theta, 0.02);
     sim.lid.omega = CFG.LID_POP_VEL;
-    sim.hop.v = 1.5;
+    sim.hop.v = 4.2;   // a visible kick off the table, with one small bounce
     sim.camShake = 1;
     Audio.pop();
     buzz(50);
@@ -835,6 +864,15 @@ const pilotSpr = makeSprite(TEX.core, [2.4, 1.4, 0.55]);
 const pilotGlow = makeSprite(TEX.glow, [1.9, 0.85, 0.3]);   // inside the chimney: leaks via the holes
 const flameLight = new THREE.PointLight(0xff9a3c, 0, 11, 2);
 scene.add(flameLight);
+// warm pool of light on the ground while burning (fake GI for one quad)
+const floorGlow = new THREE.Mesh(new THREE.PlaneGeometry(7, 7), new THREE.MeshBasicMaterial({
+  map: TEX.glow, transparent: true, depthWrite: false,
+  blending: THREE.AdditiveBlending, opacity: 0,
+}));
+floorGlow.material.color.setRGB(1.1, 0.5, 0.18);
+floorGlow.rotation.x = -Math.PI / 2;
+floorGlow.position.y = -0.68;
+scene.add(floorGlow);
 
 const sparks = [];
 for (let i = 0; i < 40; i++) {
@@ -898,6 +936,8 @@ function updateCamera(dt, tSec) {
   cam.pitch = clamp(cam.pitch + cam.pitchVel * dt, -0.45, 0.6);
   const dk = Math.exp(-3.2 * dt);
   cam.yawVel *= dk; cam.pitchVel *= dk;
+  if (Math.abs(cam.yawVel) < 1e-3) cam.yawVel = 0;
+  if (Math.abs(cam.pitchVel) < 1e-3) cam.pitchVel = 0;
   const d = cam.fit * cam.zoom;
   const cp = Math.cos(cam.pitch);
   camera.position.set(
@@ -1016,6 +1056,7 @@ function stepPhysics(h) {
   // ---- flint wheel ----
   sim.wheel.omega *= Math.exp(-CFG.WHEEL_FRICTION * h);
   sim.wheel.angle += sim.wheel.omega * h;
+  sim.wheel.flash = Math.max(0, sim.wheel.flash - h / 0.14);
   // ---- ember decay ----
   if (sim.flame.state === EMBER) {
     sim.ember.t -= h;
@@ -1137,6 +1178,7 @@ function updateFrame(dt, tSec) {
     bezier(0.45, _v1);
     flameLight.position.copy(_v1);
     flameLight.intensity = CFG.FLAME_LIGHT * level * (0.75 + 0.35 * flick) * (1 + 2.6 * F.flare);
+    matWickTip.emissiveIntensity = 1.5 * level * (0.75 + 0.25 * flick);
   } else if (F.state === EMBER) {
     for (const L of flameLayers) L.spr.visible = false;
     const pilotK = lerp(0.3, 1, clamp01(sim.ember.t / CFG.EMBER_LIFE));
@@ -1154,13 +1196,25 @@ function updateFrame(dt, tSec) {
     pilotGlow.material.opacity = (0.4 + 0.25 * pf) * pilotK;
     flameLight.position.copy(_v1);
     flameLight.intensity = 1.3 * pilotK * pf;
+    matWickTip.emissiveIntensity = 1.2 * pilotK * pf;
   } else {
     for (const L of flameLayers) L.spr.visible = false;
     pilotSpr.visible = false;
     pilotGlow.visible = false;
-    flameLight.intensity = 0;
+    // sparks glint on the chrome: the idle flame light doubles as strike flash
+    if (sim.wheel.flash > 0) {
+      caseG.localToWorld(_v1.set(CFG.WHEEL_X + 0.4, CFG.WHEEL_Y + 0.5, 0));
+      flameLight.position.copy(_v1);
+      flameLight.intensity = 6 * sim.wheel.flash * sim.wheel.flash * (0.75 + 0.25 * vnoise(tSec * 60));
+    } else {
+      flameLight.intensity = 0;
+    }
+    matWickTip.emissiveIntensity = Math.max(0, matWickTip.emissiveIntensity - 6 * dt);
   }
   smoothFlameLevel = lerp(smoothFlameLevel, level, 1 - Math.exp(-8 * dt));
+  floorGlow.material.opacity = 0.5 * smoothFlameLevel * (0.8 + 0.2 * flick);
+  shadowMesh.material.opacity = 1 / (1 + sim.hop.y * 1.2);
+  shadowMesh.scale.setScalar(1 + sim.hop.y * 0.12);
 
   // burn loop audio
   if (Audio.ctx) {
@@ -1178,7 +1232,10 @@ function updateFrame(dt, tSec) {
     sp.spr.visible = sp.life > 0;
     const k = clamp01(sp.life / sp.max);
     sp.spr.position.copy(sp.pos);
-    sp.spr.scale.set(0.05 + 0.05 * k, 0.05 + 0.05 * k, 1);
+    // stretch along screen-space velocity: dots become streaks
+    const vr = sp.vel.dot(cam.right), vu = sp.vel.dot(cam.up);
+    sp.spr.material.rotation = Math.atan2(-vr, vu);
+    sp.spr.scale.set(0.035 + 0.03 * k, (0.05 + 0.05 * k) * (1 + 0.22 * Math.hypot(vr, vu)), 1);
     sp.spr.material.opacity = k;
   }
   // smoke
@@ -1288,6 +1345,15 @@ function endGesture(tr, cancelled) {
     let total = 0;
     for (const j of wick.joints) total += 2 * Math.acos(clamp(j.quaternion.w, -1, 1));
     if (total < 0.35) wick.straightening = true;
+  } else if (tr.gesture === 'wheel') {
+    // a near-miss swipe fizzles: "right idea, more speed" (never ignites)
+    if (!cancelled && (tr.wheelDown || 0) > CFG.SPARK_SPEED_VMIN * vmin() * 0.4
+      && (tr.wheelDown || 0) < CFG.SPARK_SPEED_VMIN * vmin()
+      && perfT() - sim.wheel.lastSpark > CFG.SPARK_REFRACTORY) {
+      spawnSparks(2, 0.7);
+      Audio.strike(0.3);
+      buzz(5);
+    }
   }
   tr.gesture = 'dead';
 }
@@ -1556,6 +1622,9 @@ canvas.addEventListener('pointermove', onPointerMove);
 canvas.addEventListener('pointerup', onPointerUp);
 canvas.addEventListener('pointercancel', onPointerCancel);
 canvas.addEventListener('lostpointercapture', () => {});
+// GPU resets happen on long mobile sessions; recover instead of going black
+canvas.addEventListener('webglcontextlost', e => e.preventDefault());
+canvas.addEventListener('webglcontextrestored', () => { bakeEnvironment(); onResize(); idleT = 0; });
 for (const ev of ['contextmenu', 'dblclick', 'gesturestart', 'gesturechange']) {
   window.addEventListener(ev, e => e.preventDefault(), { passive: false });
 }
@@ -1693,8 +1762,11 @@ const HINTS = [
 ];
 let hintIdx = 0, hintTimer = 0;
 function currentHints() {
-  // the relight hint only makes sense while an ember is actually hiding
-  return HINTS.filter(h => !h.done() && (h.id !== 'relight' || sim.flame.state === EMBER));
+  // only show hints the user can act on right now
+  return HINTS.filter(h => !h.done()
+    && (h.id !== 'relight' || sim.flame.state === EMBER)
+    && ((h.id !== 'smother' && h.id !== 'ember') || sim.flame.state === LIT)
+    && (h.id !== 'squeeze' || sim.disc.lit));
 }
 function updateHints() {
   const hs = currentHints();
@@ -1717,6 +1789,7 @@ function tickHints(dt) {
 }
 
 /* ============================== RESIZE / VISIBILITY / LOOP ============================== */
+let idleT = 0, lastPresentT = 0;
 function onResize() {
   const w = window.innerWidth, h = window.innerHeight;
   camera.aspect = w / h;
@@ -1726,6 +1799,7 @@ function onResize() {
   composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, CFG.MAX_DPR));
   composer.setSize(w, h);
   computeFit();
+  idleT = 0;
 }
 window.addEventListener('resize', onResize);
 window.addEventListener('orientationchange', () => setTimeout(onResize, 60));
@@ -1734,6 +1808,18 @@ onResize();
 let running = true, rafId = 0, lastT = 0, acc = 0;
 let fpsEma = 60, warm = 0;
 let frames = 0;
+// truly at rest: skip GPU presentation (the canvas keeps its last frame) —
+// the dominant battery cost of the resting state. A heartbeat frame every
+// 500ms caps the worst any missed wake-up could do.
+function simIsIdle() {
+  return sim.flame.state === OUT && pointers.size === 0 && !twoMode && !sim.lid.dragging
+    && sim.lid.omega === 0 && (sim.lid.theta === 0 || sim.lid.theta === CFG.LID_OPEN)
+    && sim.hop.y === 0 && sim.hop.v === 0 && Math.abs(sim.squash.s) < 1e-4 && sim.squash.target === 0
+    && sim.camShake === 0 && sim.timers.length === 0 && !wick.straightening
+    && Math.abs(sim.wheel.omega) < 0.01 && sim.wheel.flash === 0
+    && cam.yawVel === 0 && cam.pitchVel === 0
+    && sparks.every(s => s.life <= 0) && smoke.every(s => s.life <= 0);
+}
 function loop(tms) {
   if (!running) return;
   rafId = requestAnimationFrame(loop);
@@ -1749,7 +1835,12 @@ function loop(tms) {
   updateGravity(dt);
   updateFrame(dt, tms / 1000);
   tickHints(dt);
-  if (bloomOn) composer.render(); else renderer.render(scene, camera);
+  Audio.maybeIdle(smoothFlameLevel);
+  idleT = simIsIdle() ? idleT + dt : 0;
+  if (idleT < 1.5 || tms - lastPresentT > 500) {
+    lastPresentT = tms;
+    if (bloomOn) composer.render(); else renderer.render(scene, camera);
+  }
   frames++;
 }
 rafId = requestAnimationFrame(loop);
@@ -1763,6 +1854,7 @@ document.addEventListener('visibilitychange', () => {
   } else {
     running = true;
     lastT = 0;
+    idleT = 0;
     rafId = requestAnimationFrame(loop);
     Audio.resume();
     if (sim.flame.state !== OUT) requestWake();
