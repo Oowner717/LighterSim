@@ -548,9 +548,36 @@ await waitL('LIGHTER.guideOpen');
 await page.click('#guideClose');
 check('close button closes the guide', await L('LIGHTER.guideOpen') === false);
 
+/* 17 ── debug fast-forwards + flame colours */
+await L('LIGHTER.refill()');
+await page.click('#ffFuel');
+check('debug button fast-forwards fuel', Math.abs(await L('LIGHTER.fuel') - 0.75) < 0.01,
+  `fuel=${await L('LIGHTER.fuel')}`);
+await page.click('#ffFuel');
+await page.click('#ffFuel');
+await page.click('#ffFuel');
+check('four fuel taps drain the tank dry', await L('LIGHTER.fuel') === 0);
+{
+  const flint0 = await L('LIGHTER.flint');
+  await page.click('#ffFlint');
+  check('debug button fast-forwards flint wear', await L('LIGHTER.flint') === flint0 + 20);
+}
+await L('LIGHTER.refill()');
+{
+  await page.click('#flameBtn');
+  check('flame swatch cycles the colour',
+    await L('LIGHTER.flameCol') === 'blue' && await L('LIGHTER.flameLightHex') === '5f9dff');
+  await page.click('#flameBtn');
+  await page.click('#flameBtn');
+  await page.click('#flameBtn');
+  check('flame colours round-trip to classic',
+    await L('LIGHTER.flameCol') === 'classic' && await L('LIGHTER.flameLightHex') === 'ff9a3c');
+}
+
 /* discovered tricks persist across sessions */
 await L('LIGHTER.sim.fuel = 0.42');
 await L('LIGHTER.setFinish("brass")');
+await L('LIGHTER.setFlameCol("emerald")');
 await page.evaluate(() => localStorage.setItem('lighter.disc', JSON.stringify({ lit: true, pop: true })));
 await page.reload();
 await page.waitForFunction(() => window.__booted && window.LIGHTER && window.LIGHTER.frames > 5, null, { timeout: 30000 });
@@ -562,6 +589,8 @@ check('fuel level persists across reload', Math.abs(await L('LIGHTER.fuel') - 0.
 check('finish persists across reload',
   await L('LIGHTER.finish') === 'brass' && await L('LIGHTER.mats.chrome.color.getHexString()') === 'd6a84f'
   && await L('document.getElementById("finishSwatch").style.backgroundColor') === 'rgb(214, 168, 79)');
+check('flame colour persists across reload',
+  await L('LIGHTER.flameCol') === 'emerald' && await L('LIGHTER.flameLightHex') === '57e084');
 
 /* 8 ── no console errors */
 check('no console errors', consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 6)));
