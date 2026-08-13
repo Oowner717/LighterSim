@@ -353,7 +353,24 @@ await L('LIGHTER.straighten()');
   }, [tip]);
   await page.waitForTimeout(200);
   check('the locked wick says why',
-    await L('/wick only bends cold|ember die/.test(document.getElementById("hint").textContent)'));
+    await L('/wick only bends cold/.test(document.getElementById("hint").textContent)'));
+  { // regression: the ember's pilot glow sits ON the tip and the hint says to
+    // tap it — the cold-only gate must not swallow that tap
+    await L('LIGHTER.bendWick(1)');
+    await lightIt();
+    await swipeAcrossMouth(800);
+    await waitL('LIGHTER.state === "EMBER"');
+    const emberTip = await L('LIGHTER.anchor("tip")');
+    await page.evaluate(async ([p]) => {
+      window.__pt('pointerdown', 68, p.x, p.y);
+      await window.__sleep(70);
+      window.__pt('pointerup', 68, p.x, p.y);
+    }, [emberTip]);
+    await waitL('LIGHTER.state === "LIT"', 8000);
+    check('tapping the hidden ember on the wick still relights it', true);
+    await L('LIGHTER.straighten()');
+    await waitL('!LIGHTER.wickBent()');
+  }
 
   // put it out, and the same drag now works
   await settleLid(false);
