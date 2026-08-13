@@ -110,8 +110,9 @@ const CFG = {
   // The lid box overlaps the base by 0.12 so the mating roundings close
   // into a tight seam line; visible lid height stays 1.5.
   BODY_W: 3.8, BODY_D: 1.31, BASE_H: 4.2, LID_H: 1.62, LID_OVERLAP: 0.12, EDGE_R: 0.34,
-  CHIM_X: -0.35, CHIM_W: 2.3, CHIM_D: 1.02, CHIM_H: 1.22,
-  WHEEL_X: 1.30, WHEEL_Y: 4.68, WHEEL_R: 0.52, WHEEL_T: 0.40,
+  // hinge + wheel on the LEFT, chimney/wick on the RIGHT (lid opens leftward)
+  CHIM_X: 0.35, CHIM_W: 2.3, CHIM_D: 1.02, CHIM_H: 1.22,
+  WHEEL_X: -1.30, WHEEL_Y: 4.68, WHEEL_R: 0.52, WHEEL_T: 0.40,
 
   // lid hinge (over-center cam). Flicks >~16 rad/s carry through the cam;
   // anything weaker falls back to the nearest end. Pop is the hardest snap.
@@ -313,7 +314,7 @@ scene.add(lighter);
 
 // Real Zippos hinge on the narrow SIDE next to the flint wheel; the lid swings
 // sideways in the plane of the wide face.
-const HINGE_Y = CFG.BASE_H - CFG.LID_OVERLAP, HINGE_X = CFG.BODY_W / 2 + 0.06;
+const HINGE_Y = CFG.BASE_H - CFG.LID_OVERLAP, HINGE_X = -(CFG.BODY_W / 2 + 0.06);
 const RIM_Y = CFG.BASE_H + CFG.CHIM_H;
 lidG.position.set(HINGE_X, HINGE_Y, 0);
 
@@ -357,7 +358,7 @@ lidG.add(lidMesh);
     k.position.set(0, 0, z); lidG.add(k);
   }
   const camBar = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.4, 0.3), matInsert);
-  camBar.position.set(-0.32, -0.04, 0);
+  camBar.position.set(0.32, -0.04, 0);
   lidG.add(camBar);
 }
 { // insert shoulder fills the case mouth + dark inner floor
@@ -841,9 +842,9 @@ for (let i = 0; i < 40; i++) {
 }
 function spawnSparks(n, speedK) {
   caseG.updateWorldMatrix(true, false);
-  const origin = _v1.set(CFG.WHEEL_X - 0.1, CFG.WHEEL_Y + CFG.WHEEL_R * 0.8, 0);
+  const origin = _v1.set(CFG.WHEEL_X + 0.1, CFG.WHEEL_Y + CFG.WHEEL_R * 0.8, 0);
   caseG.localToWorld(origin);
-  const baseDir = _v2.set(-1.35, 1.8, 0).normalize().transformDirection(caseG.matrixWorld);
+  const baseDir = _v2.set(1.35, 1.8, 0).normalize().transformDirection(caseG.matrixWorld);
   let spawned = 0;
   for (const s of sparks) {
     if (spawned >= n) break;
@@ -890,8 +891,8 @@ function computeFit() {
   cam.fit = Math.max(dH, dW) + 0.6;
 }
 function updateCamera(dt, tSec) {
-  // the open lid hangs off to the right: slide the framing over a touch
-  cam.target.x += (clamp01(sim.lid.theta / CFG.LID_OPEN) * 0.55 - cam.target.x)
+  // the open lid hangs off to the left: slide the framing over a touch
+  cam.target.x += (clamp01(sim.lid.theta / CFG.LID_OPEN) * -0.55 - cam.target.x)
     * (1 - Math.exp(-6 * dt));
   cam.yaw += cam.yawVel * dt;
   cam.pitch = clamp(cam.pitch + cam.pitchVel * dt, -0.45, 0.6);
@@ -948,10 +949,10 @@ function rayHit(px, py, meshes) {
 // grab-point screen tracking for natural lid dragging from any camera angle
 function lidPointScreen(theta, out) {
   const save = lidG.rotation.z;
-  lidG.rotation.z = -theta;
+  lidG.rotation.z = theta;
   lidG.updateWorldMatrix(true, false);
   // far top corner, away from the hinge
-  const p = lidG.localToWorld(_v5.set(-HINGE_X - CFG.BODY_W / 2 + 0.2, CFG.LID_H * 0.95, 0));
+  const p = lidG.localToWorld(_v5.set(-HINGE_X + CFG.BODY_W / 2 - 0.2, CFG.LID_H * 0.95, 0));
   toScreen(p, out);
   lidG.rotation.z = save;
   lidG.updateWorldMatrix(true, false);
@@ -1070,8 +1071,8 @@ function bezier(t, out) {
     it * it * spineA.z + 2 * it * t * spineB.z + t * t * spineC.z);
 }
 function updateFrame(dt, tSec) {
-  // pose the rig (side hinge: the lid swings right, in the plane of the face)
-  lidG.rotation.z = -sim.lid.theta;
+  // pose the rig (side hinge: the lid swings left, in the plane of the face)
+  lidG.rotation.z = sim.lid.theta;
   const s = sim.squash.s;
   squash.scale.set(1 + s * 0.55, 1 - s, 1 + s * 0.55);
   lighter.position.y = sim.hop.y;
@@ -1212,7 +1213,10 @@ function classify(px, py) {
   const S = uiScale();
   if (lidIsOpen()) {
     const tp = anchorScreen('tip');
-    if (Math.hypot(px - tp.x, py - tp.y) < CFG.R_TIP * S) return 'wick';
+    // a bent wick is tucked inside the chimney: shrink its grab zone so the
+    // steal-the-flame swipe across the mouth can't accidentally drag it
+    const tipR = CFG.R_TIP * S * (wickIsBent() ? 0.55 : 1);
+    if (Math.hypot(px - tp.x, py - tp.y) < tipR) return 'wick';
     const wh = anchorScreen('wheel');
     if (Math.hypot(px - wh.x, py - wh.y) < CFG.R_WHEEL * S) return 'wheel';
     const mo = anchorScreen('mouth');
@@ -1425,6 +1429,16 @@ function onPointerMove(e) {
       tr.orbitVyaw = lerp(tr.orbitVyaw || 0, -dx * k / dt, 0.5);
       tr.orbitVpitch = lerp(tr.orbitVpitch || 0, dy * k * 0.8 / dt, 0.5);
       break;
+    }
+  }
+  // scooping upward pulls a hidden ember back up to full flame (fires live,
+  // mid-swipe, so it feels immediate; works on the case, chimney or open air)
+  if (sim.flame.state === EMBER && !tr.relit
+    && (tr.gesture === 'case' || tr.gesture === 'orbit' || tr.gesture === 'chimney')) {
+    tr.upDist = (tr.upDist || 0) + Math.max(0, -dy);
+    if (dy < 0 && tr.upDist > vmin() * 0.1 && tr.speed > 1.2 * vmin()) {
+      tr.relit = true;
+      Actions.relight('flick');
     }
   }
 }
@@ -1644,11 +1658,11 @@ function updateGravity(dt) {
 }
 
 /* ============================== HINTS ============================== */
-// works with denied/absent motion sensors too: the flick fallback gets hinted instead
+// works with denied/absent motion sensors too: the swipe-up scoop gets hinted
 function relightHint() {
   return (Motion.hasOrient || Motion.sawMotion)
-    ? 'the flame is hiding — snap the phone!'
-    : 'the flame is hiding — flick across the screen!';
+    ? 'the flame is hiding — snap the phone or swipe up!'
+    : 'the flame is hiding — swipe up fast to pull it back!';
 }
 const HINTS = [
   { id: 'open', text: () => 'flip the lid • flick down the wheel', done: () => sim.disc.lit },
