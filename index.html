@@ -98,7 +98,7 @@ const CFG = {
   // display
   MAX_DPR: 1.75,
   FOV: 34,
-  FIT_HALF_H: 4.45,          // world half-height the camera must frame
+  FIT_HALF_H: 4.7,           // world half-height the camera must frame
   FIT_HALF_W: 3.4,
   CAM_TARGET_Y: 3.45,
   ZOOM_MIN: 0.62, ZOOM_MAX: 1.9,
@@ -110,9 +110,10 @@ const CFG = {
   // The lid box overlaps the base by 0.12 so the mating roundings close
   // into a tight seam line; visible lid height stays 1.5.
   BODY_W: 3.8, BODY_D: 1.31, BASE_H: 4.2, LID_H: 1.62, LID_OVERLAP: 0.12, EDGE_R: 0.34,
-  // hinge + wheel on the LEFT, chimney/wick on the RIGHT (lid opens leftward)
-  CHIM_X: 0.35, CHIM_W: 2.3, CHIM_D: 1.02, CHIM_H: 1.22,
-  WHEEL_X: -1.30, WHEEL_Y: 4.68, WHEEL_R: 0.52, WHEEL_T: 0.40,
+  // hinge on the LEFT (lid opens leftward), chimney/wick left of center,
+  // flint wheel on the RIGHT — clear of the open lid for the striking thumb
+  CHIM_X: -0.35, CHIM_W: 2.3, CHIM_D: 1.02, CHIM_H: 1.22,
+  WHEEL_X: 1.30, WHEEL_Y: 4.68, WHEEL_R: 0.52, WHEEL_T: 0.40,
 
   // lid hinge (over-center cam). Flicks >~16 rad/s carry through the cam;
   // anything weaker falls back to the nearest end. Pop is the hardest snap.
@@ -142,9 +143,10 @@ const CFG = {
   WICK_JOINT_MAX: [0.32, 0.95, 1.0, 0.9],   // per-joint plastic bend limit (rad)
 
   // flame
-  FLAME_H: 1.28,
+  FLAME_H: 1.62,
+  FLAME_W: 1.18,             // extra width on top of the height scaling
   FLAME_BEND_K: 26, FLAME_BEND_C: 6.0,
-  FLAME_LIGHT: 9.5,          // point light intensity while LIT
+  FLAME_LIGHT: 11,           // point light intensity while LIT
   EMBER_LIFE: 12,            // s of unattended pilot before it dies
   TURB_TIME: 0.9,            // s of hard flicker after a fast swipe
 
@@ -506,7 +508,8 @@ function solveWickIK(targetWorld) {
 function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the debug/test path)
   const angles = [0.25, 0.75, 0.85, 0.6];
   const axis = _v1.set(0, 0, 1);
-  wick.joints.forEach((j, i) => j.quaternion.setFromAxisAngle(axis, angles[i] * clamp01(k)));
+  // bend away from the hinge so the riding flame sits over the chimney middle
+  wick.joints.forEach((j, i) => j.quaternion.setFromAxisAngle(axis, -angles[i] * clamp01(k)));
   wick.base.updateWorldMatrix(true, true);
 }
 
@@ -880,9 +883,9 @@ for (let i = 0; i < 40; i++) {
 }
 function spawnSparks(n, speedK) {
   caseG.updateWorldMatrix(true, false);
-  const origin = _v1.set(CFG.WHEEL_X + 0.1, CFG.WHEEL_Y + CFG.WHEEL_R * 0.8, 0);
+  const origin = _v1.set(CFG.WHEEL_X - 0.1, CFG.WHEEL_Y + CFG.WHEEL_R * 0.8, 0);
   caseG.localToWorld(origin);
-  const baseDir = _v2.set(1.35, 1.8, 0).normalize().transformDirection(caseG.matrixWorld);
+  const baseDir = _v2.set(-1.35, 1.8, 0).normalize().transformDirection(caseG.matrixWorld);
   let spawned = 0;
   for (const s of sparks) {
     if (spawned >= n) break;
@@ -1137,7 +1140,7 @@ function updateFrame(dt, tSec) {
   flameDir.copy(sim.upDir).add(F.bend);
   if (bent > 0.05) {
     wickTangent(_v2);
-    flameDir.lerp(_v2, 0.4 * bent);
+    flameDir.lerp(_v2, 0.22 * bent);   // mostly upright: flames burn up
   }
   flameDir.normalize();
   // an inverted lighter's flame licks around the outside of the case
@@ -1149,7 +1152,8 @@ function updateFrame(dt, tSec) {
   let level = 0;  // 0..1 flame presence for audio/light
   if (F.state === LIT) {
     const grow = 1 - F.ignite * F.ignite;
-    const len = CFG.FLAME_H * (1 - 0.42 * bent) * (0.9 + 0.14 * vnoise(tSec * 3.1))
+    // stays visible over the windshield even from a bent wick down inside
+    const len = CFG.FLAME_H * (1 - 0.22 * bent) * (0.9 + 0.14 * vnoise(tSec * 3.1))
       * (0.25 + 0.75 * grow) * (1 + 1.15 * F.flare) * (1 - 0.35 * F.turb * Math.abs(vnoise(tSec * 31)))
       * (1 - 0.78 * F.cover);
     level = clamp01(len / CFG.FLAME_H);
@@ -1166,7 +1170,7 @@ function updateFrame(dt, tSec) {
       _v1.addScaledVector(cam.right, wig).addScaledVector(cam.up, wig2);
       spr.position.copy(_v1);
       const fs = flick * (1 + 0.55 * F.flare);
-      spr.scale.set(L.sx * len * fs, L.sy * len * fs * (1 + 0.35 * F.flare), 1);
+      spr.scale.set(L.sx * len * fs * CFG.FLAME_W, L.sy * len * fs * (1 + 0.35 * F.flare), 1);
       spr.material.opacity = L.op * grow * (0.8 + 0.2 * flick);
     }
     pilotSpr.visible = false;
@@ -1203,7 +1207,7 @@ function updateFrame(dt, tSec) {
     pilotGlow.visible = false;
     // sparks glint on the chrome: the idle flame light doubles as strike flash
     if (sim.wheel.flash > 0) {
-      caseG.localToWorld(_v1.set(CFG.WHEEL_X + 0.4, CFG.WHEEL_Y + 0.5, 0));
+      caseG.localToWorld(_v1.set(CFG.WHEEL_X - 0.4, CFG.WHEEL_Y + 0.5, 0));
       flameLight.position.copy(_v1);
       flameLight.intensity = 6 * sim.wheel.flash * sim.wheel.flash * (0.75 + 0.25 * vnoise(tSec * 60));
     } else {
