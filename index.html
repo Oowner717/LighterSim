@@ -45,7 +45,7 @@
   #motionBtn {
     position: fixed;
     right: calc(12px + env(safe-area-inset-right, 0px));
-    top: calc(12px + env(safe-area-inset-top, 0px));
+    top: calc(48px + env(safe-area-inset-top, 0px));   /* below the fuel/flint HUD */
     padding: 8px 14px;
     border-radius: 999px;
     border: 1px solid rgba(160, 175, 190, 0.35);
@@ -69,10 +69,48 @@
     padding: 0;
     backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   }
+  #finishBtn {
+    position: fixed;
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    top: calc(58px + env(safe-area-inset-top, 0px));
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: 1px solid rgba(160, 175, 190, 0.35);
+    background: rgba(18, 22, 28, 0.6);
+    padding: 0;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  }
+  #finishBtn i {
+    display: block; width: 20px; height: 20px; border-radius: 50%;
+    margin: 0 auto;
+    background-color: #d9dee3;
+    box-shadow: inset 0 -2px 3px rgba(0, 0, 0, 0.4), inset 0 2px 2px rgba(255, 255, 255, 0.3);
+  }
   /* the circles stay small; the tap targets don't (44px platform minimum) */
-  #infoBtn::after, #guideClose::after {
+  #infoBtn::after, #guideClose::after, #finishBtn::after {
     content: ''; position: absolute; inset: -7px; border-radius: 50%;
   }
+  #hud {
+    position: fixed;
+    right: calc(12px + env(safe-area-inset-right, 0px));
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    width: 96px;
+    pointer-events: none;
+  }
+  .hrow { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; }
+  .hrow span {
+    width: 28px; text-align: right;
+    font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: rgba(200, 210, 220, 0.62);
+  }
+  .hbar {
+    flex: 1; height: 5px; border-radius: 99px;
+    background: rgba(255, 255, 255, 0.09); overflow: hidden;
+  }
+  .hbar i { display: block; height: 100%; border-radius: 99px; width: 100%; }
+  #hFuel { background: linear-gradient(90deg, #d97a2b, #ffb648); }
+  #hud.low #hFuel { background: #ff6242; }
+  #hFlint { background: linear-gradient(90deg, #78909f, #a9bfcd); }
   #guide {
     position: fixed; inset: 0; z-index: 10;
     background: rgba(4, 6, 9, 0.55);
@@ -147,6 +185,11 @@
 <div id="hint"></div>
 <button id="motionBtn" type="button">Enable motion</button>
 <button id="infoBtn" type="button" aria-label="How a Zippo works">?</button>
+<button id="finishBtn" type="button" aria-label="Change case finish"><i id="finishSwatch"></i></button>
+<div id="hud" aria-hidden="true">
+  <div class="hrow"><span>fuel</span><div class="hbar"><i id="hFuel"></i></div></div>
+  <div class="hrow"><span>flint</span><div class="hbar"><i id="hFlint"></i></div></div>
+</div>
 <div id="guide" role="dialog" aria-modal="true" aria-label="How a Zippo works">
   <div id="guidePanel">
     <div id="guideHead">
@@ -220,8 +263,8 @@
         <p>The same windproof works has been dressed in hundreds of finishes since the
           1930s &mdash; polished chrome, brushed steel, matte lacquer, solid brass &mdash; and
           every one carries the lifetime promise: it works, or Zippo fixes it free.</p>
-        <p class="how">Here: press-and-hold anywhere on the closed case (except the fuel
-          hold at the very bottom) to swap finishes.</p>
+        <p class="how">Here: tap the round swatch button at the top left to swap
+          finishes.</p>
       </section>
     </div>
   </div>
@@ -330,7 +373,6 @@ const CFG = {
   FLINT_FADE: 40,            // strikes over which dud chance ramps up
   FLINT_DUD_MAX: 0.65,       // a worn flint still catches sometimes
   FLINT_DUD_RUN: 2,          // never more consecutive duds than this
-  FINISH_HOLD: 0.6,          // s press-and-hold on the closed case front
   MOTION_LINGER: 2.5,        // s sensors stay live after the flame dies
 
   // physics
@@ -795,6 +837,9 @@ function applyFinish(name) {
     if (m.roughnessMap !== map) { m.roughnessMap = map; m.needsUpdate = true; }
   }
   matInsert.color.setHex(fp.insert);
+  // the main-screen swatch button wears the current finish
+  const sw = document.getElementById('finishSwatch');
+  if (sw) sw.style.backgroundColor = '#' + fp.chrome.color.toString(16).padStart(6, '0');
 }
 function cycleFinish() {
   const i = FINISH_ORDER.indexOf(sim.finish);
@@ -1483,13 +1528,13 @@ function stepPhysics(h) {
   } else {
     F.cover = Math.max(0, F.cover - h * 3);
   }
-  // press-and-hold on the closed case: base-bottom refills, anywhere else swaps finish
+  // press-and-hold on the closed case's base bottom refills the tank
   if (caseHold) {
     const tr = caseHold;
     const heldFor = perfNow - tr.holdStart;
     if (!lidIsClosed() || Math.hypot(tr.x - tr.startX, tr.y - tr.startY) > CFG.HOLD_SLOP_PX * uiScale()) {
       caseHold = null;
-    } else if (tr.holdZone === 'refill') {
+    } else {
       if (heldFor > 0.45 && perfNow - (tr.lastGlug || -9) > 0.35) {
         tr.lastGlug = perfNow;
         sim.squash.v += 0.3;        // the case "gulps" while it drinks
@@ -1497,9 +1542,6 @@ function stepPhysics(h) {
         buzz(4);
       }
       if (heldFor >= CFG.REFILL_HOLD) { caseHold = null; doRefill(); }
-    } else if (heldFor >= CFG.FINISH_HOLD) {
-      caseHold = null;
-      cycleFinish();
     }
   }
   sim.camShake = Math.max(0, sim.camShake - h / 0.3);
@@ -1752,12 +1794,12 @@ function beginGesture(tr) {
   } else if (tr.gesture === 'wheel') {
     tr.wheelSpeed = 0;
   } else if (tr.gesture === 'case' && lidIsClosed()) {
-    // hold near the base bottom = refill; hold anywhere else on the case = finish
+    // press-and-hold near the base bottom of the closed case = refill
     const bb = anchorScreen('baseBottom');
-    tr.holdZone = Math.hypot(tr.x - bb.x, tr.y - bb.y) < CFG.R_REFILL * uiScale()
-      ? 'refill' : 'finish';
-    tr.holdStart = perfNow;
-    caseHold = tr;
+    if (Math.hypot(tr.x - bb.x, tr.y - bb.y) < CFG.R_REFILL * uiScale()) {
+      tr.holdStart = perfNow;
+      caseHold = tr;
+    }
   }
 }
 // Natural lid dragging: the lid rotates about its hinge, so a curved thumb
@@ -2322,24 +2364,44 @@ const guideCloseBtn = document.getElementById('guideClose');
 const gFuelEl = document.getElementById('gFuel'), gFuelT = document.getElementById('gFuelT');
 const gFlintEl = document.getElementById('gFlint'), gFlintT = document.getElementById('gFlintT');
 const gStatsEl = document.getElementById('gStats');
+const hudEl = document.getElementById('hud');
+const hFuelEl = document.getElementById('hFuel'), hFlintEl = document.getElementById('hFlint');
+const finishBtn = document.getElementById('finishBtn');
 // remaining flint, 1 fresh -> 0 at max dud odds
 function flintCond() {
   return 1 - clamp01(sim.flint / Math.max(1, CFG.FLINT_LIFE + CFG.FLINT_FADE));
 }
+// drives both the always-on HUD bars and the guide's detailed gauges;
+// change-guarded so the resting app writes no DOM at all
+const lastG = { f: -1, c: -1, s: '' };
 function updateGauges() {
   const f = Math.round(sim.fuel * 100), c = Math.round(flintCond() * 100);
-  gFuelEl.style.width = f + '%';
-  gFuelT.textContent = f + '%';
-  gFlintEl.style.width = c + '%';
-  gFlintT.textContent = c + '%';
-  const n = sim.counts;
-  gStatsEl.textContent = `${n.ignitions} lights · ${n.smothers} snuffs · `
-    + `${n.steals} steals · ${n.relights} relights · ${n.refills} refills · ${n.duds} duds`;
+  if (f !== lastG.f) {
+    lastG.f = f;
+    const w = f + '%';
+    gFuelEl.style.width = w;
+    gFuelT.textContent = w;
+    hFuelEl.style.width = w;
+    hudEl.classList.toggle('low', sim.fuel < CFG.FUEL_LOW);
+  }
+  if (c !== lastG.c) {
+    lastG.c = c;
+    const w = c + '%';
+    gFlintEl.style.width = w;
+    gFlintT.textContent = w;
+    hFlintEl.style.width = w;
+  }
+  if (guideIsOpen()) {
+    const n = sim.counts;
+    const s = `${n.ignitions} lights · ${n.smothers} snuffs · `
+      + `${n.steals} steals · ${n.relights} relights · ${n.refills} refills · ${n.duds} duds`;
+    if (s !== lastG.s) { lastG.s = s; gStatsEl.textContent = s; }
+  }
 }
 const guideIsOpen = () => guideEl.classList.contains('show');
 function openGuide() {
-  updateGauges();
   guideEl.classList.add('show');
+  updateGauges();    // after 'show' so the stats line refreshes too
   resetPointers();   // any finger already on the canvas is void once the sheet is up
   try { guideCloseBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
 }
@@ -2349,6 +2411,7 @@ function closeGuide() {
   try { infoBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
 }
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
+finishBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); cycleFinish(); });
 guideCloseBtn.addEventListener('click', closeGuide);
 guideEl.addEventListener('click', e => { if (e.target === guideEl) closeGuide(); });
 
@@ -2375,7 +2438,7 @@ const HINTS = [
   { id: 'ember', text: () => 'bend the wick low, then swipe the flame away…', done: () => sim.disc.ember },
   { id: 'relight', text: relightHint, done: () => sim.disc.relight },
   { id: 'refuel', text: () => 'tank’s low — close the lid, hold the base to refill', done: () => sim.disc.refuel },
-  { id: 'finish', text: () => 'hold a finger on the closed case to change its finish', done: () => sim.disc.finish },
+  { id: 'finish', text: () => 'tap the round swatch (top-left) to restyle the case', done: () => sim.disc.finish },
 ];
 let hintIdx = 0, hintTimer = 0;
 function currentHints() {
@@ -2385,7 +2448,7 @@ function currentHints() {
     && ((h.id !== 'smother' && h.id !== 'ember') || sim.flame.state === LIT)
     && (h.id !== 'squeeze' || sim.disc.lit)
     && (h.id !== 'refuel' || sim.fuel < CFG.FUEL_LOW)
-    && (h.id !== 'finish' || (sim.disc.lit && sim.disc.pop && lidIsClosed())));
+    && (h.id !== 'finish' || sim.disc.lit));
 }
 function updateHints() {
   try { localStorage.setItem('lighter.disc', JSON.stringify(sim.disc)); } catch (e) { /* ignore */ }
@@ -2408,10 +2471,8 @@ function updateHints() {
 }
 function tickHints(dt) {
   if (toastUntil && perfNow >= toastUntil) { toastUntil = 0; updateHints(); }
-  if (guideIsOpen()) {
-    gaugeTimer += dt;
-    if (gaugeTimer > 0.5) { gaugeTimer = 0; updateGauges(); }
-  }
+  gaugeTimer += dt;
+  if (gaugeTimer > 0.5) { gaugeTimer = 0; updateGauges(); }
   hintTimer += dt;
   if (hintTimer > 8) {
     hintTimer = 0;
@@ -2496,6 +2557,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 updateHints();
+updateGauges();
 
 /* ============================== DEBUG / TEST API ============================== */
 window.LIGHTER = {
@@ -2526,7 +2588,7 @@ window.LIGHTER = {
   lidPivot: () => toScreen(lidG.getWorldPosition(_v1), {}),
   lidPoint: th => lidPointScreen(th ?? sim.lid.theta, {}),
   classifyAt: (x, y) => classify(x, y),
-  get holdZone() { return caseHold ? caseHold.holdZone : null; },
+  get holdZone() { return caseHold ? 'refill' : null; },
   jerk: () => Actions.jerk(),
   shake: () => Actions.shake(),
   strike: v => Actions.strike(v ?? 3),

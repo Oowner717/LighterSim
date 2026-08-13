@@ -480,29 +480,26 @@ await settleLid(false);
     await L('LIGHTER.finish') === 'chrome' && await L('LIGHTER.mats.chrome.color.getHexString()') === hex0);
 }
 
-/* 14 ── press-and-hold the closed case swaps finish; the refill zone never does */
+/* 14 ── the swatch button swaps the finish; case holds never do */
 {
-  const bc = await L('LIGHTER.anchor("baseCenter")');
-  const bb = await L('LIGHTER.anchor("baseBottom")');
-  // make sure the hold point sits clearly outside the refill zone
-  const S = await L('LIGHTER.uiScale()');
-  const d = Math.hypot(bc.x - bb.x, bc.y - bb.y);
-  const need = 60 * S + 12;
-  const pt = d >= need ? bc : { x: bb.x, y: bb.y - need };
   const fin0 = await L('LIGHTER.finish');
-  await page.evaluate(([p]) => window.__pt('pointerdown', 93, p.x, p.y), [pt]);
-  await waitL(`LIGHTER.finish !== ${JSON.stringify(fin0)}`, 20000);
-  await page.evaluate(([p]) => window.__pt('pointerup', 93, p.x, p.y), [pt]);
-  check('press-and-hold the closed case swaps finish', true);
-  const fin1 = await L('LIGHTER.finish');
-  const refills1 = await L('LIGHTER.sim.counts.refills');
+  await page.click('#finishBtn');
+  check('swatch button cycles the finish',
+    await L('LIGHTER.finish') !== fin0 && await L('LIGHTER.sim.disc.finish') === true);
+  check('swatch wears the current finish color',
+    await L('document.getElementById("finishSwatch").style.backgroundColor') === 'rgb(35, 38, 42)');
+  await page.click('#finishBtn');
+  await page.click('#finishBtn');
+  await page.click('#finishBtn');
+  check('swatch taps round-trip to chrome', await L('LIGHTER.finish') === 'chrome');
+  // the retired press-and-hold gesture must no longer swap anything
+  const bc = await L('LIGHTER.anchor("baseCenter")');
   await page.evaluate(async ([p]) => {
-    window.__pt('pointerdown', 94, p.x, p.y);
-    await window.__sleep(1100);
-    window.__pt('pointerup', 94, p.x, p.y);
-  }, [bb]);
-  check('refill-zone hold does not swap finish',
-    await L('LIGHTER.finish') === fin1 && await L('LIGHTER.sim.counts.refills') === refills1);
+    window.__pt('pointerdown', 93, p.x, p.y);
+    await window.__sleep(1600);
+    window.__pt('pointerup', 93, p.x, p.y);
+  }, [bc]);
+  check('holding the case no longer swaps finish', await L('LIGHTER.finish') === 'chrome');
 }
 
 /* 15 ── uiScale is capped on tablet-sized viewports */
@@ -523,6 +520,8 @@ check('guide explains functions + maintenance', await L(
    && document.getElementById("guideBody").textContent.includes("spring screw")
    && document.getElementById("guideBody").textContent.includes("pliers")`));
 check('fuel gauge tracks the tank', await L('document.getElementById("gFuel").style.width') === '37%');
+check('main-screen fuel bar tracks the tank', await L('document.getElementById("hFuel").style.width') === '37%');
+check('main-screen flint bar is full after refill', await L('document.getElementById("hFlint").style.width') === '100%');
 check('focus moves into the dialog', await L('document.activeElement && document.activeElement.id') === 'guideClose');
 { // canvas, wheel and keyboard input are all dead while the sheet is up
   const yaw0 = await L('LIGHTER.cam.yaw');
@@ -561,7 +560,8 @@ check('discovered tricks persist across reload',
 check('fuel level persists across reload', Math.abs(await L('LIGHTER.fuel') - 0.42) < 0.02,
   `fuel=${await L('LIGHTER.fuel')}`);
 check('finish persists across reload',
-  await L('LIGHTER.finish') === 'brass' && await L('LIGHTER.mats.chrome.color.getHexString()') === 'd6a84f');
+  await L('LIGHTER.finish') === 'brass' && await L('LIGHTER.mats.chrome.color.getHexString()') === 'd6a84f'
+  && await L('document.getElementById("finishSwatch").style.backgroundColor') === 'rgb(214, 168, 79)');
 
 /* 8 ── no console errors */
 check('no console errors', consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 6)));
