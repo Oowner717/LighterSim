@@ -466,6 +466,7 @@ const uiScale = () => clamp(vmin() / 420, 0.85, 1.6);
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3(), _v5 = new THREE.Vector3(), _v6 = new THREE.Vector3();
 const _vUp = new THREE.Vector3(0, 1, 0);
+const _vA = new THREE.Vector3(), _vB = new THREE.Vector3();
 const _s1 = { x: 0, y: 0 }, _s2 = { x: 0, y: 0 };
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion();
 const _qI = new THREE.Quaternion();
@@ -647,6 +648,11 @@ const matCanCap = new THREE.MeshStandardMaterial({ color: 0x939aa3, metalness: 0
 const matFlint = new THREE.MeshStandardMaterial({ color: 0x9b8b7a, metalness: 0.25, roughness: 0.7 });
 const matFlintWorn = new THREE.MeshStandardMaterial({ color: 0x6d5f50, metalness: 0.2, roughness: 0.9 });
 const matBore = new THREE.MeshStandardMaterial({ color: 0x0a0c0e, metalness: 0.5, roughness: 0.8, side: THREE.BackSide });
+// the case cavity: brighter and rougher than the mirror shell so it reads as
+// an inside surface rather than a hole
+const matCaseInner = new THREE.MeshStandardMaterial({
+  color: 0x9aa2ab, metalness: 0.75, roughness: 0.62, envMapIntensity: 1.5, side: THREE.DoubleSide,
+});
 const matFluid = new THREE.MeshBasicMaterial({
   color: 0xbfd6e8, transparent: true, opacity: 0.75, depthWrite: false,
 });
@@ -666,23 +672,61 @@ const HINGE_Y = CFG.BASE_H - CFG.LID_OVERLAP, HINGE_X = -(CFG.BODY_W / 2 + 0.06)
 const RIM_Y = CFG.BASE_H + CFG.CHIM_H;
 lidG.position.set(HINGE_X, HINGE_Y, 0);
 
+// rounded-rectangle plan outline, drawn into a Shape or a Path (for holes)
+function roundedOutline(t, w, d, r) {
+  const hw = w / 2, hd = d / 2;
+  t.moveTo(-hw + r, -hd); t.lineTo(hw - r, -hd); t.quadraticCurveTo(hw, -hd, hw, -hd + r);
+  t.lineTo(hw, hd - r); t.quadraticCurveTo(hw, hd, hw - r, hd);
+  t.lineTo(-hw + r, hd); t.quadraticCurveTo(-hw, hd, -hw, hd - r);
+  t.lineTo(-hw, -hd + r); t.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
+  return t;
+}
 // rounded-rectangle plan profile (case footprint), extruded upward
 function roundedPlanGeo(w, d, r, h) {
-  const s = new THREE.Shape();
-  const hw = w / 2, hd = d / 2;
-  s.moveTo(-hw + r, -hd); s.lineTo(hw - r, -hd); s.quadraticCurveTo(hw, -hd, hw, -hd + r);
-  s.lineTo(hw, hd - r); s.quadraticCurveTo(hw, hd, hw - r, hd);
-  s.lineTo(-hw + r, hd); s.quadraticCurveTo(-hw, hd, -hw, hd - r);
-  s.lineTo(-hw, -hd + r); s.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
+  const g = new THREE.ExtrudeGeometry(roundedOutline(new THREE.Shape(), w, d, r),
+    { depth: h, bevelEnabled: false, curveSegments: 12 });
+  g.rotateX(-Math.PI / 2);
+  return g;
+}
+// the same profile as a wall ring: an open-topped shell you can see down into
+function roundedWallGeo(w, d, r, wall, h) {
+  const s = roundedOutline(new THREE.Shape(), w, d, r);
+  s.holes.push(roundedOutline(new THREE.Path(), w - wall * 2, d - wall * 2, Math.max(0.04, r - wall)));
   const g = new THREE.ExtrudeGeometry(s, { depth: h, bevelEnabled: false, curveSegments: 12 });
   g.rotateX(-Math.PI / 2);
   return g;
 }
-{ // base body
-  const geo = new RoundedBoxGeometry(CFG.BODY_W, CFG.BASE_H, CFG.BODY_D, 4, CFG.EDGE_R);
-  const base = new THREE.Mesh(geo, matChrome);
-  base.position.y = CFG.BASE_H / 2;
-  caseG.add(base);
+// The seated lighter keeps the solid, perfectly-shaded body. The moment the
+// insert lifts out we swap in an open-topped shell of the same silhouette, so
+// you can see down into a real cavity instead of at a blank face.
+const CAVITY_FLOOR = 0.40, CASE_WALL = 0.07;
+const caseSolid = new THREE.Mesh(
+  new RoundedBoxGeometry(CFG.BODY_W, CFG.BASE_H, CFG.BODY_D, 4, CFG.EDGE_R), matChrome);
+caseSolid.position.y = CFG.BASE_H / 2;
+caseG.add(caseSolid);
+const caseShellG = new THREE.Group();
+caseShellG.visible = false;
+caseG.add(caseShellG);
+{
+  const plinth = new THREE.Mesh(
+    new RoundedBoxGeometry(CFG.BODY_W, CAVITY_FLOOR, CFG.BODY_D, 4, 0.2), matChrome);
+  plinth.position.y = CAVITY_FLOOR / 2;
+  caseShellG.add(plinth);
+  const walls = new THREE.Mesh(
+    roundedWallGeo(CFG.BODY_W, CFG.BODY_D, CFG.EDGE_R, CASE_WALL, CFG.BASE_H - 0.35), matChrome);
+  walls.position.y = 0.35;
+  caseShellG.add(walls);
+  // inner faces + floor: lighter steel so the cavity catches light and reads
+  const inner = new THREE.Mesh(
+    roundedWallGeo(CFG.BODY_W - CASE_WALL * 2 + 0.006, CFG.BODY_D - CASE_WALL * 2 + 0.006,
+      Math.max(0.05, CFG.EDGE_R - CASE_WALL), 0.02, CFG.BASE_H - 0.42), matCaseInner);
+  inner.position.y = 0.41;
+  caseShellG.add(inner);
+  const floor = new THREE.Mesh(
+    roundedPlanGeo(CFG.BODY_W - CASE_WALL * 2, CFG.BODY_D - CASE_WALL * 2,
+      Math.max(0.05, CFG.EDGE_R - CASE_WALL), 0.06), matCaseInner);
+  floor.position.y = CAVITY_FLOOR;
+  caseShellG.add(floor);
 }
 const lidMesh = new THREE.Mesh(
   new RoundedBoxGeometry(CFG.BODY_W, CFG.LID_H, CFG.BODY_D, 4, CFG.EDGE_R), matChrome);
@@ -845,23 +889,41 @@ function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the deb
 /* ---- service ritual hardware: only meaningful once the insert comes out ---- */
 const svcParts = {};
 {
-  // the tank body: hidden inside the case until the insert is pulled
+  // the tank body: hidden inside the case until the insert is pulled. It stops
+  // short of the case floor so lifting it out never scrapes through.
+  const TANK_H = CFG.BASE_H - 0.85;
   const tank = new THREE.Mesh(
-    new RoundedBoxGeometry(CFG.BODY_W - 0.24, CFG.BASE_H - 0.3, CFG.BODY_D - 0.24, 3, 0.1),
-    matChromeDark);
-  tank.position.y = (CFG.BASE_H - 0.3) / 2 + 0.14;
+    new RoundedBoxGeometry(CFG.BODY_W - 0.24, TANK_H, CFG.BODY_D - 0.24, 3, 0.1), matChromeDark);
+  tank.position.y = TANK_H / 2 + 0.66;
   insertG.add(tank);
-  // felt pad: hinged flap on the underside (LIFT TO FILL, minus the stamp)
+  // a shallow well holds the packing, so the pad has something to cover
+  // everything you service lives on the insert's underside: one group, held
+  // clear of the case floor so nothing pokes through the bottom when seated
+  // placed so the bore mouth (local y 0.10) lands flush with the tank's bottom
+  // face — the hardware reads as set INTO the underside, not floating in it
+  const underG = new THREE.Group();
+  underG.position.y = 0.56;
+  insertG.add(underG);
+  // sized to stay inside the case cavity so nothing pokes out when seated
+  const wellRim = new THREE.Mesh(
+    roundedWallGeo(2.34, CFG.BODY_D - 0.38, 0.12, 0.09, 0.16), matChromeDark);
+  wellRim.position.set(-0.62, 0.06, 0);
+  underG.add(wellRim);
+  // packing cotton: sits down in the well, so peeling the pad reveals it
+  const packing = new THREE.Mesh(new THREE.BoxGeometry(2.16, 0.075, CFG.BODY_D - 0.54), matCotton);
+  packing.position.set(-0.62, 0.185, 0);
+  underG.add(packing);
+  // Felt pad: hinged along its LONG edge, so it flips back across the narrow
+  // side of the insert and lies over the body instead of swinging out like a
+  // plank. That's how you'd actually flick it up with a nail.
   const padG = new THREE.Group();
-  padG.position.set(0.62, 0.10, 0);
-  const flap = new THREE.Mesh(new THREE.BoxGeometry(2.42, 0.055, CFG.BODY_D - 0.5), matFelt);
-  flap.position.set(-1.21, 0, 0);
-  padG.add(flap);
-  insertG.add(padG);
-  // packing cotton, recessed so the closed pad covers it
-  const packing = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.05, CFG.BODY_D - 0.62), matCotton);
-  packing.position.set(-0.62, 0.115, 0);
-  insertG.add(packing);
+  padG.position.set(-0.62, 0, 0.5);
+  const flap = new THREE.Mesh(new THREE.BoxGeometry(2.30, 0.085, 0.95), matFelt);
+  flap.position.set(0, 0, -0.475);
+  const tab = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.075, 0.13), matFelt);
+  tab.position.set(0, -0.02, -0.99);   // the lip you get a nail under
+  padG.add(flap, tab);
+  underG.add(padG);
   // Flint tube: a real bore you can see down, so "the flint lives in there" is
   // legible at a glance. Local -Y is "outward" once the insert flips over.
   const BORE_X = 1.3, BORE_Y = 0.1;
@@ -874,7 +936,7 @@ const svcParts = {};
   const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.135, 0.03, 10, 22), matChromeDark);
   collarRing.rotation.x = Math.PI / 2;
   collarRing.position.set(BORE_X, BORE_Y + 0.01, 0);
-  insertG.add(bore, boreFloor, collarRing);
+  underG.add(bore, boreFloor, collarRing);
   // pulsing target ring: lights the bore whenever it's the next thing to touch
   const boreTarget = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.028, 8, 26),
     new THREE.MeshBasicMaterial({
@@ -884,7 +946,7 @@ const svcParts = {};
   boreTarget.rotation.x = Math.PI / 2;
   boreTarget.position.set(BORE_X, BORE_Y - 0.10, 0);
   boreTarget.renderOrder = 9;
-  insertG.add(boreTarget);
+  underG.add(boreTarget);
   // screw head — the spring below it is drawn separately so it can stretch
   const screwG = new THREE.Group();
   screwG.position.set(BORE_X, BORE_Y, 0);
@@ -894,7 +956,7 @@ const svcParts = {};
   const shank = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.16, 12), matSteel);
   shank.position.y = 0.11;
   screwG.add(head, slot, shank);
-  insertG.add(screwG);
+  underG.add(screwG);
   // the spring: coils re-spaced every frame to span mouth -> screw head, so
   // withdrawing it reads as ONE assembly stretching out of the tube
   const coils = [];
@@ -902,24 +964,20 @@ const svcParts = {};
     const coil = new THREE.Mesh(new THREE.TorusGeometry(0.082, 0.017, 6, 16), matSteel);
     coil.rotation.x = Math.PI / 2;
     coils.push(coil);
-    insertG.add(coil);
+    underG.add(coil);
   }
   // the worn stub: sits proud in the bore mouth so you can see what's coming out
   const stub = new THREE.Mesh(new THREE.CylinderGeometry(0.082, 0.082, 0.26, 12), matFlintWorn);
   stub.position.set(BORE_X, BORE_Y + 0.06, 0);
   stub.visible = false;
-  insertG.add(stub);
+  underG.add(stub);
   // the fresh flint waits right beside the bore, lit, with a short drag home
   const flintNew = new THREE.Mesh(new THREE.CylinderGeometry(0.088, 0.088, 0.34, 12), matFlint);
   flintNew.position.set(2.0, -0.42, 0);
   flintNew.visible = false;
-  insertG.add(flintNew);
-  // the case's dark mouth, visible only while the insert is away
-  const opening = new THREE.Mesh(
-    roundedPlanGeo(CFG.BODY_W - 0.2, CFG.BODY_D - 0.2, CFG.EDGE_R - 0.08, 0.05), matDark);
-  opening.position.set(0, CFG.BASE_H - 0.03, 0);
-  opening.visible = false;
-  caseG.add(opening);
+  underG.add(flintNew);
+  // the case cavity is real geometry now — nothing to fake when it empties
+  const opening = new THREE.Object3D();
   // Fluid tin: tall rectangular can with a shouldered neck and nozzle, built
   // nose-up along local +Y so aiming it is just "point +Y at the cotton".
   const canG = new THREE.Group();
@@ -941,8 +999,8 @@ const svcParts = {};
   stream.visible = false;
   squash.add(stream);
   Object.assign(svcParts, {
-    padG, packing, screwG, coils, stub, flintNew, opening,
-    canG, stream, boreTarget, BORE_X, BORE_Y, CAN_TIP,
+    underG, padG, packing, screwG, coils, stub, flintNew, opening,
+    canG, stream, boreTarget, BORE_X, BORE_Y, CAN_TIP, caseSolid, caseShellG,
   });
 }
 
@@ -1813,7 +1871,8 @@ function updateCamera(dt, tSec) {
   cam.yawVel *= dk; cam.pitchVel *= dk;
   if (Math.abs(cam.yawVel) < 1e-3) cam.yawVel = 0;
   if (Math.abs(cam.pitchVel) < 1e-3) cam.pitchVel = 0;
-  const d = cam.fit * cam.zoom;
+  // ease back while the insert lifts out and turns over, so it stays framed
+  const d = cam.fit * cam.zoom * (1 + 0.2 * Math.sin(clamp01(sim.svc.pose) * Math.PI));
   const cp = Math.cos(cam.pitch);
   // barely-there sway while burning keeps the scene alive (render-only offset)
   const yawEff = cam.yaw + smoothFlameLevel * 0.014 * Math.sin(tSec * 0.7);
@@ -1855,14 +1914,14 @@ function anchorWorld(name, out) {
     case 'lidCenter': return lidG.localToWorld(out.set(-HINGE_X, CFG.LID_H / 2, 0));
     case 'baseBottom': return caseG.localToWorld(out.set(0, 0.08, 0));
     case 'baseCenter': return caseG.localToWorld(out.set(0, CFG.BASE_H / 2, 0));
-    case 'svcScrew': return insertG.localToWorld(out.set(1.3, sim.svc.screwOut ? -0.8 : 0.02, 0));
-    case 'svcTube': return insertG.localToWorld(out.set(1.3, 0.1, 0));
-    case 'svcPacking': return insertG.localToWorld(out.set(-0.62, 0.08, 0));
+    case 'svcScrew': return svcParts.underG.localToWorld(out.copy(svcParts.screwG.position));
+    case 'svcTube': return svcParts.underG.localToWorld(out.set(1.3, 0.1, 0));
+    case 'svcPacking': return svcParts.underG.localToWorld(out.set(-0.62, 0.13, 0));
     case 'svcPadEdge': {
       svcParts.padG.updateWorldMatrix(true, false);
-      return svcParts.padG.localToWorld(out.set(-2.3, 0, 0));
+      return svcParts.padG.localToWorld(out.set(0, -0.04, -0.94));
     }
-    case 'svcFlint': return insertG.localToWorld(out.copy(svcParts.flintNew.position));
+    case 'svcFlint': return svcParts.underG.localToWorld(out.copy(svcParts.flintNew.position));
   }
   return out;
 }
@@ -2129,15 +2188,24 @@ function updateFrame(dt, tSec) {
   // ---- service pose: lift while pulling, then float out + flip to face you ----
   {
     const S = sim.svc;
-    const e = S.pose * S.pose * (3 - 2 * S.pose);
+    // Two-phase extraction: rise straight up until the tank is clear of the
+    // case mouth, and only then turn over and come forward. Doing both at once
+    // swept the insert through the case walls.
+    const liftK = clamp01(S.pose / 0.42);
+    const lift = liftK * liftK * (3 - 2 * liftK);
+    const flipK = clamp01((S.pose - 0.34) / 0.66);
+    const e = flipK * flipK * (3 - 2 * flipK);
     insertG.rotation.set(-2.4 * e, 0, 0);
     // rotate about the insert's middle, then carry it to the service spot
     _v1.set(0, 2.1, 0);
     _v2.copy(_v1).applyEuler(insertG.rotation);
-    insertG.position.set(0, S.y + e * 1.6, e * 2.45).add(_v1).sub(_v2);
-    svcParts.opening.visible = S.y > 0.03 || e > 0.02;
-    // felt pad hinge
-    svcParts.padG.rotation.z = -S.pad * 2.5;
+    insertG.position.set(0, S.y + lift * 3.9 - e * 2.3, e * 2.7).add(_v1).sub(_v2);
+    // solid body while seated (best shading); open shell the moment it lifts
+    const bodyOpen = S.state !== 'seated' || S.y > 0.02 || S.pose > 0.005;
+    svcParts.caseSolid.visible = !bodyOpen;
+    svcParts.caseShellG.visible = bodyOpen;
+    // felt pad peels OUTWARD off the packing (local -y is the exposed side)
+    svcParts.padG.rotation.x = -S.pad * 2.6;
 
     /* ---- flint assembly: one connected story, mouth -> spring -> screw ---- */
     const BX = svcParts.BORE_X, BY = svcParts.BORE_Y;
@@ -2228,28 +2296,29 @@ function updateFrame(dt, tSec) {
     const st = svcParts.stream, sp = svcParts.splash;
     if (cg.visible) {
       const ck = S.can * S.can * (3 - 2 * S.can);
+      insertG.updateMatrix();
       insertG.updateWorldMatrix(true, false);
       // where the fluid should land, in the can's parent space
-      const packW = insertG.localToWorld(_v4.set(-0.62, 0.02, 0));
+      const packW = svcParts.underG.localToWorld(_v4.set(-0.62, 0.13, 0));
       const target = squash.worldToLocal(_v5.copy(packW));
-      // tilt from upright-ish to nearly inverted as it starts pouring
-      const tilt = lerp(0.55, Math.PI * 0.86, S.squirt);
-      cg.rotation.set(0, 0, tilt);
-      // hold the nozzle a little above the target, offset back as it arrives
-      const hover = lerp(2.2, 0.82, ck);
-      const nozzle = _v6.set(0, svcParts.CAN_TIP, 0).applyEuler(cg.rotation);
-      cg.position.set(
-        target.x - nozzle.x + lerp(2.2, 0.15, ck),
-        target.y - nozzle.y + hover,
-        target.z - nozzle.z + 1.15);
+      // Stand the tin off the packing along the insert's OWN outward normal —
+      // the insert is flipped, so "up" in world would just park it on the
+      // cotton. Offset sideways too, so it pours in at an angle you can see past.
+      _vA.setFromMatrixColumn(insertG.matrix, 1).normalize().multiplyScalar(-1);  // outward
+      _vB.setFromMatrixColumn(insertG.matrix, 0).normalize();                     // along the insert
+      const standoff = lerp(3.6, 2.4, ck), side = lerp(2.8, 0.9, ck);
+      cg.position.copy(target).addScaledVector(_vA, standoff).addScaledVector(_vB, side);
+      // aim the nozzle at the cotton; the sideways offset gives a natural tilt
+      _v6.subVectors(target, cg.position).normalize();
+      cg.quaternion.setFromUnitVectors(_vUp, _v6);
       // fluid column from the nozzle opening down to the cotton
-      const tip = _v3.set(0, svcParts.CAN_TIP, 0).applyEuler(cg.rotation).add(cg.position);
+      const tip = _v3.copy(cg.position).addScaledVector(_v6, svcParts.CAN_TIP);
       st.visible = sp.visible = S.squirt > 0.04;
       if (st.visible) {
         _v6.subVectors(target, tip);
         const len = Math.max(0.05, _v6.length());
         st.position.copy(tip).addScaledVector(_v6, 0.5);
-        st.quaternion.setFromUnitVectors(_vUp.set(0, 1, 0), _v6.normalize());
+        st.quaternion.setFromUnitVectors(_vUp, _v6.normalize());
         st.scale.set(1 + 0.13 * vnoise(tSec * 23), len, 1 + 0.13 * vnoise(tSec * 19));
         st.material.opacity = 0.85 * S.squirt;
         sp.position.copy(packW);
@@ -2812,7 +2881,7 @@ function onPointerMove(e) {
       raycaster.setFromCamera(_v6.set((tr.x / window.innerWidth) * 2 - 1,
         -(tr.y / window.innerHeight) * 2 + 1, 0).clone(), camera);
       if (raycaster.ray.intersectPlane(wickPlane, _v4)) {
-        const local = insertG.worldToLocal(_v4.clone());
+        const local = svcParts.underG.worldToLocal(_v4.clone());
         svcParts.flintNew.position.set(
           clamp(local.x, 0.5, 2.6), clamp(local.y, -0.75, -0.2), clamp(local.z, -1.0, 1.0));
         // tip it upright as it nears the bore: "this end goes in"
