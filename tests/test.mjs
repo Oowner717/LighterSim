@@ -519,6 +519,12 @@ check('guide explains functions + maintenance', await L(
   `document.getElementById("guideBody").textContent.includes("capillary")
    && document.getElementById("guideBody").textContent.includes("spring screw")
    && document.getElementById("guideBody").textContent.includes("pliers")`));
+check('no brand names anywhere user-visible', await L(
+  `!document.body.innerText.includes("Zippo") && !document.title.includes("Zippo")
+   && !document.getElementById("infoBtn").getAttribute("aria-label").includes("Zippo")
+   && !document.getElementById("guide").getAttribute("aria-label").includes("Zippo")`));
+check('affiliation disclaimer present', await L(
+  'document.getElementById("guideLegal").textContent.includes("Not affiliated")'));
 check('fuel gauge tracks the tank', await L('document.getElementById("gFuel").style.width') === '37%');
 check('main-screen fuel bar tracks the tank', await L('document.getElementById("hFuel").style.width') === '37%');
 check('main-screen flint bar is full after refill', await L('document.getElementById("hFlint").style.width') === '100%');

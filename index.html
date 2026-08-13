@@ -203,6 +203,11 @@
   }
   #guideBody p { margin: 4px 0; font-size: 13.5px; line-height: 1.5; color: rgba(215, 222, 230, 0.88); }
   #guideBody p.how { color: rgba(160, 200, 235, 0.82); }
+  #guideLegal {
+    margin: 18px 0 4px !important; padding-top: 10px;
+    border-top: 1px solid rgba(160, 175, 190, 0.14);
+    font-size: 10.5px !important; color: rgba(150, 160, 172, 0.55) !important;
+  }
 </style>
 <script type="importmap">
 {
@@ -217,7 +222,7 @@
 <canvas id="c"></canvas>
 <div id="hint"></div>
 <button id="motionBtn" type="button">Enable motion</button>
-<button id="infoBtn" type="button" aria-label="How a Zippo works">?</button>
+<button id="infoBtn" type="button" aria-label="How it works">?</button>
 <button id="finishBtn" type="button" aria-label="Change case finish"><i id="finishSwatch"></i></button>
 <button id="flameBtn" type="button" aria-label="Change flame colour"><i id="flameSwatch"></i></button>
 <div id="debug" aria-label="Debug: fast-forward wear">
@@ -228,10 +233,10 @@
   <div class="hrow"><span>fuel</span><div class="hbar"><i id="hFuel"></i></div></div>
   <div class="hrow"><span>flint</span><div class="hbar"><i id="hFlint"></i></div></div>
 </div>
-<div id="guide" role="dialog" aria-modal="true" aria-label="How a Zippo works">
+<div id="guide" role="dialog" aria-modal="true" aria-label="How it works">
   <div id="guidePanel">
     <div id="guideHead">
-      <b>How a Zippo works</b>
+      <b>How it works</b>
       <button id="guideClose" type="button" aria-label="Close">&#215;</button>
     </div>
     <div id="guideBody">
@@ -259,7 +264,7 @@
       <section>
         <h3>A windproof flame</h3>
         <p>The chimney feeds the flame through its rows of holes while breaking up gusts,
-          so wind bends a Zippo flame instead of blowing it out. To kill it you starve
+          so wind bends the flame instead of blowing it out. To kill it you starve
           it of air: cap the chimney, or close the lid.</p>
         <p class="how">Here: a fast swipe through the flame only makes it flicker; a slow
           pass &mdash; or a finger held over the chimney &mdash; smothers it. Closing the lid
@@ -298,12 +303,14 @@
       </section>
       <section>
         <h3>The case</h3>
-        <p>The same windproof works has been dressed in hundreds of finishes since the
-          1930s &mdash; polished chrome, brushed steel, matte lacquer, solid brass &mdash; and
-          every one carries the lifetime promise: it works, or Zippo fixes it free.</p>
+        <p>The same windproof works has been dressed in hundreds of finishes over the
+          decades &mdash; polished chrome, brushed steel, matte lacquer, solid brass &mdash;
+          built to be serviced for a lifetime rather than thrown away.</p>
         <p class="how">Here: tap the round swatch button at the top left to swap
           finishes.</p>
       </section>
+      <p id="guideLegal">An original simulation of a classic windproof lighter.
+        Not affiliated with or endorsed by any lighter manufacturer.</p>
     </div>
   </div>
 </div>
