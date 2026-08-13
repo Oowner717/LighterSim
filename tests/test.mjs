@@ -664,6 +664,20 @@ await L('(LIGHTER.sim.fuel = 0.2, LIGHTER.sim.flint = 70, 0)');
   check('the serviced lighter lights again', await L('LIGHTER.state') === 'LIT');
   await settleLid(false);
 }
+{ // review hardening: unseated safety gates
+  await settleLid(true);
+  await L('(LIGHTER.sim.svc.y = 1.0, 0)');
+  check('striking is blocked mid-pull', await L('LIGHTER.strike(3)') === false);
+  await L('(LIGHTER.sim.svc.y = 0, 0)');
+  await L('LIGHTER.bendWick(1)');
+  const tip = await L('LIGHTER.anchor("tip")');
+  await page.evaluate(([p]) => window.__swipe(p.x, p.y, p.x + 4, p.y - 220, 260, 79), [tip]);
+  await page.waitForTimeout(400);
+  check('a bent-wick taut-pull never rips the insert out',
+    await L('LIGHTER.svcState') === 'seated' && await L('LIGHTER.sim.svc.y') === 0);
+  await L('LIGHTER.straighten()');
+  await waitL('!LIGHTER.wickBent()');
+}
 { // sealing an empty tube is honest: no flint, no sparks, and it says so
   await settleLid(true);
   await L('LIGHTER.svcOut()');
@@ -678,6 +692,15 @@ await L('(LIGHTER.sim.fuel = 0.2, LIGHTER.sim.flint = 70, 0)');
   check('an empty tube never sparks', r === false && await L('LIGHTER.sim.counts.sparks') === sp0);
   await waitL('document.getElementById("hint").textContent.includes("empty")', 10000);
   check('the empty tube explains itself', true);
+  // pulling it again shows the tube honestly empty, and the lid stays put
+  await L('LIGHTER.svcOut()');
+  await waitL('LIGHTER.sim.svc.pose > 0.9', 15000);
+  check('an emptied tube pulls out visibly empty', await L('LIGHTER.sim.svc.stub') === false);
+  await L('LIGHTER.closeLid()');
+  await page.waitForTimeout(600);
+  check('the lid waits while the insert is out', await L('LIGHTER.lidTheta') > 1.0);
+  await L('LIGHTER.svcSeat()');
+  await waitL('LIGHTER.svcState === "seated"', 15000);
   await L('LIGHTER.refill()');
   check('quick refill still fits a flint too', await L('LIGHTER.sim.flintMissing') === false);
   await settleLid(false);

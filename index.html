@@ -1311,6 +1311,13 @@ function setFlame(next, cause) {
       Audio.igniteTick();
       buzz([8, 25, 14]);
     }
+    if (sim.overfilled) {           // a flooded tank flares up on its first light
+      sim.overfilled = false;
+      sim.flame.flare = Math.max(sim.flame.flare, 1.7);
+      sim.flame.turb = Math.max(sim.flame.turb, 0.8);
+      Audio.fwoomp();
+      buzz([12, 50, 20]);
+    }
     if (Motion.allowed) attachMotion();   // sensors only run while there's a flame
     requestWake();
   } else if (next === EMBER) {      // the flame hides inside the chimney
@@ -1341,6 +1348,8 @@ function tryIgniteFromSparks() {
   if (sim.flame.state === LIT) return;
   after(CFG.IGNITE_DELAY, () => {
     if (!lidIsOpen() || sim.flame.state === LIT) return;
+    // the insert may have started moving in the sparks' short flight time
+    if (sim.svc.state !== 'seated' || svcPullHold || sim.svc.y > 0.01) return;
     // sparks land at the chimney: a wick dragged far away doesn't catch
     wickTipWorld(_v1);
     const lp = insertG.worldToLocal(_v1);
@@ -1353,6 +1362,7 @@ function svcApplySnug() {
   const S = sim.svc;
   if (S.flintNew) { sim.flint = 0; sim.flintDudRun = 0; sim.flintMissing = false; }
   else if (!S.stub) sim.flintMissing = true;
+  else sim.flintMissing = false;   // a worn flint back in the tube still sparks
   S.flintNew = false;
   S.screw = 1;
   S.screwOut = false;
@@ -1361,7 +1371,8 @@ function svcApplySnug() {
 const Actions = {
   strike(speedVminPerS = 3) {
     if (!lidIsOpen()) return false;              // wheel is covered when closed
-    if (sim.svc.state !== 'seated') return false; // never strike a stripped insert
+    // never strike an unseated insert — including one mid-pull
+    if (sim.svc.state !== 'seated' || svcPullHold || sim.svc.y > 0.01) return false;
     const now = perfT();
     if (now - sim.wheel.lastSpark < CFG.SPARK_REFRACTORY) return false;
     sim.wheel.lastSpark = now;
@@ -1433,6 +1444,7 @@ const Actions = {
     if (sim.flame.state === LIT) setFlame(OUT, 'shake');
   },
   flipLid(open, speed) {
+    if (sim.svc.state !== 'seated') return;   // the lid waits for the insert
     sim.lid.omega = (open ? 1 : -1) * (speed || CFG.LID_DBLTAP_VEL);
     sim.lid.dragging = false;
   },
@@ -1447,10 +1459,12 @@ const Actions = {
   svcOut() {                                      // the insert comes free
     const S = sim.svc;
     if (S.state === 'out') return;
+    if (sim.flame.state !== OUT) setFlame(OUT, 'service');   // belt and braces
     S.state = 'out';
-    S.y = 0; S.yV = 0;
+    S.yV = 0;   // S.y keeps its pull height and drains out during the float
     S.screw = 1; S.screwOut = false; S.autoTurn = 0;
-    S.stub = true; S.stubHop = 0; S.flintNew = false;
+    S.stub = !sim.flintMissing;   // an emptied tube stays visibly empty
+    S.stubHop = 0; S.flintNew = false;
     S.pad = 0; S.padT = 0; S.can = 0; S.squirt = 0; S.overHold = 0;
     S.seatK = 0;
     sim.disc.service = true;
@@ -1944,10 +1958,12 @@ function stepPhysics(h) {
       if (S.y === 0 && S.yV < -1.2) Audio.clunkSeat();
       if (S.y === 0) S.yV = 0;
     }
-    // float out to (or back from) the flipped service pose
+    // float out to (or back from) the flipped service pose; the pull's lift
+    // drains away smoothly as the pose takes over — no snap between the two
     const poseT = S.state === 'out' ? 1 : 0;
     S.poseV += ((poseT - S.pose) * 34 - S.poseV * 9.5) * h;
     S.pose = clamp01(S.pose + S.poseV * h);
+    if (S.state === 'out' && S.y > 0) S.y = Math.max(0, S.y - h * 3.2);
     if (S.state === 'seating') {
       S.y = Math.max(0, S.y - h * 4);
       if (S.pose < 0.02 && S.y === 0) {
@@ -2017,7 +2033,8 @@ function stepPhysics(h) {
   if (caseHold) {
     const tr = caseHold;
     const heldFor = perfNow - tr.holdStart;
-    if (!lidIsClosed() || Math.hypot(tr.x - tr.startX, tr.y - tr.startY) > CFG.HOLD_SLOP_PX * uiScale()) {
+    if (!lidIsClosed() || sim.svc.state !== 'seated'
+      || Math.hypot(tr.x - tr.startX, tr.y - tr.startY) > CFG.HOLD_SLOP_PX * uiScale()) {
       caseHold = null;
     } else {
       if (heldFor > 0.45 && perfNow - (tr.lastGlug || -9) > 0.35) {
@@ -2101,8 +2118,8 @@ function updateFrame(dt, tSec) {
     cg.visible = S.can > 0.02;
     if (cg.visible) {
       const ck = S.can * S.can * (3 - 2 * S.can);
-      cg.position.set(lerp(4.6, 2.1, ck), lerp(4.8, 4.05, ck), 3.1);
-      cg.rotation.z = -0.18 - 0.85 * S.squirt;
+      cg.position.set(lerp(3.6, 0.55, ck), lerp(7.0, 6.05, ck), 3.5);
+      cg.rotation.z = -0.2 - 0.7 * S.squirt;
       // stream: spout tip down to the cotton
       const tipW = cg.localToWorld(_v3.set(-0.5, 1.05, 0));
       insertG.updateWorldMatrix(true, false);
@@ -2342,10 +2359,14 @@ function classify(px, py) {
     const dy = (py - mo.y) / (CFG.R_MOUTH * S);
     if (dx * dx + dy * dy < 1) return 'chimney';
   }
-  const hitsLid = rayHit(px, py, [lidMesh]);
-  if (hitsLid.length) return 'lid';
-  const lc = anchorScreen(lidIsOpen() ? 'lidCenter' : 'lidTop');
-  if (!lidIsOpen() && Math.hypot(px - lc.x, py - lc.y) < CFG.R_LID_PAD * S) return 'lid';
+  // the lid is only grabbable with the insert seated: while it's out, the
+  // occluded lid mesh must not swallow taps meant for the floating insert
+  if (V.state === 'seated') {
+    const hitsLid = rayHit(px, py, [lidMesh]);
+    if (hitsLid.length) return 'lid';
+    const lc = anchorScreen(lidIsOpen() ? 'lidCenter' : 'lidTop');
+    if (!lidIsOpen() && Math.hypot(px - lc.x, py - lc.y) < CFG.R_LID_PAD * S) return 'lid';
+  }
   const bb = anchorScreen('baseBottom');
   if (Math.hypot(px - bb.x, py - bb.y) < CFG.R_REFILL * S) return 'case';
   const bc = anchorScreen('baseCenter');
@@ -2400,7 +2421,9 @@ function beginGesture(tr) {
     chimneyHold = tr;
   } else if (tr.gesture === 'wheel') {
     tr.wheelSpeed = 0;
-  } else if (tr.gesture === 'case' && lidIsClosed()) {
+  } else if (tr.gesture === 'wick') {
+    tr.wickWasBent = wickIsBent();   // latch: a bent-wick drag never becomes a pull
+  } else if (tr.gesture === 'case' && lidIsClosed() && sim.svc.state === 'seated') {
     // press-and-hold near the base bottom of the closed case = refill
     const bb = anchorScreen('baseBottom');
     if (Math.hypot(tr.x - bb.x, tr.y - bb.y) < CFG.R_REFILL * uiScale()) {
@@ -2731,13 +2754,14 @@ function onPointerMove(e) {
     }
     case 'wick': {
       // a straight wick dragged decisively UP isn't a bend — it's the grip
-      // that pulls the whole insert out (the wick sits at the chimney mouth)
-      if (sim.flame.state === OUT && sim.svc.state === 'seated' && !wickIsBent()) {
+      // that pulls the whole insert out (the wick sits at the chimney mouth).
+      // Eligibility is latched at grab: a taut-pull on a bent wick never morphs.
+      if (sim.flame.state === OUT && sim.svc.state === 'seated' && !tr.wickWasBent) {
         tr.wickUp = (tr.wickUp || 0) + Math.max(0, -dy);
         tr.wickSide = (tr.wickSide || 0) + Math.max(0, dy) + Math.abs(dx) * 0.5;
         if (tr.wickUp > 30 * uiScale() && tr.wickUp > tr.wickSide * 2.2) {
           tr.gesture = 'svcPull';
-          tr.pullBaseY = tr.startY;
+          tr.pullBaseY = tr.y;   // the pull starts HERE, not at touchdown
           svcPullHold = tr;
           wick.straightening = true;
           break;
