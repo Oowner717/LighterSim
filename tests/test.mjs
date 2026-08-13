@@ -428,6 +428,26 @@ await L('LIGHTER.straighten()');
     await waitL('LIGHTER.bendHandleShown === true', 8000);
     check('the handle comes back once the flame is out', true);
   }
+  { // the idle demo advertises the handle by rocking the wick — and must yield
+    // the instant anything else poses it, or a deliberate bend gets stomped
+    await L('LIGHTER.straighten()');
+    await waitL('!LIGHTER.wickBent()');
+    await L('(LIGHTER.sim.disc.bend = false, 0)');
+    await waitL('Math.abs(LIGHTER.wickK) > 0.05', 10000);
+    check('the idle handle rocks the wick to show what it does', true);
+    const ks = [];
+    for (let i = 0; i < 6; i++) { ks.push(await L('LIGHTER.wickK')); await page.waitForTimeout(180); }
+    check('the demo sway stays gentle and never counts as bent',
+      Math.max(...ks.map(Math.abs)) < 0.26 && await L('LIGHTER.wickBent()') === false,
+      `peak ${Math.max(...ks.map(Math.abs)).toFixed(2)}`);
+    await L('LIGHTER.bendWick(1)');
+    await page.waitForTimeout(900);
+    check('the demo never overrides a deliberate bend',
+      await L('LIGHTER.wickK') === 1 && await L('LIGHTER.wickBent()') === true,
+      `k=${await L('LIGHTER.wickK')}`);
+    await L('(LIGHTER.sim.disc.bend = true, LIGHTER.straighten(), 0)');
+    await waitL('!LIGHTER.wickBent()');
+  }
 }
 { // double-tap = auto open + strike
   await settleLid(false);

@@ -406,7 +406,9 @@ const CFG = {
   IGNITE_DELAY: 0.07,        // s from spark burst to catching
 
   // wick
-  WICK_SEGS: 4, WICK_SEG_LEN: 0.345, WICK_R: 0.12,
+  // 4 x 0.295 = 1.18 above a base at BASE_H+0.06, putting the tip at RIM_Y+0.02:
+  // trimmed level with the chimney, the way a wick is actually kept
+  WICK_SEGS: 4, WICK_SEG_LEN: 0.295, WICK_R: 0.12,
 
   // flame
   FLAME_H: 2.35,
@@ -952,24 +954,35 @@ const wick = { joints: [], tipObj: null, base: null, straightening: false, k: 0 
   wick.tipObj.position.y = L;
   parent.add(wick.tipObj);
 }
-// The bend handle: a ball riding an imaginary extension of the wick, so the
+// The bend handle: a ball on a rigid lever pivoting at the wick's root, so the
 // wick swings under it like a joystick. Grabbing the tip itself was fiddly and
 // put your fingertip straight over the thing you were trying to see.
-const HANDLE_EXT = 2.6;
+// FIXED radius, not a multiple of the wick: as the wick folds it CURLS, so the
+// root-to-tip chord shortens, and scaling that chord made the ball dive toward
+// the lighter mid-swing instead of riding a clean circle. The tip still lies on
+// the lever, since the lever points root -> tip.
+const HANDLE_R = 2.6;
 function wickTipWorld(out) { return wick.tipObj.getWorldPosition(out); }
-// ext 1 = the tip itself; >1 slides out along the wick's own line
-function wickPointWorld(ext, out) {
+function wickHandleWorld(out) {
   wickTipWorld(out);
-  if (ext === 1) return out;
   wick.base.getWorldPosition(_v3);
-  return out.sub(_v3).multiplyScalar(ext).add(_v3);
+  out.sub(_v3);
+  return out.multiplyScalar(HANDLE_R / (out.length() || 1e-4)).add(_v3);
 }
+function wickPointWorld(handle, out) { return handle ? wickHandleWorld(out) : wickTipWorld(out); }
 function wickTipLocalY() {
   wickTipWorld(_v1);
   return insertG.worldToLocal(_v1).y;
 }
-function wickIsBent() { return wickTipLocalY() < RIM_Y - 0.06; }
-function wickBentness() { return clamp01((RIM_Y + 0.1 - wickTipLocalY()) / 0.55); }
+// Bentness reads off the arc parameter, not the tip's height. With the wick
+// trimmed flush there is barely any headroom above the rim to measure against,
+// and k already IS how far it is folded — either way round.
+// Both thresholds are the OLD tip-height ones converted to k against the old
+// wick length, so trimming the wick doesn't quietly re-tune how a half-fold
+// shortens and leans the flame: bent-ness used to start at |k| 0.26 and
+// saturate at 0.66, and it still does.
+function wickIsBent() { return Math.abs(wick.k) > 0.41; }
+function wickBentness() { return clamp01((Math.abs(wick.k) - 0.26) / 0.40); }
 // The handle itself: a ball on a hairline stem, drawn on top of everything so
 // it can never end up behind the lid, and shown only when the bend is legal.
 const bendHandle = new THREE.Group();
@@ -990,7 +1003,10 @@ const bendHandle = new THREE.Group();
   bendHandle.visible = false;
   scene.add(bendHandle);
 }
-let bendHandleK = 0;   // 0..1 fade, so it never pops in or out
+let bendHandleK = 0;              // 0..1 fade, so it never pops in or out
+// the "this is what I do" sway. bendDemoK remembers the last value the demo
+// itself wrote, so the demo can tell its own pose from one the player set.
+let bendDemoT = 0, bendDemoOn = false, bendDemoK = 0;
 function wickTangent(out) {
   wickTipWorld(out);
   const j = wick.joints[wick.joints.length - 1].getWorldPosition(_v6);
@@ -1007,11 +1023,11 @@ function setWickBend(k) {
 }
 // The whole rail, k = -1 .. +1, at whatever radius the grabbed thing sits on.
 // Odd length so the middle sample is dead upright.
-function sampleWickArc(A, ext) {
+function sampleWickArc(A, handle) {
   const kSave = wick.k;
   for (let i = 0; i < A.length; i++) {
     setWickBend(i / (A.length - 1) * 2 - 1);
-    toScreen(wickPointWorld(ext, _v2), A[i]);
+    toScreen(wickPointWorld(handle, _v2), A[i]);
   }
   setWickBend(kSave);
   return A;
@@ -1932,7 +1948,7 @@ const flameLayers = [
   // the blue collar around the wick: wide and low, sitting under the yellow
   // body. Kept dim on purpose — pushed bright it stops being a collar and
   // becomes a glowing white disc sitting on the chimney.
-  { t: 0.06, sx: 0.25, sy: 0.25, tex: 'core', col: [0.3, 0.6, 1.9], op: 0.5, nf: 7, na: 0.02 },
+  { t: 0.055, sx: 0.27, sy: 0.28, tex: 'core', col: [0.3, 0.6, 1.9], op: 0.56, nf: 7, na: 0.02 },
   // tip flicker hugs the spine (na kept small: much past 0.05 and it sheds a
   // visibly detached blob instead of licking off the tip)
   { t: 0.82, sx: 0.13, sy: 0.38, tex: 'flame', col: [1.5, 0.92, 0.4], op: 0.44, nf: 19, na: 0.05, rot: true },
@@ -2019,7 +2035,9 @@ function spawnSmoke(n, strength) {
     if (spawned >= n) break;
     if (s.life > 0) continue;
     spawned++;
-    s.pos.copy(_v1).addScaledVector(_v2.randomDirection(), 0.09);
+    // biased up off the trimmed tip, or half of every puff seeds below the rim
+    // and gets depth-culled for its first frames
+    s.pos.copy(_v1).addScaledVector(_v2.randomDirection(), 0.09).addScaledVector(sim.upDir, 0.1);
     s.vel.copy(sim.upDir).multiplyScalar(0.9 + Math.random() * 0.8)
       .addScaledVector(_v2.randomDirection(), 0.22);
     s.max = s.life = 1.3 + Math.random() * 0.9;
@@ -2089,7 +2107,7 @@ function anchorWorld(name, out) {
   lidG.updateWorldMatrix(true, false);
   switch (name) {
     case 'tip': return wickTipWorld(out);
-    case 'bendHandle': return wickPointWorld(HANDLE_EXT, out);
+    case 'bendHandle': return wickHandleWorld(out);
     case 'mouth': return insertG.localToWorld(out.set(CFG.CHIM_X, RIM_Y, 0));
     case 'mouthX': return insertG.localToWorld(out.set(CFG.CHIM_X + 1, RIM_Y, 0));
     case 'wheel': return insertG.localToWorld(out.set(CFG.WHEEL_X, CFG.WHEEL_Y + 0.2, 0));
@@ -2377,8 +2395,28 @@ function updateFrame(dt, tSec) {
     bendHandleK += (want - bendHandleK) * (1 - Math.exp(-9 * dt));
     if (bendHandleK < 0.02) bendHandleK = want ? bendHandleK : 0;
     bendHandle.visible = bendHandleK > 0.02;
+    // Demo sway: until you've used it once, the handle actually rocks the wick
+    // a little, both ways. A pulsing dot says "touch me"; rocking the thing it
+    // controls says what touching it DOES. Bounded so it can't hold the render
+    // loop awake forever, and it never reaches the bent threshold.
+    // It yields instantly to the player: if wick.k is anything other than what
+    // the demo last wrote, someone else is posing the wick and the demo is done.
+    const mine = bendDemoOn ? Math.abs(wick.k - bendDemoK) < 1e-6 : Math.abs(wick.k) < 0.02;
+    const demoWant = bendHandle.visible && bendHandleK > 0.85 && !sim.disc.bend
+      && pointers.size === 0 && !wick.straightening && bendDemoT < 26 && mine;
+    if (demoWant) {
+      bendDemoT += dt;
+      bendDemoOn = true;
+      setWickBend(Math.sin(bendDemoT * 1.6) * 0.2 * clamp01(bendDemoT * 1.2));
+      bendDemoK = wick.k;
+    } else if (bendDemoOn) {
+      bendDemoOn = false;
+      // tidy away our own leftover sway, but never a bend the player made
+      if (mine && Math.abs(wick.k) > 0.001) wick.straightening = true;
+    }
+    if (!bendHandle.visible) bendDemoT = 0;   // rearm next time it appears
     if (bendHandle.visible) {
-      wickPointWorld(HANDLE_EXT, _v1);
+      wickHandleWorld(_v1);
       bendHandle.position.copy(_v1);
       // hairline back to the tip, so it reads as attached to the wick
       wickTipWorld(_v2);
@@ -2609,7 +2647,10 @@ function updateFrame(dt, tSec) {
     level = clamp01(len / CFG.FLAME_H);
     // start the bulb just below the wick tip so the flame engulfs the char
     // instead of sitting on top of a lit rectangle
-    spineA.copy(tipWorld).addScaledVector(flameDir, -0.19);
+    // Starts just ABOVE the trimmed tip, not below it. With the wick flush to
+    // the rim, rooting the flame under the tip put its blue collar down inside
+    // the windshield, which then depth-occluded exactly the part worth seeing.
+    spineA.copy(tipWorld).addScaledVector(flameDir, 0.05);
     spineC.copy(tipWorld).addScaledVector(flameDir, len);
     spineB.copy(tipWorld).addScaledVector(sim.upDir, len * 0.28).addScaledVector(flameDir, len * 0.24);
     // the whole column leans and recovers on its own slow drift, so the flame
@@ -2663,7 +2704,10 @@ function updateFrame(dt, tSec) {
     const pf = 0.7 + 0.4 * vnoise(tSec * 13) * (0.5 + 0.5 * vnoise(tSec * 5 + 3));
     level = 0.16 * pilotK;
     pilotSpr.visible = true;
-    pilotSpr.position.copy(tipWorld).addScaledVector(flameDir, 0.07);
+    // clear of the rim: on a trimmed wick a 0.07 offset left the hiding ember's
+    // pilot half-buried in the windshield, and that glow is the thing the hint
+    // tells you to tap
+    pilotSpr.position.copy(tipWorld).addScaledVector(flameDir, 0.15);
     pilotSpr.scale.set(0.2 * pilotK * pf + 0.05, 0.26 * pilotK * pf + 0.06, 1);
     pilotSpr.material.opacity = 0.85 * pf;
     // the money shot: warm glow pulsing through the windshield holes
@@ -2785,7 +2829,10 @@ function classify(px, py) {
     const tp = anchorScreen('tip');
     // a bent wick is tucked inside the chimney: shrink its grab zone so the
     // steal-the-flame swipe across the mouth can't accidentally drag it
-    const tipR = CFG.R_TIP * S * (wickIsBent() ? 0.55 : 1);
+    // Small now that the ball is the way you bend things. Trimming the wick put
+    // the tip dead-centre in the chimney mouth, and a full-size disc there ate
+    // the centre grab that starts the pull-the-insert-out gesture.
+    const tipR = CFG.R_TIP * S * (wickIsBent() ? 0.4 : 0.6);
     // You only ever adjust a wick cold. While it's LIT the tip zone falls
     // through so a drag there is the steal/smother swipe instead. An EMBER
     // still answers to 'wick' — the pilot glow sits exactly on the tip and the
@@ -2816,9 +2863,9 @@ function classify(px, py) {
   return 'orbit';
 }
 // the bend is measured as travel FROM here, so nothing jumps to meet the finger
-function beginBendDrag(tr, ext) {
+function beginBendDrag(tr, handle) {
   tr.wickArc = Array.from({ length: 21 }, () => ({ x: 0, y: 0 }));   // odd: index 10 is upright
-  tr.wickX0 = tr.x; tr.wickY0 = tr.y; tr.wickK0 = wick.k; tr.wickExt = ext;
+  tr.wickX0 = tr.x; tr.wickY0 = tr.y; tr.wickK0 = wick.k; tr.wickHandle = handle;
 }
 function beginGesture(tr) {
   tr.gesture = classify(tr.x, tr.y);
@@ -2875,13 +2922,13 @@ function beginGesture(tr) {
     tr.holdStart = perfNow;
     chimneyHold = tr;
   } else if (tr.gesture === 'bend') {
-    beginBendDrag(tr, HANDLE_EXT);
+    beginBendDrag(tr, true);
     buzz(4);
   } else if (tr.gesture === 'wheel') {
     tr.wheelSpeed = 0;
   } else if (tr.gesture === 'wick') {
     tr.wickWasBent = wickIsBent();   // latch: a bent-wick drag never becomes a pull
-    beginBendDrag(tr, 1);
+    beginBendDrag(tr, false);
   } else if (tr.gesture === 'case' && lidIsClosed() && sim.svc.state === 'seated') {
     // press-and-hold near the base bottom of the closed case = refill
     const bb = anchorScreen('baseBottom');
@@ -3227,7 +3274,7 @@ function onPointerMove(e) {
           break;
         }
       }
-      if (sim.flame.state === OUT) dragWickArc(tr, e.clientX, e.clientY);
+      if (sim.flame.state === OUT) { dragWickArc(tr, e.clientX, e.clientY); sim.disc.bend = true; }
       break;
     }
     case 'bend': {
@@ -3423,7 +3470,7 @@ function dragWickArc(tr, px, py) {
   // back the way you came unbends it exactly the way it bent. The rail is
   // sampled at the grabbed object's own radius, so the ball keeps pace with
   // the finger instead of racing ahead of it.
-  const prog = wickArcProgress(sampleWickArc(tr.wickArc, tr.wickExt), px - tr.wickX0, py - tr.wickY0);
+  const prog = wickArcProgress(sampleWickArc(tr.wickArc, tr.wickHandle), px - tr.wickX0, py - tr.wickY0);
   if (prog === null) return;
   setWickBend(tr.wickK0 + prog);
   wick.straightening = false;
@@ -3793,7 +3840,7 @@ function simIsIdle() {
   return sim.flame.state === OUT && pointers.size === 0 && !twoMode && !sim.lid.dragging
     && sim.lid.omega === 0 && (sim.lid.theta === 0 || sim.lid.theta === CFG.LID_OPEN)
     && sim.hop.y === 0 && sim.hop.v === 0 && Math.abs(sim.squash.s) < 1e-4 && sim.squash.target === 0
-    && sim.camShake === 0 && sim.timers.length === 0 && !wick.straightening
+    && sim.camShake === 0 && sim.timers.length === 0 && !wick.straightening && !bendDemoOn
     && Math.abs(sim.wheel.omega) < 0.01 && sim.wheel.flash === 0
     && cam.yawVel === 0 && cam.pitchVel === 0 && sim.finishFlash === 0
     && sim.svc.state === 'seated' && sim.svc.y === 0 && sim.svc.pose < 1e-4
