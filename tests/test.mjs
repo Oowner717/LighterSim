@@ -281,6 +281,51 @@ await L('LIGHTER.straighten()');
   check('pointer drag-flick opens lid', th > OPEN - 0.1, `theta=${th.toFixed(2)}`);
   if (th < OPEN - 0.1) await settleLid(true);
 }
+{ // a curved thumb stroke around the hinge closes the lid fully
+  const hp = await L('LIGHTER.lidPivot()');
+  const g0 = await L('LIGHTER.lidPoint()');       // lid corner, open
+  const g1 = await L('LIGHTER.lidPoint(0)');      // lid corner, closed
+  const a0 = Math.atan2(g0.y - hp.y, g0.x - hp.x);
+  let a1 = Math.atan2(g1.y - hp.y, g1.x - hp.x);
+  a1 += 2 * Math.PI * Math.round((a0 - a1) / (2 * Math.PI));
+  const r = Math.hypot(g0.x - hp.x, g0.y - hp.y);
+  await page.evaluate(async ([hp, a0, a1, r]) => {
+    const id = 57, steps = 26;
+    const px = a => hp.x + r * Math.cos(a), py = a => hp.y + r * Math.sin(a);
+    window.__pt('pointerdown', id, px(a0), py(a0));
+    for (let i = 1; i <= steps; i++) {
+      await window.__sleep(22);
+      const a = a0 + (a1 - a0) * (i / steps) * 1.06;   // sweep a hair past closed
+      window.__pt('pointermove', id, px(a), py(a));
+    }
+    await window.__sleep(60);
+    const aEnd = a0 + (a1 - a0) * 1.06;
+    window.__pt('pointerup', id, px(aEnd), py(aEnd));
+  }, [hp, a0, a1, r]);
+  await waitL('LIGHTER.lidTheta < 0.05 && Math.abs(LIGHTER.sim.lid.omega) < 0.5', 15000);
+  check('curved arc stroke closes the lid fully', true);
+}
+{ // a straight drag passing across the hinge pivot must not teleport the lid
+  const lc = await L('LIGHTER.anchor("lidTop")');
+  const hp = await L('LIGHTER.lidPivot()');
+  const ex = hp.x + (hp.x - lc.x) * 1.2, ey = hp.y + (hp.y - lc.y) * 1.2;
+  const maxTh = await page.evaluate(async ([lc, ex, ey]) => {
+    const id = 58, steps = 24;
+    let m = 0;
+    window.__pt('pointerdown', id, lc.x, lc.y);
+    for (let i = 1; i <= steps; i++) {
+      await window.__sleep(20);
+      window.__pt('pointermove', id, lc.x + (ex - lc.x) * (i / steps), lc.y + (ey - lc.y) * (i / steps));
+      m = Math.max(m, LIGHTER.lidTheta);
+    }
+    window.__pt('pointerup', id, ex, ey);
+    return m;
+  }, [lc, ex, ey]);
+  await page.waitForTimeout(1200);
+  check('drag across the hinge pivot never snaps the lid', maxTh < 0.5 && await L('LIGHTER.lidTheta') < 0.1,
+    `maxTheta=${maxTh.toFixed(2)} settled=${(await L('LIGHTER.lidTheta')).toFixed(2)}`);
+  await settleLid(true);
+}
 { // slow wheel spin: no spark; fast wheel swipe: sparks + ignition
   const sparks0 = await L('LIGHTER.sim.counts.sparks');
   const wh = await L('LIGHTER.anchor("wheel")');

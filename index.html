@@ -163,8 +163,9 @@
         <h3>The click</h3>
         <p>The lid rides a spring-loaded cam. Pushed past halfway it snaps the rest of the
           way &mdash; open or shut, never resting in between &mdash; and that snap is the famous clink.</p>
-        <p class="how">Here: swipe the lid open, double-tap to open and light in one go,
-          or pinch lid-top and base-bottom and squeeze until it pops.</p>
+        <p class="how">Here: drag the lid and it follows your finger around the hinge
+          &mdash; arc it open or shut the way a thumb would. Double-tap to open and light
+          in one go, or pinch lid-top and base-bottom and squeeze until it pops.</p>
       </section>
       <section>
         <h3>Striking</h3>
@@ -1735,7 +1736,7 @@ function beginGesture(tr) {
     sim.lid.dragging = true;
     tr.lidTheta = sim.lid.theta;
     tr.omegaEst = 0;
-    refreshLidAxis(tr);
+    setupLidDrag(tr);
   } else if (tr.gesture === 'chimney') {
     const mo = anchorScreen('mouth');
     const mx = anchorScreen('mouthX');
@@ -1759,9 +1760,66 @@ function beginGesture(tr) {
     caseHold = tr;
   }
 }
-// The drag axis is captured ONCE at grab time and kept frozen: the grab point's
-// screen path is non-monotonic in theta (it arcs over the top), so re-deriving the
-// axis mid-drag would make an upward swipe close the lid past vertical.
+// Natural lid dragging: the lid rotates about its hinge, so a curved thumb
+// stroke should steer it by ANGLE around the hinge pivot — sweeping the screen
+// arc drives the full range along the lid's real route. But a STRAIGHT swipe
+// geometrically saturates (a line never passes the pivot), so each move takes
+// whichever estimate drives the lid further: the angle map (wins for arcs) or
+// the frozen linear axis (keeps straight flicks alive), re-anchoring the arc
+// offset afterwards so the two never fight. The theta -> screen-angle curve is
+// tabulated once at grab time; edge-on views with no angular leverage skip the
+// arc entirely.
+function lidAngleAt(A, theta) {
+  const t = clamp01(theta / CFG.LID_OPEN) * (A.length - 1);
+  const i = Math.min(A.length - 2, Math.floor(t));
+  return lerp(A[i], A[i + 1], t - i);
+}
+function lidThetaFromAngle(A, aT) {
+  const n = A.length, dir = Math.sign(A[n - 1] - A[0]) || 1;
+  if ((aT - A[0]) * dir <= 0) return 0;
+  if ((aT - A[n - 1]) * dir >= 0) return CFG.LID_OPEN;
+  for (let i = 1; i < n; i++) {
+    if ((aT - A[i]) * dir <= 0) {
+      const k = (aT - A[i - 1]) / ((A[i] - A[i - 1]) || 1e-9);
+      return ((i - 1 + k) / (n - 1)) * CFG.LID_OPEN;
+    }
+  }
+  return CFG.LID_OPEN;
+}
+function setupLidDrag(tr) {
+  refreshLidAxis(tr);   // the linear half of the hybrid always exists
+  lidG.updateWorldMatrix(true, false);
+  const hp = toScreen(lidG.getWorldPosition(_v5), {});
+  const N = 12, A = [];
+  let minR2 = Infinity;
+  for (let i = 0; i < N; i++) {
+    lidPointScreen((i / (N - 1)) * CFG.LID_OPEN, _s2);
+    const rx = _s2.x - hp.x, ry = _s2.y - hp.y;
+    minR2 = Math.min(minR2, rx * rx + ry * ry);
+    let a = Math.atan2(ry, rx);
+    if (i > 0) a += 2 * Math.PI * Math.round((A[i - 1] - a) / (2 * Math.PI));
+    A.push(a);
+  }
+  const dir = Math.sign(A[N - 1] - A[0]) || 1;
+  let usable = Math.abs(A[N - 1] - A[0]) > 0.5;          // projected arc long enough
+  for (let i = 1; i < N && usable; i++) if ((A[i] - A[i - 1]) * dir < -0.02) usable = false;
+  const fingerR = Math.hypot(tr.x - hp.x, tr.y - hp.y);
+  if (usable && minR2 > 24 * 24 && fingerR > 40) {
+    // anchor the finger's grab angle to the lid's current angle: no jump at grab
+    let af = Math.atan2(tr.y - hp.y, tr.x - hp.x);
+    const aL = lidAngleAt(A, sim.lid.theta);
+    af += 2 * Math.PI * Math.round((aL - af) / (2 * Math.PI));
+    tr.lidArc = A;
+    tr.lidPivot = hp;
+    tr.lidPrevA = af;
+    tr.lidOff = af - aL;
+  } else {
+    tr.lidArc = null;
+  }
+}
+// Fallback axis, captured ONCE at grab time and kept frozen: the grab point's
+// screen path is non-monotonic in theta (it arcs over the top), so re-deriving
+// the axis mid-drag would make an upward swipe close the lid past vertical.
 function refreshLidAxis(tr) {
   const th = sim.lid.theta;
   const dth = th < CFG.LID_OPEN / 2 ? 0.5 : -0.5;
@@ -1894,9 +1952,34 @@ function onPointerMove(e) {
   if (twoMode) { twoFingerMove(); return; }
   switch (tr.gesture) {
     case 'lid': {
-      const dth = (dx * tr.lidU.x + dy * tr.lidU.y) / tr.lidUU;
       const prev = sim.lid.theta;
-      sim.lid.theta = clamp(sim.lid.theta + dth, 0, CFG.LID_OPEN);
+      let dth = (dx * tr.lidU.x + dy * tr.lidU.y) / tr.lidUU;
+      if (tr.lidArc) {
+        const A = tr.lidArc;
+        const rx = tr.x - tr.lidPivot.x, ry = tr.y - tr.lidPivot.y;
+        if (rx * rx + ry * ry > 28 * 28) {   // inside = no angular leverage
+          let a = Math.atan2(ry, rx);
+          a += 2 * Math.PI * Math.round((tr.lidPrevA - a) / (2 * Math.PI));
+          if (Math.abs(a - tr.lidPrevA) > 0.5) {
+            // tracking loss: a path across the hinge pivot flips the angle by
+            // ~pi in an event. Genuine arc strokes step far less, so re-seed
+            // the anchor at the current pose and let the linear half carry
+            // this event — never trust a jump like that as lid motion.
+            tr.lidPrevA = Math.atan2(ry, rx);
+            tr.lidOff = tr.lidPrevA - lidAngleAt(A, prev);
+          } else {
+            // stay anchored near the arc so full circles can't wind up turns
+            a = clamp(a, Math.min(A[0], A[A.length - 1]) + tr.lidOff - 0.6,
+              Math.max(A[0], A[A.length - 1]) + tr.lidOff + 0.6);
+            tr.lidPrevA = a;
+            const dthArc = lidThetaFromAngle(A, a - tr.lidOff) - prev;
+            if (Math.abs(dthArc) >= Math.abs(dth)) dth = dthArc;
+          }
+        }
+      }
+      sim.lid.theta = clamp(prev + dth, 0, CFG.LID_OPEN);
+      // whichever estimate won, re-anchor the arc to the lid's actual pose
+      if (tr.lidArc) tr.lidOff = tr.lidPrevA - lidAngleAt(tr.lidArc, sim.lid.theta);
       if (sim.lid.theta >= CFG.LID_OPEN && !sim.lid.everOpened) {
         sim.lid.everOpened = true; sim.disc.open = true; updateHints();
       }
@@ -2440,6 +2523,8 @@ window.LIGHTER = {
   bendWick: setWickBend,
   straighten: () => { wick.straightening = true; },
   anchor: name => anchorScreen(name),
+  lidPivot: () => toScreen(lidG.getWorldPosition(_v1), {}),
+  lidPoint: th => lidPointScreen(th ?? sim.lid.theta, {}),
   classifyAt: (x, y) => classify(x, y),
   get holdZone() { return caseHold ? caseHold.holdZone : null; },
   jerk: () => Actions.jerk(),
