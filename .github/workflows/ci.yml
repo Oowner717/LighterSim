@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - claude/zippo-lighter-3d-v5j1py
+      - claude/zippo-lighter-simulation-24ei5h
+  workflow_dispatch:
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install test dependencies
+        working-directory: tests
+        run: npm install --no-audit --no-fund
+      - name: Install chromium
+        working-directory: tests
+        run: npx playwright install --with-deps chromium
+      - name: Build local test copy
+        working-directory: tests
+        run: node build-local.mjs
+      - name: Run suite
+        working-directory: tests
+        run: |
+          python3 -m http.server 8741 &
+          sleep 1
+          node test.mjs
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: tests/*.png
+          if-no-files-found: ignore

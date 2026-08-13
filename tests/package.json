@@ -1,0 +1,13 @@
+{
+  "name": "lightersim-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-local.mjs",
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0",
+    "three": "0.169.0"
+  }
+}
