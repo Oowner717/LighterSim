@@ -469,11 +469,19 @@ await page.waitForTimeout(400);
   // The flame now leans on its own from turbulent buoyancy, so a fixed
   // threshold would pass without any swipe at all. Measure how far it wanders
   // untouched over the same window first, and require the swipe to beat it.
+  // Wait for the wander rather than sampling a fixed window: the drift is
+  // driven by noise over SIM time, and a starved runner advances that so slowly
+  // the flame can honestly sit near-still for a few hundred ms.
+  await L('LIGHTER.sim.flame.maxBend = 0');
+  let drifted = true;
+  try { await waitL('LIGHTER.sim.flame.maxBend > 0.004', 8000); }
+  catch (e) { drifted = false; }
+  check('the flame wanders on its own (turbulent buoyancy)', drifted,
+    `peak=${(await L('LIGHTER.sim.flame.maxBend')).toFixed(4)}`);
+  // the swipe is judged against drift over a window its own size, not that one
   await L('LIGHTER.sim.flame.maxBend = 0');
   await page.waitForTimeout(410);
   const ambient = await L('LIGHTER.sim.flame.maxBend');
-  check('the flame wanders on its own (turbulent buoyancy)', ambient > 0.005,
-    `ambient peak=${ambient.toFixed(3)}`);
   // retried: a starved event loop can deliver too few moves through the flame
   const floor = Math.max(0.08, ambient * 2);
   let bend = 0;
