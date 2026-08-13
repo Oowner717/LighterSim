@@ -3151,6 +3151,13 @@ function onPointerUp(e) {
         updateHints();
         return;
       }
+      // flint already seated: the tube mouth and the hovering screw overlap on
+      // screen (tube outranks in classify), so a tap here means "screw it down"
+      if (gestName === 'tube' && sim.svc.screwOut && !sim.svc.stub && sim.svc.flintNew) {
+        sim.svc.autoTurn = 1;
+        buzz(4);
+        return;
+      }
       if (gestName === 'screw') {
         // tap-to-auto: the screw runs itself the way the ritual needs next —
         // but never seals the worn stub back in mid-service
