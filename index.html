@@ -365,8 +365,8 @@ const CFG = {
   FIT_HALF_W: 3.4,
   CAM_TARGET_Y: 3.45,
   ZOOM_MIN: 0.62, ZOOM_MAX: 1.9,
-  BLOOM_STRENGTH: 0.44, BLOOM_RADIUS: 0.55, BLOOM_THRESHOLD: 1.25, // HDR flame only, not chrome
-  BLOOM_RES: 384,            // max dimension of bloom buffers (kept low-res)
+  BLOOM_STRENGTH: 0.5, BLOOM_RADIUS: 0.72, BLOOM_THRESHOLD: 1.1, // HDR flame only, not chrome
+  BLOOM_RES: 512,            // bloom buffer size: below this the halo goes blocky
   FPS_BLOOM_OFF: 45,         // sustained fps below this disables bloom
 
   // body dimensions (≈ millimetres / 10, real Zippo: 38 x 13 x 57mm).
@@ -406,7 +406,7 @@ const CFG = {
   WICK_JOINT_MAX: [0.32, 0.95, 1.0, 0.9],   // per-joint plastic bend limit (rad)
 
   // flame
-  FLAME_H: 1.62,
+  FLAME_H: 1.85,
   FLAME_W: 1.18,             // extra width on top of the height scaling
   FLAME_BEND_K: 26, FLAME_BEND_C: 6.0,
   FLAME_LIGHT: 11,           // point light intensity while LIT
@@ -738,7 +738,7 @@ lidG.add(lidMesh);
   inner.position.set(-HINGE_X, -0.02, 0);
   lidG.add(inner);
 }
-{ // 5-knuckle hinge along the narrow side + cam tab on the lid
+{ // 5-knuckle hinge along the narrow side: barrel on the case, leaves on the lid
   const kg = new THREE.CylinderGeometry(0.12, 0.12, 0.2, 10);
   kg.rotateX(Math.PI / 2);                 // barrel axis along z
   for (const z of [-0.45, 0, 0.45]) {
@@ -749,9 +749,23 @@ lidG.add(lidMesh);
     const k = new THREE.Mesh(kg, matChromeDark);
     k.position.set(0, 0, z); lidG.add(k);
   }
-  const camBar = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.4, 0.3), matInsert);
-  camBar.position.set(0.32, -0.04, 0);
-  lidG.add(camBar);
+}
+// The cam — the sprung lever that gives the lid its click and holds it open or
+// shut — is part of the INSERT, not the case. Pull the insert and it leaves
+// with it, which is exactly why a bare case flops.
+{
+  const camG = new THREE.Group();
+  camG.position.set(-1.46, CFG.BASE_H - 0.02, 0);
+  const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.145, 0.145, 0.42, 14), matChromeDark);
+  nose.rotation.x = Math.PI / 2;              // barrel across the hinge axis
+  nose.position.y = 0.17;
+  const stem = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.42, 0.4), matChromeDark);
+  stem.position.y = -0.04;
+  const rivet = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.46, 10), matSteel);
+  rivet.rotation.x = Math.PI / 2;
+  rivet.position.y = 0.17;
+  camG.add(nose, stem, rivet);
+  insertG.add(camG);
 }
 { // insert shoulder fills the case mouth + dark inner floor
   const plate = new THREE.Mesh(
@@ -1615,29 +1629,37 @@ function spriteTex(stops, size = 128) {
 }
 // classic candle silhouette: rounded base, bulge low, tapering to the tip —
 // baked per-pixel with the heat ramp (white-yellow core to orange-red edge)
+// A real windproof flame is a teardrop: a wide rounded bulb sitting on the
+// wick, drawn up into a long tapering point. It is hottest (whitest) low down
+// and cools to orange at the tip, so the ramp takes height as well as radius.
 function teardropTex(ramp) {
-  const W = 128, H = 192;
+  const W = 128, H = 256;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
   const g = cv.getContext('2d');
   const img = g.createImageData(W, H);
   const d = img.data;
-  const smooth = (a, b, x) => { const t2 = clamp01((x - a) / (b - a)); return t2 * t2 * (3 - 2 * t2); };
   for (let y = 0; y < H; y++) {
     const t = 1 - y / (H - 1);                       // 0 at base .. 1 at tip
-    let w = Math.sin(Math.PI * Math.min(1, t * 0.78 + 0.16));
-    w *= 1 - smooth(0.82, 1, t);                     // close the tip
-    w *= smooth(-0.02, 0.09, t) * 0.94 + 0.06;       // soften the base edge
+    let w;
+    if (t < 0.26) {                                  // rounded bulb at the wick
+      const k = (0.26 - t) / 0.335;
+      w = Math.sqrt(Math.max(0, 1 - k * k));
+    } else {                                         // long taper to a point
+      w = Math.pow(1 - (t - 0.26) / 0.74, 0.82);
+    }
+    w *= 1 - 0.07 * Math.exp(-Math.pow((t - 0.36) / 0.13, 2));   // slight waist
     for (let x = 0; x < W; x++) {
       const u = (x / (W - 1)) * 2 - 1;
       const i = (y * W + x) * 4;
       if (w <= 0.01 || Math.abs(u) >= w) { d[i + 3] = 0; continue; }
-      const a = Math.pow(1 - (u / w) * (u / w), 1.6);
-      const c = ramp(a);
+      const a = Math.pow(1 - (u / w) * (u / w), 1.45);
+      const c = ramp(a, t);
       d[i] = c[0];
       d[i + 1] = c[1];
       d[i + 2] = c[2];
-      d[i + 3] = 255 * a * (1 - t * 0.22);
+      // solid through the body, thinning as the tip burns away
+      d[i + 3] = 255 * a * (1 - 0.42 * t * t) * (0.55 + 0.45 * Math.min(1, t / 0.12));
     }
   }
   g.putImageData(img, 0, 0);
@@ -1667,7 +1689,11 @@ function smokeTex() {   // a few overlapping lobes: wispy, not a perfect disc
 const FLAME_COLS = {
   classic: {
     swatch: '#ff9a3c',
-    tear: a => [255, 90 + 165 * Math.pow(a, 1.3), 12 + 165 * Math.pow(a, 2.6)],
+    // hot yellow-white low down, cooling to orange at the tip
+    tear: (a, t) => {
+      const heat = Math.pow(a, 1.25) * (1 - 0.42 * t);
+      return [255, 104 + 150 * heat, 22 + 168 * Math.pow(heat, 2.1)];
+    },
     flame: [[0, 'rgba(255,255,255,1)'], [0.22, 'rgba(255,225,150,0.95)'], [0.55, 'rgba(255,140,40,0.5)'], [1, 'rgba(255,70,10,0)']],
     core: [[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(170,205,255,0.85)'], [1, 'rgba(60,90,255,0)']],
     glow: [[0, 'rgba(255,175,80,0.6)'], [0.5, 'rgba(255,130,40,0.25)'], [1, 'rgba(255,110,30,0)']],
@@ -1677,7 +1703,10 @@ const FLAME_COLS = {
   },
   blue: {
     swatch: '#5f9dff',
-    tear: a => [60 + 140 * Math.pow(a, 2.2), 130 + 115 * Math.pow(a, 1.5), 255],
+    tear: (a, t) => {
+      const heat = Math.pow(a, 1.3) * (1 - 0.4 * t);
+      return [55 + 150 * Math.pow(heat, 2.0), 125 + 125 * heat, 255];
+    },
     flame: [[0, 'rgba(255,255,255,1)'], [0.22, 'rgba(185,225,255,0.95)'], [0.55, 'rgba(60,140,255,0.5)'], [1, 'rgba(20,70,255,0)']],
     core: [[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(190,180,255,0.85)'], [1, 'rgba(110,70,255,0)']],
     glow: [[0, 'rgba(110,180,255,0.6)'], [0.5, 'rgba(60,130,255,0.25)'], [1, 'rgba(40,110,255,0)']],
@@ -1687,7 +1716,10 @@ const FLAME_COLS = {
   },
   emerald: {
     swatch: '#57e084',
-    tear: a => [40 + 150 * Math.pow(a, 2.4), 255, 70 + 150 * Math.pow(a, 2.0)],
+    tear: (a, t) => {
+      const heat = Math.pow(a, 1.3) * (1 - 0.4 * t);
+      return [38 + 150 * Math.pow(heat, 2.2), 255, 66 + 155 * Math.pow(heat, 1.8)];
+    },
     flame: [[0, 'rgba(255,255,255,1)'], [0.22, 'rgba(200,255,215,0.95)'], [0.55, 'rgba(70,230,120,0.5)'], [1, 'rgba(20,190,80,0)']],
     core: [[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(180,255,230,0.85)'], [1, 'rgba(50,220,160,0)']],
     glow: [[0, 'rgba(130,255,170,0.6)'], [0.5, 'rgba(70,220,120,0.25)'], [1, 'rgba(50,200,110,0)']],
@@ -1697,7 +1729,10 @@ const FLAME_COLS = {
   },
   violet: {
     swatch: '#b46aff',
-    tear: a => [170 + 85 * Math.pow(a, 1.5), 50 + 165 * Math.pow(a, 2.5), 255],
+    tear: (a, t) => {
+      const heat = Math.pow(a, 1.3) * (1 - 0.4 * t);
+      return [168 + 87 * heat, 48 + 168 * Math.pow(heat, 2.3), 255];
+    },
     flame: [[0, 'rgba(255,255,255,1)'], [0.22, 'rgba(235,200,255,0.95)'], [0.55, 'rgba(180,80,255,0.5)'], [1, 'rgba(140,30,255,0)']],
     core: [[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(255,190,235,0.85)'], [1, 'rgba(255,90,180,0)']],
     glow: [[0, 'rgba(210,140,255,0.6)'], [0.5, 'rgba(170,80,255,0.25)'], [1, 'rgba(150,60,255,0)']],
@@ -1742,12 +1777,14 @@ function makeSprite(tex, colorArr, depthTest = true) {
 }
 // teardrop flame: one silhouette body + hot inner body, blue root, licking
 // tip and a soft halo, all riding the bent spine (bodies rotate to match it)
+// Levels are kept just over the bloom threshold rather than far above it: the
+// old values saturated the low-res bloom buffer into a white slab.
 const flameLayers = [
-  { t: 0.45, sx: 1.55, sy: 1.9, tex: 'glow', col: [1.5, 0.8, 0.38], op: 0.32, nf: 5, na: 0.05 },
-  { t: 0.5, sx: 0.6, sy: 1.12, tex: 'tear', col: [1.9, 1.5, 1.2], op: 0.95, nf: 9, na: 0.045, rot: true },
-  { t: 0.44, sx: 0.38, sy: 0.8, tex: 'tear', col: [2.5, 2.1, 1.6], op: 0.85, nf: 12, na: 0.05, rot: true },
-  { t: 0.07, sx: 0.3, sy: 0.36, tex: 'core', col: [0.75, 1.15, 2.6], op: 0.85, nf: 7, na: 0.02 },
-  { t: 0.88, sx: 0.17, sy: 0.32, tex: 'flame', col: [2.8, 1.7, 0.7], op: 0.6, nf: 17, na: 0.1 },
+  { t: 0.42, sx: 1.7, sy: 2.0, tex: 'glow', col: [1.15, 0.58, 0.26], op: 0.3, nf: 5, na: 0.05 },
+  { t: 0.5, sx: 0.62, sy: 1.1, tex: 'tear', col: [1.32, 1.0, 0.76], op: 0.95, nf: 9, na: 0.05, rot: true },
+  { t: 0.4, sx: 0.36, sy: 0.72, tex: 'tear', col: [1.62, 1.35, 1.0], op: 0.8, nf: 13, na: 0.055, rot: true },
+  { t: 0.105, sx: 0.19, sy: 0.19, tex: 'core', col: [0.5, 0.85, 1.9], op: 0.7, nf: 7, na: 0.015 },
+  { t: 0.9, sx: 0.15, sy: 0.34, tex: 'flame', col: [1.5, 0.92, 0.4], op: 0.5, nf: 19, na: 0.13, rot: true },
 ].map(L => ({ ...L, spr: makeSprite(TEX[L.tex], L.col), ph: Math.random() * 100 }));
 const pilotSpr = makeSprite(TEX.core, [2.4, 1.4, 0.55]);
 const pilotGlow = makeSprite(TEX.glow, [1.9, 0.85, 0.3]);   // inside the chimney: leaks via the holes
@@ -2348,7 +2385,8 @@ function updateFrame(dt, tSec) {
 
   const F = sim.flame;
   const bent = wickBentness();
-  const flick = 0.86 + 0.19 * vnoise(tSec * 9.5) + 0.1 * vnoise(tSec * 23 + 7);
+  const flick = 0.88 + 0.15 * vnoise(tSec * 8.5) + 0.07 * vnoise(tSec * 21 + 7)
+    + 0.05 * vnoise(tSec * 41 + 3);
   // a low tank starves the flame; each sputter dips it further
   const fuelK = lerp(CFG.FUEL_MIN_H, 1, clamp01(sim.fuel / CFG.FUEL_LOW))
     * (1 - CFG.FUEL_SPUTTER_DIP * F.sputter);
@@ -2380,7 +2418,9 @@ function updateFrame(dt, tSec) {
       * (0.25 + 0.75 * grow) * (1 + 1.15 * F.flare) * (1 - 0.35 * F.turb * Math.abs(vnoise(tSec * 31)))
       * (1 - 0.78 * F.cover);
     level = clamp01(len / CFG.FLAME_H);
-    spineA.copy(tipWorld);
+    // start the bulb just below the wick tip so the flame engulfs the char
+    // instead of sitting on top of a lit rectangle
+    spineA.copy(tipWorld).addScaledVector(flameDir, -0.19);
     spineC.copy(tipWorld).addScaledVector(flameDir, len);
     spineB.copy(tipWorld).addScaledVector(sim.upDir, len * 0.28).addScaledVector(flameDir, len * 0.24);
     const wob = 1 + 2.4 * F.turb;
@@ -2388,18 +2428,27 @@ function updateFrame(dt, tSec) {
     toScreen(spineA, _s1);
     toScreen(spineC, _s2);
     const spineRot = Math.atan2(-(_s2.x - _s1.x), _s1.y - _s2.y);
+    // a flame is anchored at the wick and loose at the tip: the higher a layer
+    // sits on the spine, the more it wanders and the harder it flickers
+    const sway = vnoise(tSec * 1.7) * 0.5 + vnoise(tSec * 4.3 + 11) * 0.3;
     for (const L of flameLayers) {
       const spr = L.spr;
       spr.visible = true;
       bezier(L.t, _v1);
-      const wig = vnoise(tSec * L.nf + L.ph) * L.na * len * wob * (0.3 + L.t);
+      const grip = 0.12 + 1.5 * L.t * L.t;           // ~0 at the root, full at the tip
+      const wig = (vnoise(tSec * L.nf + L.ph) + sway * 0.7) * L.na * len * wob * grip;
       const wig2 = vnoise(tSec * L.nf * 1.4 + L.ph + 31) * L.na * len * wob * 0.5 * L.t;
       _v1.addScaledVector(cam.right, wig).addScaledVector(cam.up, wig2);
       spr.position.copy(_v1);
-      const fs = flick * (1 + 0.55 * F.flare);
+      // the tip breathes taller/shorter; the bulb at the base barely moves
+      const lick = 1 + (flick - 1) * (0.35 + 1.1 * L.t);
+      const fs = lick * (1 + 0.55 * F.flare);
       spr.scale.set(L.sx * len * fs * CFG.FLAME_W, L.sy * len * fs * (1 + 0.35 * F.flare), 1);
-      spr.material.opacity = L.op * grow * (0.8 + 0.2 * flick);
-      if (L.rot) spr.material.rotation = spineRot + vnoise(tSec * 6 + L.ph) * 0.06 * wob;
+      spr.material.opacity = L.op * grow * (0.82 + 0.18 * lick);
+      if (L.rot) {
+        spr.material.rotation = spineRot
+          + (vnoise(tSec * 6 + L.ph) * 0.05 + sway * 0.06) * wob * (0.3 + L.t);
+      }
     }
     pilotSpr.visible = false;
     pilotGlow.visible = true;
@@ -2411,7 +2460,8 @@ function updateFrame(dt, tSec) {
     flameLight.position.copy(_v1);
     flameLight.color.setHex((FLAME_COLS[sim.flameCol] || FLAME_COLS.classic).light);
     flameLight.intensity = CFG.FLAME_LIGHT * level * (0.75 + 0.35 * flick) * (1 + 2.6 * F.flare);
-    matWickTip.emissiveIntensity = 1.5 * level * (0.75 + 0.25 * flick);
+    // barely-there: a charred wick smoulders, it does not glow like an element
+    matWickTip.emissiveIntensity = 0.38 * level * (0.75 + 0.25 * flick);
   } else if (F.state === EMBER) {
     for (const L of flameLayers) L.spr.visible = false;
     const pilotK = lerp(0.3, 1, clamp01(sim.ember.t / CFG.EMBER_LIFE));
