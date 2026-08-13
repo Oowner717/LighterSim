@@ -661,12 +661,22 @@ await L('(LIGHTER.sim.fuel = 0.2, LIGHTER.sim.flint = 70, 0)');
       window.__pt('pointerup', id, p.x, p.y);
     }, [p, id]);
   };
-  await tap('svcScrew', 75);
-  await waitL('LIGHTER.sim.svc.screwOut', 20000);
-  check('tapping the screw backs it out (spring pops free)', true);
-  await tap('svcTube', 76);
-  await waitL('LIGHTER.sim.svc.stub === false && LIGHTER.sim.svc.stubHop === 0', 15000);
-  check('tapping the tube tips out the worn flint', true);
+  // A tap only counts under CFG.TAP_MS (280ms). On a loaded CI box the 60ms
+  // sleep between down and up can stretch past that, so the tap silently
+  // becomes a long press and nothing happens. Re-tap until the step lands —
+  // guarded by an up-front check so a retry can never undo a tap that worked.
+  const tapUntil = async (name, id, expr, tries = 5) => {
+    for (let i = 0; i < tries; i++) {
+      if (await L(expr)) return true;
+      await tap(name, id + i * 10);
+      try { await waitL(expr, 6000); return true; } catch (e) { /* stalled: tap again */ }
+    }
+    return await L(expr);
+  };
+  check('tapping the screw backs it out (spring pops free)',
+    await tapUntil('svcScrew', 75, 'LIGHTER.sim.svc.screwOut'));
+  check('tapping the tube tips out the worn flint',
+    await tapUntil('svcTube', 76, 'LIGHTER.sim.svc.stub === false && LIGHTER.sim.svc.stubHop === 0'));
   const f = await L('LIGHTER.anchor("svcFlint")');
   const t = await L('LIGHTER.anchor("svcTube")');
   await page.evaluate(async ([f, t]) => {
@@ -679,9 +689,9 @@ await L('(LIGHTER.sim.fuel = 0.2, LIGHTER.sim.flint = 70, 0)');
   }, [f, t]);
   await waitL('LIGHTER.sim.svc.flintNew === true', 15000);
   check('dragging the fresh flint drops it in the tube', true);
-  await tap('svcScrew', 78);
-  await waitL('!LIGHTER.sim.svc.screwOut && LIGHTER.sim.svc.screw >= 1', 20000);
-  check('screwing back down renews the flint', await L('LIGHTER.flint') === 0);
+  const seated = await tapUntil('svcScrew', 78,
+    '!LIGHTER.sim.svc.screwOut && LIGHTER.sim.svc.screw >= 1');
+  check('screwing back down renews the flint', seated && await L('LIGHTER.flint') === 0);
 }
 { // done: slides home, everything back to normal
   await page.click('#svcDone');
