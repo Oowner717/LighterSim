@@ -466,9 +466,18 @@ await settleLid(true);
 await lightIt();
 await page.waitForTimeout(400);
 {
+  // The flame now leans on its own from turbulent buoyancy, so a fixed
+  // threshold would pass without any swipe at all. Measure how far it wanders
+  // untouched over the same window first, and require the swipe to beat it.
+  await L('LIGHTER.sim.flame.maxBend = 0');
+  await page.waitForTimeout(410);
+  const ambient = await L('LIGHTER.sim.flame.maxBend');
+  check('the flame wanders on its own (turbulent buoyancy)', ambient > 0.005,
+    `ambient peak=${ambient.toFixed(3)}`);
   // retried: a starved event loop can deliver too few moves through the flame
+  const floor = Math.max(0.08, ambient * 2);
   let bend = 0;
-  for (let tries = 0; tries < 4 && bend <= 0.08; tries++) {
+  for (let tries = 0; tries < 4 && bend <= floor; tries++) {
     const tip = await L('LIGHTER.anchor("tip")');
     await L('LIGHTER.sim.flame.maxBend = 0');
     await page.evaluate(([p, id]) => window.__swipe(p.x - 90, p.y - 40, p.x + 90, p.y - 40, 260, id),
@@ -476,7 +485,8 @@ await page.waitForTimeout(400);
     await page.waitForTimeout(150);
     bend = await L('LIGHTER.sim.flame.maxBend');
   }
-  check('finger through the flame bends it', bend > 0.08, `peak bend=${bend.toFixed(2)}`);
+  check('finger through the flame bends it well past its own drift', bend > floor,
+    `peak bend=${bend.toFixed(3)} vs floor ${floor.toFixed(3)}`);
   await page.evaluate(() => { LIGHTER.cam.yaw = 0.32; LIGHTER.cam.pitch = 0.06; LIGHTER.cam.yawVel = 0; LIGHTER.cam.pitchVel = 0; });
 }
 await settleLid(false);
