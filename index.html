@@ -406,10 +406,10 @@ const CFG = {
   WICK_JOINT_MAX: [0.32, 0.95, 1.0, 0.9],   // per-joint plastic bend limit (rad)
 
   // flame
-  FLAME_H: 1.85,
-  FLAME_W: 1.18,             // extra width on top of the height scaling
+  FLAME_H: 2.0,
+  FLAME_W: 0.95,             // width factor: a real flame is far more slender than tall
   FLAME_BEND_K: 26, FLAME_BEND_C: 6.0,
-  FLAME_LIGHT: 11,           // point light intensity while LIT
+  FLAME_LIGHT: 8,            // point light intensity while LIT (11 bloomed orange smears onto the lid)
   EMBER_LIFE: 12,            // s of unattended pilot before it dies
   TURB_TIME: 0.9,            // s of hard flicker after a fast swipe
 
@@ -499,11 +499,15 @@ function bakeEnvironment() {
     new THREE.MeshBasicMaterial({ side: THREE.BackSide }));
   shell.material.color.setRGB(0.095, 0.1, 0.11);
   env.add(shell);
+  // Panel brightness stays near the bloom threshold on purpose: ACES flattens
+  // the visible difference, but a 2.2 panel mirrored in polished metal lands
+  // ~3.3 in HDR and the bloom pass turns the reflection into a giant white
+  // rectangle (worst on the open lid's inner face seen from behind).
   const panels = [
-    { w: 14, h: 10, pos: [-8, 9, 6], c: [2.2, 2.2, 2.25] },     // key softbox, up-left-front
-    { w: 8, h: 6, pos: [9, 5, -7], c: [1.6, 1.75, 2.05] },      // cool rim, right-back
-    { w: 12, h: 3, pos: [0, 13, 2], c: [2.0, 2.0, 2.05] },      // top strip (lid-top line)
-    { w: 16, h: 1.1, pos: [0, 4.5, 11], c: [1.0, 1.0, 1.05] },  // thin frontal band for the brushed face
+    { w: 14, h: 10, pos: [-8, 9, 6], c: [1.45, 1.45, 1.48] },   // key softbox, up-left-front
+    { w: 8, h: 6, pos: [9, 5, -7], c: [1.15, 1.25, 1.45] },     // cool rim, right-back
+    { w: 12, h: 3, pos: [0, 13, 2], c: [1.4, 1.4, 1.44] },      // top strip (lid-top line)
+    { w: 16, h: 1.1, pos: [0, 4.5, 11], c: [0.9, 0.9, 0.95] },  // thin frontal band for the brushed face
     { w: 10, h: 6, pos: [0, -8, 4], c: [0.7, 0.7, 0.75] },      // floor bounce
   ];
   for (const p of panels) {
@@ -599,7 +603,7 @@ const matChrome = new THREE.MeshStandardMaterial({
   color: 0xd9dee3, metalness: 1.0, roughness: 0.55, roughnessMap: brushed, envMapIntensity: 1.0,
 });
 const matChromeDark = new THREE.MeshStandardMaterial({
-  color: 0xb8c0c7, metalness: 1.0, roughness: 0.36, roughnessMap: brushed, envMapIntensity: 1.5,
+  color: 0xb8c0c7, metalness: 1.0, roughness: 0.36, roughnessMap: brushed, envMapIntensity: 1.0,
 });
 const matSteel = new THREE.MeshStandardMaterial({
   color: 0xc8ccd2, metalness: 1.0, roughness: 0.55, bumpMap: knurlTex(), bumpScale: 1.3, envMapIntensity: 1.1,
@@ -651,7 +655,7 @@ const matBore = new THREE.MeshStandardMaterial({ color: 0x0a0c0e, metalness: 0.5
 // the case cavity: brighter and rougher than the mirror shell so it reads as
 // an inside surface rather than a hole
 const matCaseInner = new THREE.MeshStandardMaterial({
-  color: 0x9aa2ab, metalness: 0.75, roughness: 0.62, envMapIntensity: 1.5, side: THREE.DoubleSide,
+  color: 0x9aa2ab, metalness: 0.75, roughness: 0.62, envMapIntensity: 1.1, side: THREE.DoubleSide,
 });
 const matFluid = new THREE.MeshBasicMaterial({
   color: 0xbfd6e8, transparent: true, opacity: 0.75, depthWrite: false,
@@ -1112,7 +1116,7 @@ try {
 const FINISHES = {
   chrome: {
     chrome: { color: 0xd9dee3, rough: 0.55, map: true, metal: 1.0, env: 1.0 },
-    dark: { color: 0xb8c0c7, rough: 0.36, map: true, metal: 1.0, env: 1.5 },
+    dark: { color: 0xb8c0c7, rough: 0.36, map: true, metal: 1.0, env: 1.0 },
     insert: 0x757b82,
   },
   matte: {
@@ -1122,12 +1126,12 @@ const FINISHES = {
   },
   brass: {
     chrome: { color: 0xd6a84f, rough: 0.5, map: true, metal: 1.0, env: 1.0 },
-    dark: { color: 0xb8913f, rough: 0.34, map: true, metal: 1.0, env: 1.45 },
+    dark: { color: 0xb8913f, rough: 0.34, map: true, metal: 1.0, env: 1.0 },
     insert: 0x8a7a55,
   },
   gunmetal: {
     chrome: { color: 0x62686f, rough: 0.44, map: true, metal: 1.0, env: 1.15 },
-    dark: { color: 0x4d5359, rough: 0.3, map: true, metal: 1.0, env: 1.6 },
+    dark: { color: 0x4d5359, rough: 0.3, map: true, metal: 1.0, env: 1.05 },
     insert: 0x565c63,
   },
 };
@@ -1645,10 +1649,11 @@ function teardropTex(ramp) {
     if (t < 0.26) {                                  // rounded bulb at the wick
       const k = (0.26 - t) / 0.335;
       w = Math.sqrt(Math.max(0, 1 - k * k));
-    } else {                                         // long taper to a point
-      w = Math.pow(1 - (t - 0.26) / 0.74, 0.82);
+    } else {                                         // long CONCAVE taper to a fine point
+      // exponent > 1 curves the sides inward; < 1 gave a fat convex cone
+      w = Math.pow(1 - (t - 0.26) / 0.74, 1.35);
     }
-    w *= 1 - 0.07 * Math.exp(-Math.pow((t - 0.36) / 0.13, 2));   // slight waist
+    w *= 1 - 0.09 * Math.exp(-Math.pow((t - 0.36) / 0.13, 2));   // slight waist
     for (let x = 0; x < W; x++) {
       const u = (x / (W - 1)) * 2 - 1;
       const i = (y * W + x) * 4;
@@ -1780,11 +1785,12 @@ function makeSprite(tex, colorArr, depthTest = true) {
 // Levels are kept just over the bloom threshold rather than far above it: the
 // old values saturated the low-res bloom buffer into a white slab.
 const flameLayers = [
-  { t: 0.42, sx: 1.7, sy: 2.0, tex: 'glow', col: [1.15, 0.58, 0.26], op: 0.3, nf: 5, na: 0.05 },
-  { t: 0.5, sx: 0.62, sy: 1.1, tex: 'tear', col: [1.32, 1.0, 0.76], op: 0.95, nf: 9, na: 0.05, rot: true },
-  { t: 0.4, sx: 0.36, sy: 0.72, tex: 'tear', col: [1.62, 1.35, 1.0], op: 0.8, nf: 13, na: 0.055, rot: true },
-  { t: 0.105, sx: 0.19, sy: 0.19, tex: 'core', col: [0.5, 0.85, 1.9], op: 0.7, nf: 7, na: 0.015 },
-  { t: 0.9, sx: 0.15, sy: 0.34, tex: 'flame', col: [1.5, 0.92, 0.4], op: 0.5, nf: 19, na: 0.13, rot: true },
+  { t: 0.42, sx: 1.25, sy: 1.9, tex: 'glow', col: [1.15, 0.58, 0.26], op: 0.24, nf: 5, na: 0.05 },
+  { t: 0.5, sx: 0.52, sy: 1.16, tex: 'tear', col: [1.32, 1.0, 0.76], op: 0.95, nf: 9, na: 0.05, rot: true },
+  { t: 0.4, sx: 0.29, sy: 0.78, tex: 'tear', col: [1.62, 1.35, 1.0], op: 0.8, nf: 13, na: 0.055, rot: true },
+  { t: 0.105, sx: 0.17, sy: 0.17, tex: 'core', col: [0.5, 0.85, 1.9], op: 0.7, nf: 7, na: 0.015 },
+  // tip flicker hugs the spine (na kept small: at 0.13 it drifted off as a blob)
+  { t: 0.8, sx: 0.1, sy: 0.32, tex: 'flame', col: [1.5, 0.92, 0.4], op: 0.42, nf: 19, na: 0.045, rot: true },
 ].map(L => ({ ...L, spr: makeSprite(TEX[L.tex], L.col), ph: Math.random() * 100 }));
 const pilotSpr = makeSprite(TEX.core, [2.4, 1.4, 0.55]);
 const pilotGlow = makeSprite(TEX.glow, [1.9, 0.85, 0.3]);   // inside the chimney: leaks via the holes
