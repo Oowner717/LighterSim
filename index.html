@@ -586,9 +586,10 @@ const matWickTip = new THREE.MeshStandardMaterial({
 /* ============================== MODEL ============================== */
 const lighter = new THREE.Group();      // world root: recoil hop lives here
 const squash = new THREE.Group();       // squeeze scale, pivot at the base bottom
-const caseG = new THREE.Group();        // static body parts
+const caseG = new THREE.Group();        // the outer shell
+const insertG = new THREE.Group();      // the guts: chimney, wheel, wick, tank
 const lidG = new THREE.Group();         // pivots at the hinge
-lighter.add(squash); squash.add(caseG); squash.add(lidG);
+lighter.add(squash); squash.add(caseG); squash.add(insertG); squash.add(lidG);
 scene.add(lighter);
 
 // Real Zippos hinge on the narrow SIDE next to the flint wheel; the lid swings
@@ -644,10 +645,10 @@ lidG.add(lidMesh);
   const plate = new THREE.Mesh(
     roundedPlanGeo(CFG.BODY_W - 0.16, CFG.BODY_D - 0.16, CFG.EDGE_R - 0.07, 0.1), matInsert);
   plate.position.set(0, CFG.BASE_H - 0.08, 0);
-  caseG.add(plate);
+  insertG.add(plate);
   const floor = new THREE.Mesh(new THREE.BoxGeometry(CFG.CHIM_W - 0.14, 0.05, CFG.CHIM_D - 0.14), matDark);
   floor.position.set(CFG.CHIM_X, CFG.BASE_H + 0.05, 0);
-  caseG.add(floor);
+  insertG.add(floor);
 }
 { // chimney with perforated windshield plates (real holes via extruded shapes)
   const W = CFG.CHIM_W, H = CFG.CHIM_H, TH = 0.06;
@@ -674,13 +675,13 @@ lidG.add(lidMesh);
   front.position.set(CFG.CHIM_X, CFG.BASE_H + H / 2, CFG.CHIM_D / 2 - TH / 2);
   const back = new THREE.Mesh(pg, matChromeDark);
   back.position.set(CFG.CHIM_X, CFG.BASE_H + H / 2, -CFG.CHIM_D / 2 + TH / 2);
-  caseG.add(front, back);
+  insertG.add(front, back);
   const eg = perforatedPlate(CFG.CHIM_D - TH * 2, [[0, 0.23, 0.1], [0, -0.23, 0.1]]);
   eg.rotateY(Math.PI / 2);
   for (const sx of [-1, 1]) {
     const side = new THREE.Mesh(eg, matChromeDark);
     side.position.set(CFG.CHIM_X + sx * (W / 2 - TH / 2), CFG.BASE_H + H / 2, 0);
-    caseG.add(side);
+    insertG.add(side);
   }
 }
 const wheelSpin = new THREE.Mesh(
@@ -690,16 +691,16 @@ const wheelSpin = new THREE.Mesh(
   wg.position.set(CFG.WHEEL_X, CFG.WHEEL_Y, 0);
   wg.rotation.x = Math.PI / 2;             // cylinder axis -> world z
   wg.add(wheelSpin);
-  caseG.add(wg);
+  insertG.add(wg);
   const bg = new THREE.BoxGeometry(0.56, 0.6, 0.06);
   for (const sz of [-1, 1]) {
     const b = new THREE.Mesh(bg, matChromeDark);
     b.position.set(CFG.WHEEL_X, CFG.WHEEL_Y - 0.12, sz * (CFG.WHEEL_T / 2 + 0.055));
-    caseG.add(b);
+    insertG.add(b);
   }
   const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.14, 12), matChromeDark);
   collar.position.set(CFG.WHEEL_X, CFG.BASE_H + 0.04, 0);
-  caseG.add(collar);
+  insertG.add(collar);
 }
 
 // --- bendable wick: 4-segment plastic chain (wire core -> holds its shape) ---
@@ -708,7 +709,7 @@ const wick = { joints: [], tipObj: null, base: null, straightening: false };
   const L = CFG.WICK_SEG_LEN;
   wick.base = new THREE.Group();
   wick.base.position.set(CFG.CHIM_X, CFG.BASE_H + 0.06, 0);
-  caseG.add(wick.base);
+  insertG.add(wick.base);
   let parent = wick.base;
   for (let i = 0; i < CFG.WICK_SEGS; i++) {
     const j = new THREE.Group();
@@ -731,7 +732,7 @@ const wick = { joints: [], tipObj: null, base: null, straightening: false };
 function wickTipWorld(out) { return wick.tipObj.getWorldPosition(out); }
 function wickTipLocalY() {
   wickTipWorld(_v1);
-  return caseG.worldToLocal(_v1).y;
+  return insertG.worldToLocal(_v1).y;
 }
 function wickIsBent() { return wickTipLocalY() < RIM_Y - 0.06; }
 function wickBentness() { return clamp01((RIM_Y + 0.1 - wickTipLocalY()) / 0.55); }
@@ -1150,7 +1151,7 @@ function tryIgniteFromSparks() {
     if (!lidIsOpen() || sim.flame.state === LIT) return;
     // sparks land at the chimney: a wick dragged far away doesn't catch
     wickTipWorld(_v1);
-    const lp = caseG.worldToLocal(_v1);
+    const lp = insertG.worldToLocal(_v1);
     if (lp.y < RIM_Y || Math.abs(lp.x - CFG.CHIM_X) < 0.95) setFlame(LIT, 'strike');
   });
 }
@@ -1438,10 +1439,10 @@ for (let i = 0; i < 40; i++) {
   sparks.push({ spr: makeSprite(TEX.spark, [3, 2.2, 1.3]), pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1 });
 }
 function spawnSparks(n, speedK) {
-  caseG.updateWorldMatrix(true, false);
+  insertG.updateWorldMatrix(true, false);
   const origin = _v1.set(CFG.WHEEL_X - 0.1, CFG.WHEEL_Y + CFG.WHEEL_R * 0.8, 0);
-  caseG.localToWorld(origin);
-  const baseDir = _v2.set(-1.35, 1.8, 0).normalize().transformDirection(caseG.matrixWorld);
+  insertG.localToWorld(origin);
+  const baseDir = _v2.set(-1.35, 1.8, 0).normalize().transformDirection(insertG.matrixWorld);
   let spawned = 0;
   for (const s of sparks) {
     if (spawned >= n) break;
@@ -1528,12 +1529,13 @@ function toScreen(worldV, out) {
 function anchorWorld(name, out) {
   out = out || new THREE.Vector3();
   caseG.updateWorldMatrix(true, false);
+  insertG.updateWorldMatrix(true, false);
   lidG.updateWorldMatrix(true, false);
   switch (name) {
     case 'tip': return wickTipWorld(out);
-    case 'mouth': return caseG.localToWorld(out.set(CFG.CHIM_X, RIM_Y, 0));
-    case 'mouthX': return caseG.localToWorld(out.set(CFG.CHIM_X + 1, RIM_Y, 0));
-    case 'wheel': return caseG.localToWorld(out.set(CFG.WHEEL_X, CFG.WHEEL_Y + 0.2, 0));
+    case 'mouth': return insertG.localToWorld(out.set(CFG.CHIM_X, RIM_Y, 0));
+    case 'mouthX': return insertG.localToWorld(out.set(CFG.CHIM_X + 1, RIM_Y, 0));
+    case 'wheel': return insertG.localToWorld(out.set(CFG.WHEEL_X, CFG.WHEEL_Y + 0.2, 0));
     case 'lidTop': return lidG.localToWorld(out.set(-HINGE_X, CFG.LID_H, 0));
     case 'lidCenter': return lidG.localToWorld(out.set(-HINGE_X, CFG.LID_H / 2, 0));
     case 'baseBottom': return caseG.localToWorld(out.set(0, 0.08, 0));
@@ -1724,6 +1726,7 @@ function updateFrame(dt, tSec) {
   lighter.position.y = sim.hop.y;
   wheelSpin.rotation.y = sim.wheel.angle;
   caseG.updateWorldMatrix(true, true);
+  insertG.updateWorldMatrix(true, true);
   lidG.updateWorldMatrix(true, true);
 
   // wick tip + movement-induced bend (opposite the lighter's motion)
@@ -1756,7 +1759,7 @@ function updateFrame(dt, tSec) {
   flameDir.normalize();
   // an inverted lighter's flame licks around the outside of the case
   if (flameDir.y < -0.25) {
-    _v6.set(0, 0, 1).transformDirection(caseG.matrixWorld);
+    _v6.set(0, 0, 1).transformDirection(insertG.matrixWorld);
     flameDir.addScaledVector(_v6, (-flameDir.y - 0.25) * 1.6).normalize();
   }
 
@@ -1825,7 +1828,7 @@ function updateFrame(dt, tSec) {
     pilotGlow.visible = false;
     // sparks glint on the chrome: the idle flame light doubles as strike flash
     if (sim.wheel.flash > 0) {
-      caseG.localToWorld(_v1.set(CFG.WHEEL_X - 0.4, CFG.WHEEL_Y + 0.5, 0));
+      insertG.localToWorld(_v1.set(CFG.WHEEL_X - 0.4, CFG.WHEEL_Y + 0.5, 0));
       flameLight.position.copy(_v1);
       flameLight.color.setHex(0xffb066);   // flint sparks glint warm in any scheme
       flameLight.intensity = 6 * sim.wheel.flash * sim.wheel.flash * (0.75 + 0.25 * vnoise(tSec * 60));
@@ -2334,7 +2337,7 @@ function dragWick(px, py) {
   raycaster.setFromCamera(_v3.set((px / window.innerWidth) * 2 - 1, -(py / window.innerHeight) * 2 + 1, 0).clone(), camera);
   if (!raycaster.ray.intersectPlane(wickPlane, _v4)) return;
   // clamp the target into believable space (inside the chimney when below the rim)
-  const local = caseG.worldToLocal(_v4.clone());
+  const local = insertG.worldToLocal(_v4.clone());
   local.y = clamp(local.y, CFG.BASE_H + 0.22, RIM_Y + 1.5);
   if (local.y < RIM_Y) {
     local.x = clamp(local.x, CFG.CHIM_X - CFG.CHIM_W / 2 + 0.15, CFG.CHIM_X + CFG.CHIM_W / 2 - 0.15);
@@ -2343,7 +2346,7 @@ function dragWick(px, py) {
     local.x = clamp(local.x, CFG.CHIM_X - 1.7, CFG.CHIM_X + 1.7);
     local.z = clamp(local.z, -0.9, 0.9);
   }
-  const target = caseG.localToWorld(local);
+  const target = insertG.localToWorld(local);
   solveWickIK(target);
   // dragging up past the rim pulls the wick taut again
   if (local.y > RIM_Y + 0.45) {
