@@ -102,7 +102,7 @@ const CFG = {
   FIT_HALF_W: 3.4,
   CAM_TARGET_Y: 3.45,
   ZOOM_MIN: 0.62, ZOOM_MAX: 1.9,
-  BLOOM_STRENGTH: 0.38, BLOOM_RADIUS: 0.55, BLOOM_THRESHOLD: 1.25, // HDR flame only, not chrome
+  BLOOM_STRENGTH: 0.44, BLOOM_RADIUS: 0.55, BLOOM_THRESHOLD: 1.25, // HDR flame only, not chrome
   BLOOM_RES: 384,            // max dimension of bloom buffers (kept low-res)
   FPS_BLOOM_OFF: 45,         // sustained fps below this disables bloom
 
@@ -181,6 +181,7 @@ const uiScale = () => Math.max(0.85, vmin() / 420);
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _v4 = new THREE.Vector3(), _v5 = new THREE.Vector3(), _v6 = new THREE.Vector3();
+const _s1 = { x: 0, y: 0 }, _s2 = { x: 0, y: 0 };
 const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion();
 const _qI = new THREE.Quaternion();
 
@@ -292,17 +293,17 @@ function knurlTex() {
   const cv = document.createElement('canvas'); cv.width = cv.height = 128;
   const g = cv.getContext('2d');
   g.fillStyle = 'rgb(128,128,128)'; g.fillRect(0, 0, 128, 128);
-  g.lineWidth = 2.4;
+  g.lineWidth = 3;
   for (let d = -128; d < 256; d += 7) {
-    g.strokeStyle = 'rgba(255,255,255,0.85)';
+    g.strokeStyle = 'rgba(255,255,255,1)';
     g.beginPath(); g.moveTo(d, 0); g.lineTo(d + 128, 128); g.stroke();
-    g.strokeStyle = 'rgba(0,0,0,0.85)';
+    g.strokeStyle = 'rgba(0,0,0,1)';
     g.beginPath(); g.moveTo(d + 3, 0); g.lineTo(d + 131, 128); g.stroke();
-    g.strokeStyle = 'rgba(255,255,255,0.6)';
+    g.strokeStyle = 'rgba(255,255,255,0.8)';
     g.beginPath(); g.moveTo(d + 128, 0); g.lineTo(d, 128); g.stroke();
   }
   const t = new THREE.CanvasTexture(cv);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(4, 1);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6, 1);
   return t;
 }
 const brushed = brushedRoughnessTex();
@@ -310,10 +311,10 @@ const matChrome = new THREE.MeshStandardMaterial({
   color: 0xd9dee3, metalness: 1.0, roughness: 0.55, roughnessMap: brushed, envMapIntensity: 1.0,
 });
 const matChromeDark = new THREE.MeshStandardMaterial({
-  color: 0xaeb5bc, metalness: 1.0, roughness: 0.45, roughnessMap: brushed, envMapIntensity: 1.35,
+  color: 0xb8c0c7, metalness: 1.0, roughness: 0.36, roughnessMap: brushed, envMapIntensity: 1.5,
 });
 const matSteel = new THREE.MeshStandardMaterial({
-  color: 0xc8ccd2, metalness: 1.0, roughness: 0.62, bumpMap: knurlTex(), bumpScale: 0.6, envMapIntensity: 1.0,
+  color: 0xc8ccd2, metalness: 1.0, roughness: 0.55, bumpMap: knurlTex(), bumpScale: 1.3, envMapIntensity: 1.1,
 });
 const matInsert = new THREE.MeshStandardMaterial({ color: 0x757b82, metalness: 0.95, roughness: 0.5, envMapIntensity: 0.9 });
 const matDark = new THREE.MeshStandardMaterial({ color: 0x101214, metalness: 0.2, roughness: 0.9 });
@@ -513,6 +514,19 @@ function setWickBend(k) {  // 0 straight .. 1 tucked below the rim (also the deb
   wick.base.updateWorldMatrix(true, true);
 }
 
+{ // faint cool sheen suggests a studio floor even with everything out
+  const t = new THREE.CanvasTexture(radialCanvas(256, [
+    [0, 'rgba(88,108,132,0.15)'], [0.55, 'rgba(70,86,106,0.06)'], [1, 'rgba(60,74,92,0)'],
+  ]));
+  t.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(11, 11), new THREE.MeshBasicMaterial({
+    map: t, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  }));
+  m.rotation.x = -Math.PI / 2;
+  m.position.y = -0.71;
+  m.renderOrder = -2;
+  scene.add(m);
+}
 // contact shadow (lifts and fades with the squeeze-pop hop)
 const shadowMesh = (() => {
   const t = new THREE.CanvasTexture(radialCanvas(256, [
@@ -834,13 +848,60 @@ function spriteTex(stops, size = 128) {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
+// classic candle silhouette: rounded base, bulge low, tapering to the tip —
+// baked per-pixel with the heat ramp (white-yellow core to orange-red edge)
+function teardropTex() {
+  const W = 128, H = 192;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const img = g.createImageData(W, H);
+  const d = img.data;
+  const smooth = (a, b, x) => { const t2 = clamp01((x - a) / (b - a)); return t2 * t2 * (3 - 2 * t2); };
+  for (let y = 0; y < H; y++) {
+    const t = 1 - y / (H - 1);                       // 0 at base .. 1 at tip
+    let w = Math.sin(Math.PI * Math.min(1, t * 0.78 + 0.16));
+    w *= 1 - smooth(0.82, 1, t);                     // close the tip
+    w *= smooth(-0.02, 0.09, t) * 0.94 + 0.06;       // soften the base edge
+    for (let x = 0; x < W; x++) {
+      const u = (x / (W - 1)) * 2 - 1;
+      const i = (y * W + x) * 4;
+      if (w <= 0.01 || Math.abs(u) >= w) { d[i + 3] = 0; continue; }
+      const a = Math.pow(1 - (u / w) * (u / w), 1.6);
+      d[i] = 255;
+      d[i + 1] = 90 + 165 * Math.pow(a, 1.3);
+      d[i + 2] = 12 + 165 * Math.pow(a, 2.6);
+      d[i + 3] = 255 * a * (1 - t * 0.22);
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const tx = new THREE.CanvasTexture(cv);
+  tx.colorSpace = THREE.SRGBColorSpace;
+  return tx;
+}
+function smokeTex() {   // a few overlapping lobes: wispy, not a perfect disc
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const g = cv.getContext('2d');
+  for (const [x, y, r] of [[64, 72, 46], [44, 52, 30], [86, 50, 28], [58, 38, 22], [82, 84, 30]]) {
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, 'rgba(200,203,210,0.16)');
+    gr.addColorStop(1, 'rgba(200,203,210,0)');
+    g.fillStyle = gr;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 const TEX = {
   flame: spriteTex([[0, 'rgba(255,255,255,1)'], [0.22, 'rgba(255,225,150,0.95)'],
     [0.55, 'rgba(255,140,40,0.5)'], [1, 'rgba(255,70,10,0)']]),
+  tear: teardropTex(),
   core: spriteTex([[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(170,205,255,0.85)'], [1, 'rgba(60,90,255,0)']]),
   glow: spriteTex([[0, 'rgba(255,175,80,0.6)'], [0.5, 'rgba(255,130,40,0.25)'], [1, 'rgba(255,110,30,0)']]),
   spark: spriteTex([[0, 'rgba(255,255,255,1)'], [0.3, 'rgba(255,225,160,0.95)'], [1, 'rgba(255,150,50,0)']], 48),
-  smoke: spriteTex([[0, 'rgba(195,198,205,0.32)'], [0.6, 'rgba(185,188,196,0.14)'], [1, 'rgba(180,184,192,0)']]),
+  smoke: smokeTex(),
 };
 function makeSprite(tex, colorArr, depthTest = true) {
   const m = new THREE.SpriteMaterial({
@@ -854,14 +915,14 @@ function makeSprite(tex, colorArr, depthTest = true) {
   scene.add(s);
   return s;
 }
-// stacked flame layers along a bent spine
+// teardrop flame: one silhouette body + hot inner body, blue root, licking
+// tip and a soft halo, all riding the bent spine (bodies rotate to match it)
 const flameLayers = [
-  { t: 0.05, sx: 0.36, sy: 0.44, tex: 'core', col: [0.7, 1.1, 2.6], op: 0.9, nf: 7, na: 0.02 },
-  { t: 0.17, sx: 0.3, sy: 0.5, tex: 'core', col: [0.9, 1.3, 2.2], op: 0.5, nf: 9, na: 0.04 },
-  { t: 0.34, sx: 0.64, sy: 0.98, tex: 'flame', col: [2.6, 1.35, 0.55], op: 0.95, nf: 11, na: 0.07 },
-  { t: 0.6, sx: 0.5, sy: 0.9, tex: 'flame', col: [2.8, 1.7, 0.75], op: 0.9, nf: 13, na: 0.11 },
-  { t: 0.85, sx: 0.3, sy: 0.64, tex: 'flame', col: [2.9, 2.1, 1.0], op: 0.85, nf: 15, na: 0.16 },
-  { t: 0.45, sx: 1.9, sy: 2.4, tex: 'glow', col: [1.4, 0.75, 0.35], op: 0.3, nf: 5, na: 0.05 },
+  { t: 0.45, sx: 1.55, sy: 1.9, tex: 'glow', col: [1.5, 0.8, 0.38], op: 0.32, nf: 5, na: 0.05 },
+  { t: 0.5, sx: 0.6, sy: 1.12, tex: 'tear', col: [1.9, 1.5, 1.2], op: 0.95, nf: 9, na: 0.045, rot: true },
+  { t: 0.44, sx: 0.38, sy: 0.8, tex: 'tear', col: [2.5, 2.1, 1.6], op: 0.85, nf: 12, na: 0.05, rot: true },
+  { t: 0.07, sx: 0.3, sy: 0.36, tex: 'core', col: [0.75, 1.15, 2.6], op: 0.85, nf: 7, na: 0.02 },
+  { t: 0.88, sx: 0.17, sy: 0.32, tex: 'flame', col: [2.8, 1.7, 0.7], op: 0.6, nf: 17, na: 0.1 },
 ].map(L => ({ ...L, spr: makeSprite(TEX[L.tex], L.col), ph: Math.random() * 100 }));
 const pilotSpr = makeSprite(TEX.core, [2.4, 1.4, 0.55]);
 const pilotGlow = makeSprite(TEX.glow, [1.9, 0.85, 0.3]);   // inside the chimney: leaks via the holes
@@ -1161,6 +1222,10 @@ function updateFrame(dt, tSec) {
     spineC.copy(tipWorld).addScaledVector(flameDir, len);
     spineB.copy(tipWorld).addScaledVector(sim.upDir, len * 0.28).addScaledVector(flameDir, len * 0.24);
     const wob = 1 + 2.4 * F.turb;
+    // screen-space spine tilt so the teardrop bodies lean with the bend
+    toScreen(spineA, _s1);
+    toScreen(spineC, _s2);
+    const spineRot = Math.atan2(-(_s2.x - _s1.x), _s1.y - _s2.y);
     for (const L of flameLayers) {
       const spr = L.spr;
       spr.visible = true;
@@ -1172,6 +1237,7 @@ function updateFrame(dt, tSec) {
       const fs = flick * (1 + 0.55 * F.flare);
       spr.scale.set(L.sx * len * fs * CFG.FLAME_W, L.sy * len * fs * (1 + 0.35 * F.flare), 1);
       spr.material.opacity = L.op * grow * (0.8 + 0.2 * flick);
+      if (L.rot) spr.material.rotation = spineRot + vnoise(tSec * 6 + L.ph) * 0.06 * wob;
     }
     pilotSpr.visible = false;
     pilotGlow.visible = true;
@@ -1251,11 +1317,12 @@ function updateFrame(dt, tSec) {
     sm.pos.addScaledVector(sm.vel, dt);
     sm.pos.addScaledVector(cam.right, vnoise(tSec * 2.2 + sm.ph) * 0.25 * dt);
     const k = clamp01(sm.life / sm.max);
-    const gr = 1.35 - k;
+    const gr = 1.6 - k;
     sm.spr.visible = sm.life > 0;
     sm.spr.position.copy(sm.pos);
     sm.spr.scale.set(gr, gr, 1);
-    sm.spr.material.opacity = 0.4 * sm.k * k * (1 - k * 0.3);
+    sm.spr.material.rotation = sm.ph + (1 - k) * 0.7 * (sm.ph % 2 < 1 ? 1 : -1);
+    sm.spr.material.opacity = 0.8 * sm.k * k * (1 - k * 0.3);
   }
   updateCamera(dt, tSec);
 }
