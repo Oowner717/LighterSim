@@ -125,6 +125,16 @@ check('fast strike with lid open ignites', true);
   await L('(LIGHTER.CFG.FLAME_VOL = true, 0)');
   await waitL('LIGHTER.volActive === true', 8000);
   check('and back to the volume again', true);
+  // The column has to stand ON the windshield, not down inside it. Rooted too low
+  // and the depth prepass eats the part worth seeing -- it reported as "the flame
+  // is buried in the chimney"; rooted too high and it visibly floats off the wick.
+  {
+    const s = await L('LIGHTER.flameSpine');
+    check('the flame is rooted at the rim, not sunk into the chimney',
+      s.ay > s.rim && s.ay - s.rim < 0.35, `base is rim+${(s.ay - s.rim).toFixed(2)}`);
+    check('the flame stands clear of the chimney',
+      s.cy - s.rim > 1.2, `tip is rim+${(s.cy - s.rim).toFixed(2)}`);
+  }
   // regression: the volume was only ever hidden inside the LIT branch, so it
   // stayed on screen after the flame went out, and its depth prepass kept running
   await settleLid(false);
