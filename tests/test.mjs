@@ -691,14 +691,30 @@ await settleLid(false);
 
   await pick('swFlame', 'sunset');                       // a two-hue combination
   check('picking a flame applies it', await L('LIGHTER.flameCol') === 'sunset');
-  // read the scheme, not the live uniforms: those are only written while LIT, so
-  // a stale pair here would pass or fail on render state rather than on the data
-  const two = await L('JSON.stringify(LIGHTER.flameTint("sunset"))');
-  const one = await L('JSON.stringify(LIGHTER.flameTint("classic"))');
-  check('a combination tints the volume by height',
-    JSON.parse(two).vol.join() !== JSON.parse(two).vol2.join(), two);
-  check('a single-hue flame tints it evenly',
-    JSON.parse(one).vol.join() === JSON.parse(one).vol2.join(), one);
+  // Read the scheme, not the live uniforms: those are only written while LIT, so
+  // a stale pair would pass or fail on render state rather than on the data.
+  // Every scheme now has distinct body and tip colours -- that IS the heat
+  // gradient -- so what separates a combination is that they differ in HUE, not
+  // merely in value. Comparing the numbers alone stopped meaning anything.
+  const hue = ([r, g, b]) => {
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), c = mx - mn;
+    if (c < 1e-6) return 0;
+    const h = mx === r ? ((g - b) / c + 6) % 6 : mx === g ? (b - r) / c + 2 : (r - g) / c + 4;
+    return h * 60;
+  };
+  const spread = async n => {
+    const t = JSON.parse(await L(`JSON.stringify(LIGHTER.flameTint(${JSON.stringify(n)}))`));
+    const d = Math.abs(hue(t.vol) - hue(t.vol2));
+    return Math.min(d, 360 - d);
+  };
+  for (const n of ['sunset', 'aurora', 'peacock']) {
+    const d = await spread(n);
+    check(`${n} burns two hues`, d > 40, `${d.toFixed(0)} degrees apart`);
+  }
+  for (const n of ['classic', 'blue', 'emerald']) {
+    const d = await spread(n);
+    check(`${n} burns one hue`, d < 30, `${d.toFixed(0)} degrees apart`);
+  }
 
   await L('(LIGHTER.setFinish("chrome"), LIGHTER.setFlameCol("classic"), LIGHTER.setBackdrop("midnight"), 0)');
   check('a plain metal drops the normal map again',
