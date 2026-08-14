@@ -719,29 +719,34 @@ const BACKDROPS = {
   teal:     { sky: '#1c4a50', pool: '#26646b', floor: '#08171a' },
   sand:     { sky: '#4d4132', pool: '#6b5a44', floor: '#16120d' },
   ash:      { sky: '#3e3e42', pool: '#525258', floor: '#111113' },
+  // --- recipes that are not the sweep ---------------------------------------
+  softbox:  { draw: drawSoftbox, swatch: 'linear-gradient(135deg,#dbe6f2 0%,#2a2f37 55%,#0d0f13 100%)' },
+  spotlight:{ draw: drawSpotlight, floor: '#0b0c10', rgb: '236,226,206',
+              swatch: 'radial-gradient(ellipse at 50% 62%, #ece2ce 0%, #0b0c10 72%)' },
+  blueprint:{ draw: drawBlueprint, swatch: 'repeating-linear-gradient(0deg,#2a4a78 0 3px,#152238 3px 8px)' },
+  horizon:  { draw: drawHorizon, swatch: 'linear-gradient(0deg,#1a1024 0%,#7a2f4a 34%,#d9743a 62%,#f2b25c 100%)',
+              bands: ['#241a3a', '#3d2350', '#7a2f4a', '#b8503f', '#d9743a', '#f2b25c', '#8a4a34', '#2a1620'] },
+  bokeh:    { draw: drawBokeh, sky: '#101828', floor: '#05070c',
+              lights: ['255,196,120', '120,190,255', '255,130,170', '180,255,220'],
+              swatch: 'radial-gradient(circle at 32% 34%, #ffc478 0 12%, #0f1728 60%)' },
+  stars:    { draw: drawStars, finish: 'noshadow', swatch: 'radial-gradient(circle at 44% 40%, #5668c4 0%, #05060b 70%)' },
+  gels:     { draw: drawGels, left: '255,64,150', right: '60,200,255',
+              swatch: 'linear-gradient(90deg,#ff4096 0%,#0a0b10 50%,#3cc8ff 100%)' },
+  velvet:   { draw: drawVelvet, deep: '#14060c', rgb: '150,26,58',
+              swatch: 'radial-gradient(circle at 42% 38%, #961a3a 0%, #14060c 74%)' },
 };
-for (const b of Object.values(BACKDROPS)) b.swatch = b.pool;
+// sweep backdrops take their swatch from the pool colour; the drawn ones
+// declare their own, so only fill in what is missing
+for (const b of Object.values(BACKDROPS)) if (!b.swatch) b.swatch = b.pool;
 const BACKDROP_ORDER = Object.keys(BACKDROPS);
-function backdropCanvas(b) {
-  const S = 512;
-  const cv = document.createElement('canvas'); cv.width = cv.height = S;
-  const g = cv.getContext('2d');
-  const v = g.createLinearGradient(0, 0, 0, S);
-  v.addColorStop(0, b.sky); v.addColorStop(0.44, b.pool); v.addColorStop(1, b.floor);
-  g.fillStyle = v; g.fillRect(0, 0, S, S);
-  // the pool itself, brightest just behind where the lighter stands
-  const r = g.createRadialGradient(S * 0.5, S * 0.44, 0, S * 0.5, S * 0.44, S * 0.62);
-  r.addColorStop(0, b.pool); r.addColorStop(1, 'rgba(0,0,0,0)');
-  g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.42;
-  g.fillStyle = r; g.fillRect(0, 0, S, S);
-  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
-  // A soft pool low-centre. The lighter is a floating hero object, and against a
-  // LIT sweep that reads as cut out in a way it never did on near-black -- this
-  // is the shadow it would drop on the sweep, and it is what puts it in a room.
-  const sh = g.createRadialGradient(S * 0.5, S * 0.80, 0, S * 0.5, S * 0.80, S * 0.36);
-  sh.addColorStop(0, 'rgba(0,0,0,0.44)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = sh; g.fillRect(0, 0, S, S);
-  // vignette: frames the subject, and stops the corners competing with the flame
+// Shared furniture every backdrop gets, whatever it draws: the shadow the
+// lighter drops on it, the vignette that frames it, and the dither.
+function backdropFinish(g, S, opt) {
+  if (opt !== 'noshadow') {
+    const sh = g.createRadialGradient(S * 0.5, S * 0.80, 0, S * 0.5, S * 0.80, S * 0.36);
+    sh.addColorStop(0, 'rgba(0,0,0,0.44)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = sh; g.fillRect(0, 0, S, S);
+  }
   const vg = g.createRadialGradient(S * 0.5, S * 0.46, S * 0.16, S * 0.5, S * 0.52, S * 0.80);
   vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.66)');
   g.fillStyle = vg; g.fillRect(0, 0, S, S);
@@ -752,6 +757,158 @@ function backdropCanvas(b) {
     id.data[i] += n; id.data[i + 1] += n; id.data[i + 2] += n;
   }
   g.putImageData(id, 0, 0);
+}
+// the original sweep, now one recipe among several rather than the only one
+function drawSweep(g, S, b) {
+  const v = g.createLinearGradient(0, 0, 0, S);
+  v.addColorStop(0, b.sky); v.addColorStop(0.44, b.pool); v.addColorStop(1, b.floor);
+  g.fillStyle = v; g.fillRect(0, 0, S, S);
+  // the pool itself, brightest just behind where the lighter stands
+  const r = g.createRadialGradient(S * 0.5, S * 0.44, 0, S * 0.5, S * 0.44, S * 0.62);
+  r.addColorStop(0, b.pool); r.addColorStop(1, 'rgba(0,0,0,0)');
+  g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.42;
+  g.fillStyle = r; g.fillRect(0, 0, S, S);
+  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+}
+// ---- backdrops that are not the sweep --------------------------------------
+// Each one still has to SEPARATE the lighter from its ground: a dark case
+// against a dark field was a real bug once, so every recipe below puts
+// something lighter than the case directly behind where the lighter stands.
+function fillFlat(g, S, c) { g.fillStyle = c; g.fillRect(0, 0, S, S); }
+
+// the light source itself, visible in frame and mirrored in the chrome
+function drawSoftbox(g, S) {
+  const v = g.createLinearGradient(0, 0, 0, S);
+  v.addColorStop(0, '#2a2f37'); v.addColorStop(1, '#0d0f13');
+  g.fillStyle = v; g.fillRect(0, 0, S, S);
+  const bx = S * 0.06, by = S * 0.04, bw = S * 0.52, bh = S * 0.46;
+  for (let i = 26; i >= 0; i--) {          // soft-edged panel, built as rings
+    const k = i / 26, pad = k * S * 0.09;
+    g.fillStyle = `rgba(214,226,240,${0.055 + (1 - k) * 0.5})`;
+    g.beginPath();
+    g.roundRect(bx - pad, by - pad, bw + pad * 2, bh + pad * 2, S * 0.05 + pad);
+    g.fill();
+  }
+  const sp = g.createRadialGradient(S * 0.5, S * 0.5, 0, S * 0.5, S * 0.5, S * 0.5);
+  sp.addColorStop(0, 'rgba(150,170,196,0.30)'); sp.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = sp; g.fillRect(0, 0, S, S);
+}
+
+// one hard lamp: a bright ellipse with a real edge, the subject standing in it
+function drawSpotlight(g, S, b) {
+  fillFlat(g, S, b.floor);
+  g.save();
+  g.translate(S * 0.5, S * 0.60); g.scale(1, 0.46);
+  for (let i = 30; i >= 0; i--) {
+    const k = i / 30;
+    g.fillStyle = `rgba(${b.rgb},${0.06 + Math.pow(1 - k, 2.2) * 0.72})`;
+    g.beginPath(); g.arc(0, 0, S * 0.50 * (0.35 + k * 0.65), 0, Math.PI * 2); g.fill();
+  }
+  g.restore();
+  const beam = g.createLinearGradient(S * 0.5, 0, S * 0.5, S * 0.62);   // the cone above it
+  beam.addColorStop(0, `rgba(${b.rgb},0.16)`); beam.addColorStop(1, `rgba(${b.rgb},0)`);
+  g.fillStyle = beam;
+  g.beginPath(); g.moveTo(S * 0.40, 0); g.lineTo(S * 0.60, 0); g.lineTo(S * 0.80, S * 0.62);
+  g.lineTo(S * 0.20, S * 0.62); g.closePath(); g.fill();
+}
+
+// drafting paper: fine grid, and a brighter wash where the subject sits
+function drawBlueprint(g, S) {
+  fillFlat(g, S, '#152238');
+  const wash = g.createRadialGradient(S * 0.5, S * 0.46, 0, S * 0.5, S * 0.46, S * 0.55);
+  wash.addColorStop(0, 'rgba(96,138,196,0.55)'); wash.addColorStop(1, 'rgba(96,138,196,0)');
+  g.fillStyle = wash; g.fillRect(0, 0, S, S);
+  for (let i = 0; i * 16 <= S; i++) {
+    const major = i % 5 === 0;
+    g.strokeStyle = `rgba(168,206,255,${major ? 0.26 : 0.11})`;
+    g.lineWidth = major ? 1.6 : 0.8;
+    g.beginPath(); g.moveTo(i * 16, 0); g.lineTo(i * 16, S); g.stroke();
+    g.beginPath(); g.moveTo(0, i * 16); g.lineTo(S, i * 16); g.stroke();
+  }
+}
+
+// banded sky: the subject is silhouetted on the bright band at its own height
+function drawHorizon(g, S, b) {
+  const bands = b.bands;
+  for (let i = 0; i < bands.length; i++) {
+    const y0 = S * (i / bands.length), y1 = S * ((i + 1) / bands.length);
+    const gr = g.createLinearGradient(0, y0, 0, y1);
+    gr.addColorStop(0, bands[i]); gr.addColorStop(1, bands[Math.min(i + 1, bands.length - 1)]);
+    g.fillStyle = gr; g.fillRect(0, y0 - 1, S, y1 - y0 + 2);
+  }
+  const sun = g.createRadialGradient(S * 0.5, S * 0.52, 0, S * 0.5, S * 0.52, S * 0.34);
+  sun.addColorStop(0, 'rgba(255,226,170,0.55)'); sun.addColorStop(1, 'rgba(255,200,140,0)');
+  g.fillStyle = sun; g.fillRect(0, 0, S, S);
+}
+
+// out-of-focus city: the discs behind the subject are the brightest thing
+function drawBokeh(g, S, b) {
+  const v = g.createLinearGradient(0, 0, 0, S);
+  v.addColorStop(0, b.sky); v.addColorStop(1, b.floor);
+  g.fillStyle = v; g.fillRect(0, 0, S, S);
+  const cols = b.lights;
+  for (let i = 0; i < 90; i++) {
+    const x = Math.random() * S, y = Math.random() * S * 0.86;
+    // bigger and brighter near the middle, so the subject reads against them
+    const near = 1 - Math.min(1, Math.hypot(x - S * 0.5, y - S * 0.45) / (S * 0.55));
+    const r = S * (0.018 + Math.random() * 0.055) * (0.6 + near);
+    const c = cols[(Math.random() * cols.length) | 0];
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, `rgba(${c},${0.10 + near * 0.34})`);
+    gr.addColorStop(0.72, `rgba(${c},${0.06 + near * 0.20})`);
+    gr.addColorStop(1, `rgba(${c},0)`);
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  }
+}
+
+// deep field: a nebula wash behind the subject keeps it from being a hole
+function drawStars(g, S) {
+  fillFlat(g, S, '#05060b');
+  for (const [x, y, r, c] of [[0.44, 0.40, 0.42, '86,104,196'], [0.62, 0.55, 0.30, '150,72,150']]) {
+    const gr = g.createRadialGradient(S * x, S * y, 0, S * x, S * y, S * r);
+    gr.addColorStop(0, `rgba(${c},0.42)`); gr.addColorStop(1, `rgba(${c},0)`);
+    g.fillStyle = gr; g.fillRect(0, 0, S, S);
+  }
+  for (let i = 0; i < 700; i++) {
+    const a = 0.15 + Math.random() * 0.85, r = Math.random() < 0.94 ? 0.7 : 1.7;
+    g.fillStyle = `rgba(255,252,245,${a})`;
+    g.beginPath(); g.arc(Math.random() * S, Math.random() * S, r, 0, Math.PI * 2); g.fill();
+  }
+}
+
+// two gelled lamps: the subject is lit warm from one side and cool from the other
+function drawGels(g, S, b) {
+  fillFlat(g, S, '#0a0b10');
+  for (const [cx, col] of [[0.10, b.left], [0.90, b.right]]) {
+    const gr = g.createRadialGradient(S * cx, S * 0.42, 0, S * cx, S * 0.42, S * 0.78);
+    gr.addColorStop(0, `rgba(${col},0.72)`); gr.addColorStop(1, `rgba(${col},0)`);
+    g.globalCompositeOperation = 'lighter';
+    g.fillStyle = gr; g.fillRect(0, 0, S, S);
+  }
+  g.globalCompositeOperation = 'source-over';
+}
+
+// display cloth: a soft sheen with folds falling away from the subject
+function drawVelvet(g, S, b) {
+  fillFlat(g, S, b.deep);
+  const sh = g.createRadialGradient(S * 0.5, S * 0.42, 0, S * 0.5, S * 0.5, S * 0.66);
+  sh.addColorStop(0, `rgba(${b.rgb},0.72)`); sh.addColorStop(1, `rgba(${b.rgb},0)`);
+  g.fillStyle = sh; g.fillRect(0, 0, S, S);
+  for (let i = 0; i < 22; i++) {                  // folds
+    const x = Math.random() * S, w = S * (0.02 + Math.random() * 0.07);
+    const gr = g.createLinearGradient(x - w, 0, x + w, 0);
+    gr.addColorStop(0, 'rgba(0,0,0,0)');
+    gr.addColorStop(0.5, `rgba(255,255,255,${0.02 + Math.random() * 0.05})`);
+    gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.fillRect(x - w, 0, w * 2, S);
+  }
+}
+function backdropCanvas(b) {
+  const S = 512;
+  const cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const g = cv.getContext('2d');
+  (b.draw || drawSweep)(g, S, b);
+  backdropFinish(g, S, b.finish);
   return cv;
 }
 function applyBackdrop(name) {
@@ -1551,15 +1708,41 @@ function patternTex(kind) {
       }
       g.stroke();
     }
+  } else if (kind === 'sunburst') {              // deco rays fanning from the base
+    const cx = N * 0.5, cy = N * 1.02;           // origin just off the bottom edge
+    for (let i = 0; i < 96; i++) {
+      const a = -Math.PI / 2 + (i / 96 - 0.5) * 2.1;
+      line(i % 2 ? 0.42 : 0.16, 1.4);
+      seg(cx, cy, cx + Math.cos(a) * N * 1.5, cy + Math.sin(a) * N * 1.5);
+      dark(0.30, 1.0);
+      const a2 = a + 0.011;
+      seg(cx, cy, cx + Math.cos(a2) * N * 1.5, cy + Math.sin(a2) * N * 1.5);
+    }
+  } else if (kind === 'deco') {                  // polished above, blasted below
+    g.fillStyle = 'rgb(38,38,38)'; g.fillRect(0, 0, N, N * 0.46);      // mirror
+    g.fillStyle = 'rgb(196,196,196)'; g.fillRect(0, N * 0.52, N, N);   // blasted
+    const band = g.createLinearGradient(0, N * 0.46, 0, N * 0.52);
+    band.addColorStop(0, 'rgb(38,38,38)'); band.addColorStop(1, 'rgb(196,196,196)');
+    g.fillStyle = band; g.fillRect(0, N * 0.46, N, N * 0.06);
+    for (let i = 0; i < 2600; i++) {             // the blast texture itself
+      const y = N * 0.52 + Math.random() * N * 0.48;
+      g.fillStyle = `rgba(${Math.random() < 0.5 ? 255 : 0},${Math.random() < 0.5 ? 255 : 0},${Math.random() < 0.5 ? 255 : 0},0.10)`;
+      g.fillRect(Math.random() * N, y, 2, 2);
+    }
+    g.fillStyle = 'rgba(255,255,255,0.9)';       // the crisp line where they meet
+    g.fillRect(0, N * 0.485, N, 2);
   } else {                                       // 'scale': overlapping fish scales
     for (let row = 0; row * 13 < N + 13; row++) for (let col = 0; col * 22 < N + 22; col++) {
       line(0.30, 2);
       g.beginPath(); g.arc(col * 22 + (row % 2 ? 11 : 0), row * 13, 12, Math.PI, 0); g.stroke();
     }
   }
+  // COMPOSITIONAL patterns are a design placed on the case -- one origin, one
+  // split -- so they tile once. The rest are surface texture and tile twice.
+  const rep = (kind === 'sunburst' || kind === 'deco') ? 1 : 2;
   const rough = new THREE.CanvasTexture(cv);
   rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
-  rough.repeat.set(2, 2);
+  rough.repeat.set(rep, rep);
   // A roughness map alone is nearly invisible on metal this polished -- it only
   // blurs a reflection slightly. Real engine-turning or hammering is GEOMETRY,
   // so read the pattern as a height field and derive a normal map from its
@@ -1582,9 +1765,120 @@ function patternTex(kind) {
   ncv.getContext('2d').putImageData(out, 0, 0);
   const normal = new THREE.CanvasTexture(ncv);
   normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
-  normal.repeat.set(2, 2);
+  normal.repeat.set(rep, rep);
   return { rough, normal };
 }
+// Finishes whose COLOUR varies across the case. Same lazy-and-cached deal as
+// patternTex: built on first use, never at boot.
+function albedoTex(kind) {
+  const N = 256;
+  const cv = document.createElement('canvas'); cv.width = cv.height = N;
+  const g = cv.getContext('2d');
+  const blob = (x, y, r, fill) => {
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, fill); gr.addColorStop(1, fill.replace(/[\d.]+\)$/, '0)'));
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  };
+  if (kind === 'patina') {                       // verdigris creeping over copper
+    g.fillStyle = '#7a4a2c'; g.fillRect(0, 0, N, N);
+    for (let i = 0; i < 220; i++) {
+      const x = Math.random() * N, y = Math.random() * N;
+      blob(x, y, 14 + Math.random() * 46, `rgba(${60 + Math.random() * 40 | 0},${140 + Math.random() * 60 | 0},${110 + Math.random() * 40 | 0},0.55)`);
+    }
+    for (let i = 0; i < 70; i++) {               // bright crust where it flakes
+      blob(Math.random() * N, Math.random() * N, 5 + Math.random() * 14, 'rgba(190,225,205,0.5)');
+    }
+  } else if (kind === 'tortoise') {              // translucent shell, mottled
+    g.fillStyle = '#c98a3c'; g.fillRect(0, 0, N, N);
+    for (let i = 0; i < 90; i++) {
+      const x = Math.random() * N, y = Math.random() * N, r = 12 + Math.random() * 34;
+      g.save(); g.translate(x, y); g.rotate(Math.random() * Math.PI); g.scale(1, 0.55);
+      const gr = g.createRadialGradient(0, 0, 0, 0, 0, r);
+      gr.addColorStop(0, 'rgba(38,16,6,0.92)'); gr.addColorStop(0.6, 'rgba(78,32,10,0.55)');
+      gr.addColorStop(1, 'rgba(120,60,20,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.fill(); g.restore();
+    }
+  } else if (kind === 'marble') {                // stone with veins running through
+    g.fillStyle = '#e8e6e0'; g.fillRect(0, 0, N, N);
+    for (let i = 0; i < 26; i++) {
+      g.strokeStyle = `rgba(${70 + Math.random() * 50 | 0},${72 + Math.random() * 50 | 0},${80 + Math.random() * 50 | 0},${0.14 + Math.random() * 0.3})`;
+      g.lineWidth = 0.6 + Math.random() * 3.4;
+      g.beginPath();
+      let x = Math.random() * N, y = -10, a = (Math.random() - 0.5) * 1.1;
+      g.moveTo(x, y);
+      while (y < N + 10) { a += (Math.random() - 0.5) * 0.5; x += Math.sin(a) * 9; y += 7; g.lineTo(x, y); }
+      g.stroke();
+    }
+  } else if (kind === 'rust') {                  // steel losing to oxide
+    g.fillStyle = '#6e7378'; g.fillRect(0, 0, N, N);
+    for (let i = 0; i < 260; i++) {
+      blob(Math.random() * N, Math.random() * N, 8 + Math.random() * 40,
+           `rgba(${120 + Math.random() * 70 | 0},${52 + Math.random() * 40 | 0},${20 + Math.random() * 24 | 0},0.6)`);
+    }
+    for (let i = 0; i < 900; i++) {              // pitting
+      g.fillStyle = `rgba(40,22,12,${0.15 + Math.random() * 0.4})`;
+      g.fillRect(Math.random() * N, Math.random() * N, 1 + Math.random() * 2, 1 + Math.random() * 2);
+    }
+  } else if (kind === 'fireblue') {              // tempering colours running up steel
+    // straw at the cool end through bronze and purple to blue: the sequence a
+    // gunsmith watches for, so it has to run in ORDER along one axis
+    const gr = g.createLinearGradient(0, N, 0, 0);
+    for (const [t, c] of [[0, '#8d9199'], [0.16, '#b8a15e'], [0.34, '#c07a34'],
+                          [0.52, '#8e4a72'], [0.70, '#3f4fa8'], [0.86, '#2e7fb8'], [1, '#9fb6c4']]) {
+      gr.addColorStop(t, c);
+    }
+    g.fillStyle = gr; g.fillRect(0, 0, N, N);
+    for (let i = 0; i < 260; i++) {              // the colours creep unevenly
+      const y = Math.random() * N;
+      g.fillStyle = `rgba(255,255,255,${Math.random() * 0.05})`;
+      g.fillRect(0, y, N, 1 + Math.random() * 3);
+    }
+  } else if (kind === 'meteorite') {             // Widmanstatten figure
+    g.fillStyle = '#6e737a'; g.fillRect(0, 0, N, N);
+    for (const ang of [Math.PI / 3, -Math.PI / 3, Math.PI / 2]) {
+      for (let i = -N; i < N * 2; i += 9 + Math.random() * 16) {
+        g.save(); g.translate(N / 2, N / 2); g.rotate(ang); g.translate(-N / 2, -N / 2);
+        g.strokeStyle = `rgba(${Math.random() < 0.5 ? '224,228,234' : '46,50,56'},${0.16 + Math.random() * 0.4})`;
+        g.lineWidth = 1 + Math.random() * 5;
+        g.beginPath(); g.moveTo(i, -N); g.lineTo(i, N * 2); g.stroke();
+        g.restore();
+      }
+    }
+  } else if (kind === 'livery') {                // painted racing stripes
+    g.fillStyle = '#1b1d21'; g.fillRect(0, 0, N, N);
+    const cx = N * 0.5;
+    for (const [w, c] of [[0.115, '#d8dde3'], [0.078, '#c2333a']]) {
+      g.fillStyle = c; g.fillRect(cx - N * w, 0, N * w * 2, N);
+    }
+    g.fillStyle = '#1b1d21';
+    g.fillRect(cx - N * 0.020, 0, N * 0.040, N);   // the pinstripe splitting them
+  } else {                                       // 'camo': disruptive blotches
+    g.fillStyle = '#4a5140'; g.fillRect(0, 0, N, N);
+    for (const [col, n, r0, r1] of [['#2f3527', 26, 18, 40], ['#6b7359', 22, 14, 34], ['#23261c', 18, 10, 26]]) {
+      g.fillStyle = col;
+      for (let i = 0; i < n; i++) {
+        const x = Math.random() * N, y = Math.random() * N, r = r0 + Math.random() * (r1 - r0);
+        g.beginPath();
+        for (let k = 0; k <= 10; k++) {
+          const a = k / 10 * Math.PI * 2, rr = r * (0.68 + Math.random() * 0.5);
+          k ? g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : g.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+        }
+        g.closePath(); g.fill();
+      }
+    }
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;   // it is COLOUR, unlike the rough/normal maps
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  // ONE tile per face. The relief patterns repeat 2x2 because they are drawn to
+  // tile seamlessly; these are not -- blotches and veins do not meet at the
+  // edges, and repeating them put a hard cross-shaped seam across every face.
+  t.repeat.set(1, 1);
+  return t;
+}
+const ALBEDO_CACHE = {};
+const albedoMap = kind => ALBEDO_CACHE[kind] || (ALBEDO_CACHE[kind] = albedoTex(kind));
+
 const PATTERN_CACHE = {};
 const patternMap = kind => PATTERN_CACHE[kind] || (PATTERN_CACHE[kind] = patternTex(kind));
 
@@ -1675,6 +1969,70 @@ const FINISH_EXTRA = {
     dark: { color: 0x183326, rough: 0.48, map: 'cross', metal: 0.82, env: 0.95 },
     insert: 0x47614f, inner: 0x33513e,
   },
+  // --- finishes whose COLOUR varies across the case ---------------------------
+  // Every design before these varied only roughness and relief, which is why
+  // they all read as one idea at different frequencies. These are non-metals or
+  // part-oxidised metals, so metalness drops and the key light does the work.
+  patina: {
+    swatch: 'radial-gradient(circle at 34% 32%, #8fbfa0 0%, #6a4630 72%)',
+    chrome: { color: 0xffffff, rough: 0.74, map: 'hammer', tint: 'patina', metal: 0.42, env: 0.75, nscale: 0.5 },
+    dark: { color: 0xe8e8e8, rough: 0.66, map: 'hammer', tint: 'patina', metal: 0.5, env: 0.8, nscale: 0.5 },
+    insert: 0x6d7a68, inner: 0x5f6b58,
+  },
+  tortoise: {
+    swatch: 'radial-gradient(circle at 36% 30%, #d29a4c 0%, #3a1a08 74%)',
+    chrome: { color: 0xffffff, rough: 0.30, tint: 'tortoise', metal: 0.0, env: 0.9 },
+    dark: { color: 0xe0e0e0, rough: 0.24, tint: 'tortoise', metal: 0.0, env: 0.95 },
+    insert: 0x7a5a34, inner: 0x6b4a28,
+  },
+  marble: {
+    swatch: 'radial-gradient(circle at 36% 30%, #f2f0ea 0%, #a8a8ad 76%)',
+    chrome: { color: 0xffffff, rough: 0.42, tint: 'marble', metal: 0.0, env: 1.0 },
+    dark: { color: 0xdedede, rough: 0.34, tint: 'marble', metal: 0.0, env: 1.0 },
+    insert: 0x8e8e94, inner: 0xb4b4ba,
+  },
+  rust: {
+    swatch: 'radial-gradient(circle at 34% 32%, #a5613a 0%, #4a4d50 76%)',
+    chrome: { color: 0xffffff, rough: 0.86, map: 'hammer', tint: 'rust', metal: 0.55, env: 0.7, nscale: 0.6 },
+    dark: { color: 0xe4e4e4, rough: 0.78, map: 'hammer', tint: 'rust', metal: 0.6, env: 0.75, nscale: 0.6 },
+    insert: 0x6b5a4c, inner: 0x5c4c40,
+  },
+  camo: {
+    swatch: 'repeating-linear-gradient(38deg, #4a5140 0 5px, #2f3527 5px 9px, #6b7359 9px 13px)',
+    chrome: { color: 0xffffff, rough: 0.82, tint: 'camo', metal: 0.12, env: 0.65 },
+    dark: { color: 0xdcdcdc, rough: 0.74, tint: 'camo', metal: 0.15, env: 0.7 },
+    insert: 0x5a604f, inner: 0x4b5142,
+  },
+  fireblue: {
+    swatch: 'linear-gradient(0deg,#8d9199 0%,#c07a34 32%,#8e4a72 52%,#3f4fa8 74%,#2e7fb8 100%)',
+    chrome: { color: 0xffffff, rough: 0.24, tint: 'fireblue', metal: 1.0, env: 1.2 },
+    dark: { color: 0xe6e6e6, rough: 0.18, tint: 'fireblue', metal: 1.0, env: 1.1 },
+    insert: 0x5a6270, inner: 0x6b7386,
+  },
+  meteorite: {
+    swatch: 'repeating-linear-gradient(60deg,#e0e4ea 0 3px,#6e737a 3px 7px,#2e3238 7px 10px)',
+    chrome: { color: 0xffffff, rough: 0.40, tint: 'meteorite', metal: 1.0, env: 1.15 },
+    dark: { color: 0xdcdcdc, rough: 0.32, tint: 'meteorite', metal: 1.0, env: 1.05 },
+    insert: 0x666b72, inner: 0x878d95,
+  },
+  livery: {
+    swatch: 'linear-gradient(90deg,#1b1d21 0 30%,#d8dde3 30% 42%,#c2333a 42% 58%,#d8dde3 58% 70%,#1b1d21 70%)',
+    chrome: { color: 0xffffff, rough: 0.30, tint: 'livery', metal: 0.25, env: 0.95 },
+    dark: { color: 0xe0e0e0, rough: 0.24, tint: 'livery', metal: 0.3, env: 1.0 },
+    insert: 0x5c6066, inner: 0x4d5157,
+  },
+  sunburst: {
+    swatch: 'repeating-conic-gradient(from 186deg at 50% 104%, #eef2f7 0deg 3deg, #767c85 3deg 6deg)',
+    chrome: { color: 0xcdd3da, rough: 0.52, map: 'sunburst', metal: 1.0, env: 1.15, nscale: 1.0 },
+    dark: { color: 0xa8aeb6, rough: 0.42, map: 'sunburst', metal: 1.0, env: 1.05, nscale: 1.0 },
+    insert: 0x6e747c, inner: 0x9096a0,
+  },
+  deco: {
+    swatch: 'linear-gradient(0deg,#aeb5bd 0 47%,#ffffff 47% 53%,#3a4048 53% 100%)',
+    chrome: { color: 0xdfe4ea, rough: 0.62, map: 'deco', metal: 1.0, env: 1.15, nscale: 0.25 },
+    dark: { color: 0xb8bec6, rough: 0.5, map: 'deco', metal: 1.0, env: 1.05, nscale: 0.25 },
+    insert: 0x717780, inner: 0x969ca6,
+  },
 };
 Object.assign(FINISHES, FINISH_EXTRA);
 const FINISH_ORDER = ['chrome', 'matte', 'brass', 'gunmetal', ...Object.keys(FINISH_EXTRA)];
@@ -1692,9 +2050,14 @@ function applyFinish(name) {
     const map = p.map === true ? brushed : (des ? des.rough : null);
     const nrm = des ? des.normal : null;
     // adding or dropping either map changes the shader: recompile only then
+    // `tint` names an albedo map: colour that varies ACROSS the case rather than
+    // one flat value. It has to be cleared explicitly, or a plain metal picked
+    // after a patina would keep wearing the patina's colour.
+    const alb = p.tint ? albedoMap(p.tint) : null;
     if (m.roughnessMap !== map) { m.roughnessMap = map; m.needsUpdate = true; }
     if (m.normalMap !== nrm) { m.normalMap = nrm; m.needsUpdate = true; }
-    if (nrm) m.normalScale.set(0.85, 0.85);
+    if (m.map !== alb) { m.map = alb; m.needsUpdate = true; }
+    if (nrm) m.normalScale.set(p.nscale || 0.85, p.nscale || 0.85);
   }
   matInsert.color.setHex(fp.insert);
   // the cavity is the same metal as the shell: a brass case cannot have a
