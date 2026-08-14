@@ -125,6 +125,27 @@ check('fast strike with lid open ignites', true);
   await L('(LIGHTER.CFG.FLAME_VOL = true, 0)');
   await waitL('LIGHTER.volActive === true', 8000);
   check('and back to the volume again', true);
+  // regression: the volume was only ever hidden inside the LIT branch, so it
+  // stayed on screen after the flame went out, and its depth prepass kept running
+  await settleLid(false);
+  await waitL('LIGHTER.state === "OUT"');
+  await waitL('LIGHTER.volActive === false', 8000);
+  check('the volume goes away when the flame does',
+    await L('(() => { let v = false; LIGHTER.scene.traverse(o => { if (o.material && o.material.isShaderMaterial && o.visible) v = true; }); return v; })()') === false);
+  await settleLid(true);
+  await lightIt();
+}
+{ // the camera can go right over the top and underneath
+  check('the camera is free through a full arc', await L('LIGHTER.CFG.PITCH_MAX') > 1.4);
+  await L('(LIGHTER.cam.pitch = 9, LIGHTER.cam.pitchVel = 0, 0)');
+  await page.waitForTimeout(300);
+  const hi = await L('LIGHTER.cam.pitch');
+  await L('(LIGHTER.cam.pitch = -9, LIGHTER.cam.pitchVel = 0, 0)');
+  await page.waitForTimeout(300);
+  const lo = await L('LIGHTER.cam.pitch');
+  check('pitch clamps just shy of straight up and down',
+    Math.abs(hi) > 1.4 && Math.abs(lo) > 1.4 && hi > 0 && lo < 0, `hi=${hi} lo=${lo}`);
+  await L('(LIGHTER.cam.pitch = 0.06, LIGHTER.cam.pitchVel = 0, 0)');
 }
 
 /* 3 ── chimney swipes: slow smothers, fast only flickers (wick straight) */

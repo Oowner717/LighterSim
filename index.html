@@ -438,8 +438,11 @@ const CFG = {
   // world units the flame billboards ride toward the camera (see the layer loop)
   FLAME_DEPTH_BIAS: 0.62,
   FLAME_VOL: true,           // raymarched flame; falls back to the sprite stack
-  FLAME_STEPS: 30,           // ray samples through the volume
+  FLAME_STEPS: 22,           // ray samples through the volume (adaptive, see volSteps)
+  FLAME_STEPS_MIN: 10,       // floor before giving up and using sprites
   FLAME_VOL_GAIN: 1.45,      // emission gain for the raymarch
+  // just shy of straight up/down: at exactly +/-PI/2 the up vector degenerates
+  PITCH_MAX: 1.5,
   FPS_VOL_OFF: 26,           // sustained fps below this drops back to sprites
   FLAME_LIGHT: 8,            // point light intensity while LIT (11 bloomed orange smears onto the lid)
   EMBER_LIFE: 12,            // s of unattended pilot before it dies
@@ -507,7 +510,7 @@ const _qI = new THREE.Quaternion();
 const _fa = new THREE.Vector3(), _fb = new THREE.Vector3();
 const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _lag = new THREE.Vector3();
 const _m1 = new THREE.Matrix4();
-let volOn = false, volOk = true;
+let volOn = false, volOk = true, volSteps = 22;   // steps adapt to measured fps
 const VOL_MARGIN = 1.35;   // box half-width / flame half-width   // volumetric flame active / still affordable
 
 /* ============================== RENDERER / SCENE ============================== */
@@ -2114,11 +2117,14 @@ const FLAME_FRAG = `
       float w = profile(y) * 0.5 * uRad;
       if (w <= 0.001) continue;
       float r = length(lat) / w;
+      // the single biggest cost saving: bail before the noise for samples that
+      // no amount of turbulence could push into the flame
+      if (r > 2.0) continue;
       // turbulence grows with height, so the root stays steady and the tip boils
       vec3 np = vec3(q.x * 6.0, y * 5.0 - uTime * 1.6, q.z * 6.0);
       float n = vnoise3(np) * 0.65 + vnoise3(np * 2.3 + 11.0) * 0.35;
       r += (n - 0.5) * uTurb * (0.12 + y * 2.1);
-      float d = smoothstep(1.0, 0.35, r) * smoothstep(0.0, 0.12, y);
+      float d = smoothstep(1.0, 0.35, r) * smoothstep(0.0, 0.035, y);
       if (d <= 0.002) continue;
       // hot and pale low down, cooling to orange at the tip
       float heat = pow(d, 1.15) * (1.0 - 0.8 * y);
@@ -2272,7 +2278,7 @@ function updateCamera(dt, tSec) {
   cam.target.z += (sim.svc.pose * 2.3 - cam.target.z) * (1 - Math.exp(-6 * dt));
   cam.target.y += (CFG.CAM_TARGET_Y + sim.svc.pose * 0.55 - cam.target.y) * (1 - Math.exp(-6 * dt));
   cam.yaw += cam.yawVel * dt;
-  cam.pitch = clamp(cam.pitch + cam.pitchVel * dt, -0.45, 0.6);
+  cam.pitch = clamp(cam.pitch + cam.pitchVel * dt, -CFG.PITCH_MAX, CFG.PITCH_MAX);
   const dk = Math.exp(-3.2 * dt);
   cam.yawVel *= dk; cam.pitchVel *= dk;
   if (Math.abs(cam.yawVel) < 1e-3) cam.yawVel = 0;
@@ -2917,14 +2923,15 @@ function updateFrame(dt, tSec) {
       flameVol.quaternion.setFromRotationMatrix(_m1);
       // MARGIN over the flame itself, so lean and turbulence stay inside the box
       const boxH = len * 1.06;
-      flameVol.position.copy(spineA).addScaledVector(flameDir, boxH * 0.5 - 0.04);
+      // box bottom sits just under the wick tip, so the flame is rooted on it
+      flameVol.position.copy(spineA).addScaledVector(flameDir, boxH * 0.5 - 0.12);
       flameVol.scale.set(halfW * 2 * VOL_MARGIN, boxH, halfW * 2 * VOL_MARGIN);
       flameVol.updateMatrixWorld(true);
       const u = flameVol.material.uniforms;
       u.uInvModel.value.copy(flameVol.matrixWorld).invert();
       u.uNear.value = camera.near; u.uFar.value = camera.far;
       u.uTime.value = tSec;
-      u.uSteps.value = CFG.FLAME_STEPS;
+      u.uSteps.value = volSteps;
       u.uTurb.value = 0.42 + 0.5 * F.turb + 0.12 * (1 - grow);
       u.uIntensity.value = CFG.FLAME_VOL_GAIN * grow * (1 + 1.1 * F.flare) * flick;
       u.uCoolAmt.value = 1 - 0.55 * bent;
@@ -3001,6 +3008,8 @@ function updateFrame(dt, tSec) {
     matWickTip.emissiveIntensity = 0.38 * level * (0.75 + 0.25 * flick);
   } else if (F.state === EMBER) {
     for (const L of flameLayers) L.spr.visible = false;
+    flameVol.visible = false;
+    volOn = false;   // also stops the depth prepass running for nothing
     const pilotK = lerp(0.3, 1, clamp01(sim.ember.t / CFG.EMBER_LIFE));
     const pf = 0.7 + 0.4 * vnoise(tSec * 13) * (0.5 + 0.5 * vnoise(tSec * 5 + 3));
     level = 0.16 * pilotK;
@@ -3023,6 +3032,8 @@ function updateFrame(dt, tSec) {
     matWickTip.emissiveIntensity = 1.2 * pilotK * pf;
   } else {
     for (const L of flameLayers) L.spr.visible = false;
+    flameVol.visible = false;
+    volOn = false;   // also stops the depth prepass running for nothing
     pilotSpr.visible = false;
     pilotGlow.visible = false;
     // sparks glint on the chrome: the idle flame light doubles as strike flash
@@ -3610,7 +3621,7 @@ function onPointerMove(e) {
       }
       const k = CFG.ORBIT_SPEED / vmin();
       cam.yaw -= dx * k;
-      cam.pitch = clamp(cam.pitch + dy * k * 0.8, -0.45, 0.6);
+      cam.pitch = clamp(cam.pitch + dy * k * 0.8, -CFG.PITCH_MAX, CFG.PITCH_MAX);
       tr.orbitVyaw = lerp(tr.orbitVyaw || 0, -dx * k / dt, 0.5);
       tr.orbitVpitch = lerp(tr.orbitVpitch || 0, dy * k * 0.8 / dt, 0.5);
       break;
@@ -4196,9 +4207,14 @@ function loop(tms) {
     }
     if (bloomOn) composer.render(); else renderer.render(scene, camera);
   }
-  // the raymarch is the one thing here that can be too expensive; drop to the
-  // sprite flame rather than let the whole app crawl
-  if (volOk && warm > 6 && fpsEma < CFG.FPS_VOL_OFF) volOk = false;
+  // The raymarch is the one thing here that can be too expensive. Trade sample
+  // count for frame rate first — that degrades softly — and only bail out to
+  // the sprite flame if even the cheapest march cannot hold a frame rate.
+  if (volOn && warm > 3) {
+    const want = fpsEma < 52 ? volSteps - 1 : (fpsEma > 57 ? volSteps + 0.5 : volSteps);
+    volSteps = clamp(want, CFG.FLAME_STEPS_MIN, CFG.FLAME_STEPS);
+  }
+  if (volOk && warm > 8 && fpsEma < CFG.FPS_VOL_OFF && volSteps <= CFG.FLAME_STEPS_MIN + 0.01) volOk = false;
   frames++;
 }
 rafId = requestAnimationFrame(loop);
