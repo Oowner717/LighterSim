@@ -1297,22 +1297,22 @@ const FINISHES = {
   chrome: {
     chrome: { color: 0xd9dee3, rough: 0.55, map: true, metal: 1.0, env: 1.0 },
     dark: { color: 0xb8c0c7, rough: 0.36, map: true, metal: 1.0, env: 1.0 },
-    insert: 0x757b82,
+    insert: 0x757b82, inner: 0x9aa2ab,
   },
   matte: {
     chrome: { color: 0x23262a, rough: 0.86, map: false, metal: 0.85, env: 0.6 },
     dark: { color: 0x2e3236, rough: 0.7, map: false, metal: 0.9, env: 0.8 },
-    insert: 0x5a5f66,
+    insert: 0x5a5f66, inner: 0x565b61,
   },
   brass: {
     chrome: { color: 0xd6a84f, rough: 0.5, map: true, metal: 1.0, env: 1.0 },
     dark: { color: 0xb8913f, rough: 0.34, map: true, metal: 1.0, env: 1.0 },
-    insert: 0x8a7a55,
+    insert: 0x8a7a55, inner: 0xa8854a,
   },
   gunmetal: {
     chrome: { color: 0x62686f, rough: 0.44, map: true, metal: 1.0, env: 1.15 },
     dark: { color: 0x4d5359, rough: 0.3, map: true, metal: 1.0, env: 1.05 },
-    insert: 0x565c63,
+    insert: 0x565c63, inner: 0x767c84,
   },
 };
 const FINISH_ORDER = ['chrome', 'matte', 'brass', 'gunmetal'];
@@ -1330,6 +1330,9 @@ function applyFinish(name) {
     if (m.roughnessMap !== map) { m.roughnessMap = map; m.needsUpdate = true; }
   }
   matInsert.color.setHex(fp.insert);
+  // the cavity is the same metal as the shell: a brass case cannot have a
+  // chrome-coloured inside, which is what it had before
+  matCaseInner.color.setHex(fp.inner);
   // the main-screen swatch button wears the current finish
   const sw = document.getElementById('finishSwatch');
   if (sw) sw.style.backgroundColor = '#' + fp.chrome.color.toString(16).padStart(6, '0');
