@@ -732,6 +732,8 @@ const BACKDROPS = {
   stars:    { draw: drawStars, finish: 'noshadow', swatch: 'radial-gradient(circle at 44% 40%, #5668c4 0%, #05060b 70%)' },
   gels:     { draw: drawGels, left: '255,64,150', right: '60,200,255',
               swatch: 'linear-gradient(90deg,#ff4096 0%,#0a0b10 50%,#3cc8ff 100%)' },
+  fog:      { draw: drawFog, finish: 'noshadow',
+              swatch: 'linear-gradient(0deg,#8d9ba1 0%,#c3ced3 38%,#dfe6e9 62%,#cfd8dd 100%)' },
   velvet:   { draw: drawVelvet, deep: '#14060c', rgb: '150,26,58',
               swatch: 'radial-gradient(circle at 42% 38%, #961a3a 0%, #14060c 74%)' },
 };
@@ -903,6 +905,37 @@ function drawVelvet(g, S, b) {
     g.fillStyle = gr; g.fillRect(x - w, 0, w * 2, S);
   }
 }
+// Dawn fog: the only HIGH-KEY backdrop. All twenty others are dark fields, so a
+// pale case had nothing to be dark against and a dark case was doing all the
+// work. Here the subject reads as a silhouette instead, which no amount of
+// case colour can defeat.
+function drawFog(g, S) {
+  const v = g.createLinearGradient(0, 0, 0, S);
+  v.addColorStop(0, '#cfd8dd'); v.addColorStop(0.52, '#dfe6e9');
+  v.addColorStop(0.62, '#c3ced3'); v.addColorStop(1, '#8d9ba1');
+  g.fillStyle = v; g.fillRect(0, 0, S, S);
+  // a ridge dissolving into the air, well above the subject band
+  g.fillStyle = 'rgba(120,138,146,0.34)';
+  g.beginPath(); g.moveTo(0, S * 0.50);
+  for (let x = 0; x <= S; x += 16) {
+    g.lineTo(x, S * 0.50 - Math.sin(x * 0.012) * S * 0.035 - Math.sin(x * 0.031) * S * 0.018);
+  }
+  g.lineTo(S, S * 0.60); g.lineTo(0, S * 0.60); g.closePath(); g.fill();
+  // the water line, and the haze that sits on it
+  const w = g.createLinearGradient(0, S * 0.60, 0, S);
+  w.addColorStop(0, 'rgba(196,208,213,0.85)'); w.addColorStop(1, 'rgba(108,120,126,0.9)');
+  g.fillStyle = w; g.fillRect(0, S * 0.60, S, S * 0.40);
+  for (let i = 0; i < 26; i++) {                 // reed strokes at the near bank
+    const x = Math.random() * S, h = S * (0.05 + Math.random() * 0.10);
+    g.strokeStyle = `rgba(74,84,88,${0.12 + Math.random() * 0.2})`;
+    g.lineWidth = 1 + Math.random() * 2;
+    g.beginPath(); g.moveTo(x, S); g.lineTo(x + (Math.random() - 0.5) * 14, S - h); g.stroke();
+  }
+  const haze = g.createRadialGradient(S * 0.5, S * 0.46, 0, S * 0.5, S * 0.46, S * 0.5);
+  haze.addColorStop(0, 'rgba(255,255,255,0.34)'); haze.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = haze; g.fillRect(0, 0, S, S);
+}
+
 function backdropCanvas(b) {
   const S = 512;
   const cv = document.createElement('canvas'); cv.width = cv.height = S;
@@ -1876,6 +1909,101 @@ function albedoTex(kind) {
   t.repeat.set(1, 1);
   return t;
 }
+// A corroded finish is one field, not two: the dents are built first and the
+// oxide is then placed BY HEIGHT, so it collects in the low ground and the high
+// spots stay bare metal. Returns { albedo, rough, normal } from a single source.
+function corrodedTex(kind) {
+  const N = 256;
+  const hc = document.createElement('canvas'); hc.width = hc.height = N;
+  const hg = hc.getContext('2d');
+  hg.fillStyle = 'rgb(150,150,150)'; hg.fillRect(0, 0, N, N);
+  // dished dents, the shape a hammered or pitted surface actually has
+  const dents = kind === 'rust' ? 420 : 180;
+  for (let i = 0; i < dents; i++) {
+    const x = Math.random() * N, y = Math.random() * N;
+    const r = kind === 'rust' ? 3 + Math.random() * 14 : 9 + Math.random() * 22;
+    const g2 = hg.createRadialGradient(x, y, 0, x, y, r);
+    g2.addColorStop(0, 'rgba(40,40,40,0.55)');
+    g2.addColorStop(0.75, 'rgba(120,120,120,0.28)');
+    g2.addColorStop(1, 'rgba(210,210,210,0)');
+    hg.fillStyle = g2; hg.beginPath(); hg.arc(x, y, r, 0, Math.PI * 2); hg.fill();
+  }
+  // one read, not a per-pixel loop over a big canvas
+  const H = hg.getImageData(0, 0, N, N).data;
+
+  const ac = document.createElement('canvas'); ac.width = ac.height = N;
+  const ag = ac.getContext('2d');
+  const img = ag.createImageData(N, N);
+  // high ground keeps its metal, low ground goes to oxide
+  const HI = kind === 'rust' ? [138, 143, 149] : [186, 118, 62];
+  const LO = kind === 'rust' ? [128, 50, 18] : [40, 126, 112];
+  const DEEP = kind === 'rust' ? [52, 24, 10] : [168, 212, 196];   // crust in the deepest pits
+  for (let i = 0; i < N * N; i++) {
+    const h = H[i * 4] / 255;
+    const t = Math.min(1, Math.pow(1 - h, 1.5) * 1.9);       // how corroded this pixel is
+    const k = Math.max(0, (0.32 - h) / 0.32);                 // only the deepest gets crust
+    const px = i * 4;
+    for (let c = 0; c < 3; c++) {
+      const base = HI[c] + (LO[c] - HI[c]) * t;
+      img.data[px + c] = base + (DEEP[c] - base) * k * 0.8;
+    }
+    img.data[px + 3] = 255;
+  }
+  ag.putImageData(img, 0, 0);
+  // Height alone is too tidy: real corrosion is patchy over areas far larger
+  // than any single pit, so a low-frequency wash goes over the top. It stays
+  // subtle -- the pits still drive where the oxide IS, this only varies how far
+  // it has got in each region.
+  for (let i = 0; i < 26; i++) {
+    const x = Math.random() * N, y = Math.random() * N, r = N * (0.14 + Math.random() * 0.3);
+    const c = kind === 'rust'
+      ? (Math.random() < 0.5 ? '150,72,30' : '96,96,100')
+      : (Math.random() < 0.5 ? '46,150,140' : '150,110,54');
+    const g3 = ag.createRadialGradient(x, y, 0, x, y, r);
+    g3.addColorStop(0, `rgba(${c},${0.10 + Math.random() * 0.20})`);
+    g3.addColorStop(1, `rgba(${c},0)`);
+    ag.fillStyle = g3; ag.beginPath(); ag.arc(x, y, r, 0, Math.PI * 2); ag.fill();
+  }
+
+  const rc = document.createElement('canvas'); rc.width = rc.height = N;
+  const rg = rc.getContext('2d');
+  const rimg = rg.createImageData(N, N);
+  for (let i = 0; i < N * N; i++) {
+    const h = H[i * 4] / 255;
+    // oxide is matte, the surviving metal is not
+    const v = 255 * (0.30 + 0.62 * Math.min(1, Math.pow(1 - h, 1.4) * 1.9));
+    rimg.data[i * 4] = rimg.data[i * 4 + 1] = rimg.data[i * 4 + 2] = v;
+    rimg.data[i * 4 + 3] = 255;
+  }
+  rg.putImageData(rimg, 0, 0);
+
+  const nc = document.createElement('canvas'); nc.width = nc.height = N;
+  const ng = nc.getContext('2d');
+  const nimg = ng.createImageData(N, N);
+  const at = (x, y) => H[((((y % N) + N) % N) * N + (((x % N) + N) % N)) * 4];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const dx = (at(x + 1, y) - at(x - 1, y)) / 255, dy = (at(x, y + 1) - at(x, y - 1)) / 255;
+    const nx = -dx * 2.4, ny = -dy * 2.4, len = Math.hypot(nx, ny, 1) || 1;
+    const i = (y * N + x) * 4;
+    nimg.data[i] = (nx / len * 0.5 + 0.5) * 255;
+    nimg.data[i + 1] = (ny / len * 0.5 + 0.5) * 255;
+    nimg.data[i + 2] = (1 / len * 0.5 + 0.5) * 255;
+    nimg.data[i + 3] = 255;
+  }
+  ng.putImageData(nimg, 0, 0);
+
+  const mk = (cv, srgb) => {
+    const t = new THREE.CanvasTexture(cv);
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(1, 1);
+    return t;
+  };
+  return { albedo: mk(ac, true), rough: mk(rc, false), normal: mk(nc, false) };
+}
+const CORRODE_CACHE = {};
+const corrodedMap = k => CORRODE_CACHE[k] || (CORRODE_CACHE[k] = corrodedTex(k));
+
 const ALBEDO_CACHE = {};
 const albedoMap = kind => ALBEDO_CACHE[kind] || (ALBEDO_CACHE[kind] = albedoTex(kind));
 
@@ -1975,8 +2103,8 @@ const FINISH_EXTRA = {
   // part-oxidised metals, so metalness drops and the key light does the work.
   patina: {
     swatch: 'radial-gradient(circle at 34% 32%, #8fbfa0 0%, #6a4630 72%)',
-    chrome: { color: 0xffffff, rough: 0.74, map: 'hammer', tint: 'patina', metal: 0.42, env: 0.75, nscale: 0.5 },
-    dark: { color: 0xe8e8e8, rough: 0.66, map: 'hammer', tint: 'patina', metal: 0.5, env: 0.8, nscale: 0.5 },
+    chrome: { color: 0xffffff, rough: 1.0, corrode: 'patina', metal: 0.45, env: 0.8, nscale: 0.9 },
+    dark: { color: 0xe8e8e8, rough: 1.0, corrode: 'patina', metal: 0.5, env: 0.85, nscale: 0.9 },
     insert: 0x6d7a68, inner: 0x5f6b58,
   },
   tortoise: {
@@ -1993,8 +2121,8 @@ const FINISH_EXTRA = {
   },
   rust: {
     swatch: 'radial-gradient(circle at 34% 32%, #a5613a 0%, #4a4d50 76%)',
-    chrome: { color: 0xffffff, rough: 0.86, map: 'hammer', tint: 'rust', metal: 0.55, env: 0.7, nscale: 0.6 },
-    dark: { color: 0xe4e4e4, rough: 0.78, map: 'hammer', tint: 'rust', metal: 0.6, env: 0.75, nscale: 0.6 },
+    chrome: { color: 0xffffff, rough: 1.0, corrode: 'rust', metal: 0.6, env: 0.75, nscale: 1.0 },
+    dark: { color: 0xe4e4e4, rough: 1.0, corrode: 'rust', metal: 0.65, env: 0.8, nscale: 1.0 },
     insert: 0x6b5a4c, inner: 0x5c4c40,
   },
   camo: {
@@ -2046,14 +2174,17 @@ function applyFinish(name) {
     m.metalness = p.metal;
     m.envMapIntensity = p.env;
     // `map` is true for the plain brushed grain, or names a design pattern
+    // `corrode` supplies albedo, roughness AND normal from a single height field,
+    // so the oxide sits in the dents instead of floating over them
+    const cor = p.corrode ? corrodedMap(p.corrode) : null;
     const des = typeof p.map === 'string' ? patternMap(p.map) : null;
-    const map = p.map === true ? brushed : (des ? des.rough : null);
-    const nrm = des ? des.normal : null;
+    const map = cor ? cor.rough : (p.map === true ? brushed : (des ? des.rough : null));
+    const nrm = cor ? cor.normal : (des ? des.normal : null);
     // adding or dropping either map changes the shader: recompile only then
     // `tint` names an albedo map: colour that varies ACROSS the case rather than
     // one flat value. It has to be cleared explicitly, or a plain metal picked
     // after a patina would keep wearing the patina's colour.
-    const alb = p.tint ? albedoMap(p.tint) : null;
+    const alb = cor ? cor.albedo : (p.tint ? albedoMap(p.tint) : null);
     if (m.roughnessMap !== map) { m.roughnessMap = map; m.needsUpdate = true; }
     if (m.normalMap !== nrm) { m.normalMap = nrm; m.needsUpdate = true; }
     if (m.map !== alb) { m.map = alb; m.needsUpdate = true; }
