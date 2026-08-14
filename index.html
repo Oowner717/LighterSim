@@ -39,12 +39,14 @@
   }
   #hint {
     max-width: 82vw;
-    padding: 9px 16px;
+    padding: 10px 17px;
     border-radius: 999px;
-    background: rgba(18, 22, 28, 0.62);
-    color: rgba(235, 240, 245, 0.85);
+    border: 1px solid rgba(170, 185, 200, 0.16);
+    background: rgba(14, 18, 24, 0.58);
+    color: rgba(238, 243, 248, 0.88);
     font-size: 13px; letter-spacing: 0.02em; text-align: center;
-    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(12px) saturate(1.3); -webkit-backdrop-filter: blur(12px) saturate(1.3);
     opacity: 0; transition: opacity 0.6s ease;
     pointer-events: none; white-space: normal;
   }
@@ -70,53 +72,45 @@
     top: calc(12px + env(safe-area-inset-top, 0px));
     width: 36px; height: 36px;
     border-radius: 50%;
-    border: 1px solid rgba(160, 175, 190, 0.35);
-    background: rgba(18, 22, 28, 0.6);
-    color: rgba(225, 232, 240, 0.9);
+    border: 1px solid rgba(170, 185, 200, 0.34);
+    background: rgba(16, 20, 26, 0.55);
+    color: rgba(232, 238, 245, 0.92);
     font-size: 16px; font-weight: 600; line-height: 1; text-align: center;
     padding: 0;
-    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(10px) saturate(1.3); -webkit-backdrop-filter: blur(10px) saturate(1.3);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.10);
   }
-  #finishBtn {
+  /* One button for every aesthetic choice. Its face is a split disc -- case on
+     the left, flame on the right -- so it still reports what is selected while
+     costing one control instead of two. */
+  #styleBtn {
     position: fixed;
     left: calc(12px + env(safe-area-inset-left, 0px));
     top: calc(58px + env(safe-area-inset-top, 0px));
     width: 36px; height: 36px;
     border-radius: 50%;
-    border: 1px solid rgba(160, 175, 190, 0.35);
-    background: rgba(18, 22, 28, 0.6);
+    border: 1px solid rgba(170, 185, 200, 0.34);
+    background: rgba(16, 20, 26, 0.55);
     padding: 0;
-    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(10px) saturate(1.3); -webkit-backdrop-filter: blur(10px) saturate(1.3);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.10);
   }
-  #finishBtn i {
-    display: block; width: 20px; height: 20px; border-radius: 50%;
-    margin: 0 auto;
-    background-color: #d9dee3;
+  #styleBtn i { position: absolute; top: 7px; display: block; width: 10px; height: 20px; }
+  #finishSwatch {
+    left: 7px; border-radius: 10px 0 0 10px;
+    background-color: #d9dee3; background-size: cover;
     box-shadow: inset 0 -2px 3px rgba(0, 0, 0, 0.4), inset 0 2px 2px rgba(255, 255, 255, 0.3);
   }
-  #flameBtn {
-    position: fixed;
-    left: calc(12px + env(safe-area-inset-left, 0px));
-    top: calc(104px + env(safe-area-inset-top, 0px));
-    width: 36px; height: 36px;
-    border-radius: 50%;
-    border: 1px solid rgba(160, 175, 190, 0.35);
-    background: rgba(18, 22, 28, 0.6);
-    padding: 0;
-    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-  }
-  #flameBtn i {
-    display: block; width: 14px; height: 14px;
-    margin: 0 auto;
-    background-color: #ff9a3c;
-    border-radius: 0 50% 50% 50%;
-    transform: rotate(45deg);   /* the sharp corner points up: a flame drop */
-    box-shadow: 0 0 8px #ff9a3c;
+  #flameSwatch {
+    right: 7px; border-radius: 0 10px 10px 0;
+    background-color: #ff9a3c; color: #ff9a3c;
+    box-shadow: 0 0 9px currentColor;
   }
   /* the circles stay small; the tap targets don't (44px platform minimum) */
-  #infoBtn::after, #guideClose::after, #finishBtn::after, #flameBtn::after {
+  #infoBtn::after, #guideClose::after, #styleBtn::after, #styleClose::after {
     content: ''; position: absolute; inset: -7px; border-radius: 50%;
   }
+  #infoBtn:active, #styleBtn:active { transform: scale(0.94); }
   #svcDone {
     padding: 10px 18px;
     pointer-events: auto;
@@ -138,8 +132,9 @@
   #fps {
     padding: 4px 9px;
     border-radius: 999px;
-    border: 1px solid rgba(160, 175, 190, 0.25);
-    background: rgba(18, 22, 28, 0.5);
+    border: 1px solid rgba(170, 185, 200, 0.28);
+    background: rgba(16, 20, 26, 0.5);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     color: rgba(200, 210, 220, 0.6);
     font-size: 10px; letter-spacing: 0.04em;
     /* tabular figures: a proportional font makes the number jitter as it counts */
@@ -153,10 +148,11 @@
   #debug button {
     padding: 4px 9px;
     border-radius: 999px;
-    border: 1px solid rgba(160, 175, 190, 0.25);
-    background: rgba(18, 22, 28, 0.5);
-    color: rgba(200, 210, 220, 0.6);
+    border: 1px solid rgba(170, 185, 200, 0.28);
+    background: rgba(16, 20, 26, 0.5);
+    color: rgba(206, 216, 226, 0.62);
     font-size: 10px; letter-spacing: 0.04em;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   }
   #hud {
     position: fixed;
@@ -181,21 +177,38 @@
   #hFlint { background: linear-gradient(90deg, #78909f, #a9bfcd); }
   #style {
     position: fixed; inset: 0; z-index: 11;
-    background: rgba(4, 6, 9, 0.55);
+    background: rgba(3, 5, 8, 0.5);
     display: none;
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
   }
   #style.show { display: block; }
   #stylePanel {
     position: absolute; left: 50%; transform: translateX(-50%);
     bottom: 0;
     width: min(100%, 560px);
-    max-height: 84dvh;
+    max-height: 86dvh;
     box-sizing: border-box;
-    border-radius: 18px 18px 0 0;
-    border: 1px solid rgba(160, 175, 190, 0.22); border-bottom: none;
-    background: rgba(14, 18, 23, 0.97);
-    color: rgba(228, 234, 240, 0.92);
+    border-radius: 22px 22px 0 0;
+    border: 1px solid rgba(175, 190, 205, 0.20); border-bottom: none;
+    background: rgba(15, 19, 25, 0.86);
+    color: rgba(230, 236, 242, 0.93);
     display: flex; flex-direction: column;
+    box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(26px) saturate(1.5); -webkit-backdrop-filter: blur(26px) saturate(1.5);
+  }
+  /* animate the panel, never `display` -- the sheet has to be clickable on the
+     same frame it appears, so the show/hide itself stays instant */
+  #style.show #stylePanel { animation: sheetUp 0.26s cubic-bezier(0.2, 0.8, 0.25, 1); }
+  #style.show { animation: scrimIn 0.2s ease; }
+  @keyframes sheetUp { from { transform: translate(-50%, 26px); opacity: 0.4; } }
+  @keyframes scrimIn { from { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    #style.show, #style.show #stylePanel { animation: none; }
+  }
+  #styleGrab {
+    width: 38px; height: 4px; border-radius: 99px;
+    margin: 9px auto 0;
+    background: rgba(190, 202, 214, 0.28);
   }
   #styleHead {
     display: flex; align-items: center; justify-content: space-between;
@@ -217,31 +230,35 @@
   .swsec { padding: 4px 0 12px; }
   .swsec + .swsec { border-top: 1px solid rgba(160, 175, 190, 0.14); padding-top: 12px; }
   .swsec h4 {
-    margin: 0 0 9px; font-size: 10px; font-weight: 600;
-    letter-spacing: 0.1em; text-transform: uppercase;
-    color: rgba(200, 210, 220, 0.72);
+    margin: 0 0 10px; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.13em; text-transform: uppercase;
+    color: rgba(206, 216, 226, 0.55);
   }
   /* auto-fill, so fourteen swatches reflow instead of overflowing a narrow phone */
   .swgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 9px; }
   .sw {
     position: relative;
-    padding: 0; border-radius: 12px;
-    border: 1px solid rgba(160, 175, 190, 0.26);
-    background: transparent;
-    display: flex; flex-direction: column; align-items: center; gap: 5px;
-    padding: 7px 2px 6px;
-    color: rgba(206, 214, 222, 0.66);
+    border-radius: 14px;
+    border: 1px solid rgba(170, 185, 200, 0.18);
+    background: rgba(255, 255, 255, 0.03);
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 8px 2px 7px;
+    color: rgba(208, 216, 224, 0.62);
     font-size: 9px; letter-spacing: 0.03em;
+    transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
   }
   .sw i {
     display: block; width: 28px; height: 28px; border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.16);
     background-size: cover;
+    box-shadow: inset 0 -3px 5px rgba(0, 0, 0, 0.42), inset 0 2px 3px rgba(255, 255, 255, 0.26),
+                0 1px 3px rgba(0, 0, 0, 0.4);
   }
+  .sw:active { transform: scale(0.94); }
   .sw.on {
-    border-color: rgba(255, 190, 110, 0.85);
-    background: rgba(255, 176, 80, 0.10);
-    color: rgba(255, 214, 170, 0.95);
+    border-color: rgba(255, 190, 110, 0.8);
+    background: rgba(255, 176, 80, 0.12);
+    color: rgba(255, 219, 178, 0.96);
+    box-shadow: 0 0 0 1px rgba(255, 190, 110, 0.45), 0 3px 14px rgba(255, 150, 50, 0.16);
   }
   /* the flame swatches are lit shapes, not discs, so they get a soft halo */
   #swFlame .sw i { box-shadow: 0 0 9px currentColor; }
@@ -324,8 +341,9 @@
 
 <button id="motionBtn" type="button">Enable motion</button>
 <button id="infoBtn" type="button" aria-label="How it works">?</button>
-<button id="finishBtn" type="button" aria-label="Change case finish"><i id="finishSwatch"></i></button>
-<button id="flameBtn" type="button" aria-label="Change flame colour"><i id="flameSwatch"></i></button>
+<button id="styleBtn" type="button" aria-label="Appearance: case, flame and background">
+  <i id="finishSwatch"></i><i id="flameSwatch"></i>
+</button>
 <div id="debug" aria-label="Diagnostics">
   <span id="fps" role="status" aria-live="off" title="Frame rate, and the worst single frame in the last few seconds">&nbsp;</span>
   <button id="ffFuel" type="button" title="Fast-forward fuel consumption">&#187; fuel</button>
@@ -341,6 +359,7 @@
 </div>
 <div id="style" role="dialog" aria-modal="true" aria-label="Appearance">
   <div id="stylePanel">
+    <div id="styleGrab" aria-hidden="true"></div>
     <div id="styleHead">
       <b>Appearance</b>
       <button id="styleClose" type="button" aria-label="Close">&#215;</button>
@@ -677,36 +696,64 @@ function radialCanvas(size, stops, inner = 0) {
   return cv;
 }
 /* ============================== BACKDROPS ============================== */
-// A pool of light behind the lighter, darkening to the corners. Kept dim on
-// purpose: the flame is the brightest thing in the scene and a bright backdrop
-// flattens it. `swatch` is what the menu shows, and is the pool's centre.
+// A photographer's sweep, not a flat field: light pools behind the subject and
+// falls away to a darker floor, with a vignette framing it. The old version was
+// a dim radial on near-black, which left a black case with nothing to sit
+// against -- obsidian, carbon and matte all read as a hole in the screen.
+// `pool` is the bright band the lighter is silhouetted on, and is what the
+// menu swatch shows.
 const BACKDROPS = {
-  midnight: { swatch: '#222933', stops: ['#222933', '#151a21', '#07090c'] },
-  noir:     { swatch: '#121212', stops: ['#141414', '#0a0a0a', '#000000'] },
-  slate:    { swatch: '#2a3441', stops: ['#2a3441', '#182029', '#080b0f'] },
-  ember:    { swatch: '#3a2118', stops: ['#3a2118', '#20120d', '#0a0605'] },
-  oxblood:  { swatch: '#3a151c', stops: ['#3a151c', '#1f0b10', '#0a0406'] },
-  forest:   { swatch: '#16301f', stops: ['#16301f', '#0d1c13', '#040806'] },
-  indigo:   { swatch: '#1e2148', stops: ['#1e2148', '#12142a', '#06070f'] },
-  plum:     { swatch: '#301a3c', stops: ['#301a3c', '#1b0f23', '#08040b'] },
-  teal:     { swatch: '#123236', stops: ['#123236', '#0a1e21', '#03090a'] },
-  sand:     { swatch: '#3a3025', stops: ['#3a3025', '#211b14', '#0a0806'] },
-  ash:      { swatch: '#2e2e30', stops: ['#2e2e30', '#1b1b1d', '#08080a'] },
+  midnight: { sky: '#39424f', pool: '#4b5768', floor: '#10131a' },
+  noir:     { sky: '#2b2b2d', pool: '#3b3b3f', floor: '#0a0a0b' },
+  slate:    { sky: '#3d4a5a', pool: '#53637a', floor: '#111820' },
+  steel:    { sky: '#46505c', pool: '#61707f', floor: '#14181d' },
+  ember:    { sky: '#4a2e21', pool: '#6b4029', floor: '#170d09' },
+  oxblood:  { sky: '#4a2029', pool: '#66242f', floor: '#170709' },
+  forest:   { sky: '#22402e', pool: '#2d5a3e', floor: '#0a140e' },
+  indigo:   { sky: '#2d3260', pool: '#3c4380', floor: '#0c0e1c' },
+  plum:     { sky: '#432857', pool: '#5a3573', floor: '#150a1c' },
+  teal:     { sky: '#1c4a50', pool: '#26646b', floor: '#08171a' },
+  sand:     { sky: '#4d4132', pool: '#6b5a44', floor: '#16120d' },
+  ash:      { sky: '#3e3e42', pool: '#525258', floor: '#111113' },
 };
+for (const b of Object.values(BACKDROPS)) b.swatch = b.pool;
 const BACKDROP_ORDER = Object.keys(BACKDROPS);
-function applyBackdrop(name) {
-  if (!BACKDROPS[name]) name = 'midnight';
-  sim.backdrop = name;
-  const cv = radialCanvas(512, BACKDROPS[name].stops.map((c, i) => [i * 0.5, c]));
-  // ±2/255 noise dithers the gradient so OLED screens don't show banding rings
+function backdropCanvas(b) {
+  const S = 512;
+  const cv = document.createElement('canvas'); cv.width = cv.height = S;
   const g = cv.getContext('2d');
-  const id = g.getImageData(0, 0, 512, 512);
+  const v = g.createLinearGradient(0, 0, 0, S);
+  v.addColorStop(0, b.sky); v.addColorStop(0.44, b.pool); v.addColorStop(1, b.floor);
+  g.fillStyle = v; g.fillRect(0, 0, S, S);
+  // the pool itself, brightest just behind where the lighter stands
+  const r = g.createRadialGradient(S * 0.5, S * 0.44, 0, S * 0.5, S * 0.44, S * 0.62);
+  r.addColorStop(0, b.pool); r.addColorStop(1, 'rgba(0,0,0,0)');
+  g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.42;
+  g.fillStyle = r; g.fillRect(0, 0, S, S);
+  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+  // A soft pool low-centre. The lighter is a floating hero object, and against a
+  // LIT sweep that reads as cut out in a way it never did on near-black -- this
+  // is the shadow it would drop on the sweep, and it is what puts it in a room.
+  const sh = g.createRadialGradient(S * 0.5, S * 0.80, 0, S * 0.5, S * 0.80, S * 0.36);
+  sh.addColorStop(0, 'rgba(0,0,0,0.44)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = sh; g.fillRect(0, 0, S, S);
+  // vignette: frames the subject, and stops the corners competing with the flame
+  const vg = g.createRadialGradient(S * 0.5, S * 0.46, S * 0.16, S * 0.5, S * 0.52, S * 0.80);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.66)');
+  g.fillStyle = vg; g.fillRect(0, 0, S, S);
+  // +-2/255 noise dithers the gradient so OLED screens don't show banding rings
+  const id = g.getImageData(0, 0, S, S);
   for (let i = 0; i < id.data.length; i += 4) {
     const n = (Math.random() - 0.5) * 5;
     id.data[i] += n; id.data[i + 1] += n; id.data[i + 2] += n;
   }
   g.putImageData(id, 0, 0);
-  const bg = new THREE.CanvasTexture(cv);
+  return cv;
+}
+function applyBackdrop(name) {
+  if (!BACKDROPS[name]) name = 'midnight';
+  sim.backdrop = name;
+  const bg = new THREE.CanvasTexture(backdropCanvas(BACKDROPS[name]));
   bg.colorSpace = THREE.SRGBColorSpace;
   // the old one is dead the moment it is replaced: swapping backdrops from the
   // menu would otherwise leak a 512x512 texture per tap
@@ -2596,8 +2643,13 @@ function applyFlameCol(name) {
   flameLight.color.setHex(fc.light);
   const sw = document.getElementById('flameSwatch');
   if (sw) {
-    sw.style.backgroundColor = fc.swatch;
-    sw.style.boxShadow = `0 0 8px ${fc.swatch}`;
+    // generated schemes carry a gradient swatch, so the halo comes off `glow`
+    const halo = fc.glow || fc.swatch;
+    sw.style.background = '';
+    if (fc.swatch.indexOf('gradient') >= 0) sw.style.background = fc.swatch;
+    else sw.style.backgroundColor = fc.swatch;
+    sw.style.color = halo;
+    sw.style.boxShadow = `0 0 9px ${halo}`;
   }
 }
 // phrased this way, not as indexOf(...)+1 % length: the compact form minifies
@@ -4359,7 +4411,7 @@ const gFlintEl = document.getElementById('gFlint'), gFlintT = document.getElemen
 const gStatsEl = document.getElementById('gStats');
 const hudEl = document.getElementById('hud');
 const hFuelEl = document.getElementById('hFuel'), hFlintEl = document.getElementById('hFlint');
-const finishBtn = document.getElementById('finishBtn');
+const styleBtn = document.getElementById('styleBtn');
 // remaining flint, 1 fresh -> 0 at max dud odds (or an empty tube)
 function flintCond() {
   if (sim.flintMissing) return 0;
@@ -4397,8 +4449,8 @@ const guideIsOpen = () => guideEl.classList.contains('show');
 // aria-modal alone does not stop Tab walking out of the sheet into the controls
 // behind it, which are still clickable through the scrim
 function guideBackground() {
-  return [infoBtn, finishBtn, motionBtn, svcDoneBtn,
-    document.getElementById('flameBtn'), document.getElementById('debug')].filter(Boolean);
+  return [infoBtn, styleBtn, motionBtn, svcDoneBtn,
+    document.getElementById('debug')].filter(Boolean);
 }
 function openGuide() {
   guideEl.classList.add('show');
@@ -4484,18 +4536,12 @@ function closeStyle() {
   if (!styleIsOpen()) return;
   styleEl.classList.remove('show');
   for (const el of guideBackground()) el.removeAttribute('inert');
-  try { finishBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+  try { styleBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
 }
 styleCloseBtn.addEventListener('click', closeStyle);
 styleEl.addEventListener('click', e => { if (e.target === styleEl) closeStyle(); });
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
-// both swatch buttons open the same sheet: they still show what is currently
-// selected, and either one is a way in to all three sets
-finishBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openStyle(); });
-document.getElementById('flameBtn').addEventListener('click', () => {
-  if (Audio.ensure()) Audio.resume();
-  openStyle();
-});
+styleBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openStyle(); });
 // debug: fast-forward the wear systems so refills are testable without waiting
 document.getElementById('ffFuel').addEventListener('click', () => {
   sim.fuel = Math.max(0, +(sim.fuel - 0.25).toFixed(4));

@@ -660,8 +660,8 @@ await settleLid(false);
 
 /* 14 ── the appearance sheet: case, flame and backdrop in one place */
 {
-  await page.click('#finishBtn');
-  check('the swatch button opens the appearance sheet', await L('LIGHTER.styleOpen') === true);
+  await page.click('#styleBtn');
+  check('the one style button opens the appearance sheet', await L('LIGHTER.styleOpen') === true);
   // one grid per set, and every option in each set is reachable — with fourteen
   // finishes, an off-by-one in the grid build hides options with no other symptom
   const counts = await page.evaluate(() => ({
@@ -676,7 +676,8 @@ await settleLid(false);
   check('every flame is on the sheet', counts.f === want.f && want.f >= 14, `${counts.f}/${want.f}`);
   check('every backdrop is on the sheet', counts.b === want.b && want.b >= 11, `${counts.b}/${want.b}`);
 
-  await page.click('#swCase .sw:nth-child(12)');          // crimson: a design, not a plain metal
+  const pick = (sec, name) => page.click(`#${sec} .sw:has(span:text-is("${name}"))`);
+  await pick('swCase', 'crimson');                       // a design, not a plain metal
   check('picking a case applies it',
     await L('LIGHTER.finish') === 'crimson' && await L('LIGHTER.sim.disc.finish') === true);
   check('a design hangs a normal map on the case',
@@ -684,11 +685,11 @@ await settleLid(false);
   check('the picked swatch is the marked one',
     await L('document.querySelector("#swCase .sw.on span").textContent') === 'crimson');
 
-  await page.click('#swBack .sw:nth-child(4)');           // ember
+  await pick('swBack', 'ember');
   check('picking a backdrop applies it', await L('LIGHTER.backdrop') === 'ember');
   check('the backdrop is a live texture', await L('!!LIGHTER.scene.background') === true);
 
-  await page.click('#swFlame .sw:nth-child(10)');         // sunset: a two-hue combination
+  await pick('swFlame', 'sunset');                       // a two-hue combination
   check('picking a flame applies it', await L('LIGHTER.flameCol') === 'sunset');
   // read the scheme, not the live uniforms: those are only written while LIT, so
   // a stale pair here would pass or fail on render state rather than on the data
@@ -783,12 +784,17 @@ check('four fuel taps drain the tank dry', await L('LIGHTER.fuel') === 0);
 }
 await L('LIGHTER.refill()');
 {
-  await page.click('#flameBtn');
-  check('the flame button opens the same sheet', await L('LIGHTER.styleOpen') === true);
-  await page.click('#swFlame .sw:nth-child(2)');
+  await page.click('#styleBtn');
+  check('the style button reopens the sheet', await L('LIGHTER.styleOpen') === true);
+  // one control, but it still reports BOTH selections: case on the left half,
+  // flame on the right. Collapsing two buttons into one must not cost that.
+  check('the button face shows the case and the flame',
+    await L('!!document.getElementById("finishSwatch") && !!document.getElementById("flameSwatch")')
+    && await L('document.getElementById("flameBtn") === null'));
+  await page.click('#swFlame .sw:has(span:text-is("blue"))');
   check('picking blue lights it blue',
     await L('LIGHTER.flameCol') === 'blue' && await L('LIGHTER.flameLightHex') === '5f9dff');
-  await page.click('#swFlame .sw:nth-child(1)');
+  await page.click('#swFlame .sw:has(span:text-is("classic"))');
   check('picking classic puts it back',
     await L('LIGHTER.flameCol') === 'classic' && await L('LIGHTER.flameLightHex') === 'ff9a3c');
   await page.click('#styleClose');
