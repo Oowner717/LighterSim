@@ -42,6 +42,12 @@ const pinCfg = () => page.evaluate(() => {
 });
 await pinCfg();
 check('motion sensors idle at boot', await page.evaluate(() => LIGHTER.motionAttached) === false);
+{ // the frame-rate readout, so a stutter on a real device is something you can read
+  const txt = await page.evaluate(() => document.getElementById('fps').textContent);
+  check('the fps readout is on screen',
+    await page.evaluate(() => document.getElementById('fps').getBoundingClientRect().width > 0));
+  check('the fps readout shows a rate', /^\d+ fps/.test(txt), `text=${JSON.stringify(txt)}`);
+}
 
 // helpers injected into the page
 await page.evaluate(() => {

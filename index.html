@@ -135,6 +135,21 @@
     top: calc(88px + env(safe-area-inset-top, 0px));
     display: flex; gap: 6px;
   }
+  #fps {
+    padding: 4px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(160, 175, 190, 0.25);
+    background: rgba(18, 22, 28, 0.5);
+    color: rgba(200, 210, 220, 0.6);
+    font-size: 10px; letter-spacing: 0.04em;
+    /* tabular figures: a proportional font makes the number jitter as it counts */
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+    white-space: nowrap;
+    align-self: center;
+  }
+  #fps.warn { color: rgba(255, 196, 96, 0.92); border-color: rgba(255, 196, 96, 0.36); }
+  #fps.bad  { color: rgba(255, 132, 104, 0.95); border-color: rgba(255, 132, 104, 0.42); }
   #debug button {
     padding: 4px 9px;
     border-radius: 999px;
@@ -245,7 +260,8 @@
 <button id="infoBtn" type="button" aria-label="How it works">?</button>
 <button id="finishBtn" type="button" aria-label="Change case finish"><i id="finishSwatch"></i></button>
 <button id="flameBtn" type="button" aria-label="Change flame colour"><i id="flameSwatch"></i></button>
-<div id="debug" aria-label="Debug: fast-forward wear">
+<div id="debug" aria-label="Diagnostics">
+  <span id="fps" role="status" aria-live="off" title="Frame rate, and the worst single frame in the last few seconds">&nbsp;</span>
   <button id="ffFuel" type="button" title="Fast-forward fuel consumption">&#187; fuel</button>
   <button id="ffFlint" type="button" title="Fast-forward flint wear">&#187; flint</button>
 </div>
@@ -4194,6 +4210,27 @@ onResize();
 let running = true, rafId = 0, lastT = 0, acc = 0;
 let fpsEma = 60, warm = 0;
 let frames = 0;
+
+// An average alone hides the thing most worth seeing: a stutter is ONE long
+// frame, and a 60-frame average smooths it into nothing. So the readout carries
+// the rate AND the worst single frame of the last few seconds, held long enough
+// to actually read it on a phone. Boot is excluded — shader builds and the first
+// texture uploads land there, and latching those would just cry wolf.
+const fpsEl = document.getElementById('fps');
+let fpsWorstMs = 0, fpsWorstAt = 0, fpsPaintAt = 0;
+const lastFps = { txt: '', cls: '' };
+function updateFpsReadout(tms, dtRaw) {
+  const ms = dtRaw * 1000;
+  if (volWarmed && warm > 1.5 && ms > fpsWorstMs) { fpsWorstMs = ms; fpsWorstAt = tms; }
+  if (tms - fpsWorstAt > 4000) fpsWorstMs = 0;
+  if (tms - fpsPaintAt < 250) return;      // 4Hz, or the digits are unreadable
+  fpsPaintAt = tms;
+  const r = Math.round(fpsEma);
+  const txt = fpsWorstMs > 50 ? r + ' fps · ' + Math.round(fpsWorstMs) + 'ms' : r + ' fps';
+  const cls = (r < 30 || fpsWorstMs > 120) ? 'bad' : (r < 50 || fpsWorstMs > 50) ? 'warn' : '';
+  if (txt !== lastFps.txt) { lastFps.txt = txt; fpsEl.textContent = txt; }
+  if (cls !== lastFps.cls) { lastFps.cls = cls; fpsEl.className = cls; }
+}
 // truly at rest: skip GPU presentation (the canvas keeps its last frame) —
 // the dominant battery cost of the resting state. A heartbeat frame every
 // 500ms caps the worst any missed wake-up could do.
@@ -4208,6 +4245,38 @@ function simIsIdle() {
     && sim.svc.stubHop === 0 && sim.svc.can < 1e-3
     && sparks.every(s => s.life <= 0) && smoke.every(s => s.life <= 0);
 }
+// Lighting up for the first time used to compile the volume's shader AND a
+// depth-prepass program for every geometry in the scene, all inside the one
+// frame the flame first appears — a stutter you get exactly once per session.
+// Build them during boot instead, on a frame nobody is watching: a one-pixel
+// scissor is enough to make the driver do the work, and costs nothing.
+let volWarmed = false;
+function warmVolumePrograms() {
+  volWarmed = true;
+  if (!CFG.FLAME_VOL || !depthRT) return;
+  const wasVisible = flameVol.visible;
+  flameVol.visible = true;
+  // the prepass runs full size: this is the pass that builds a depth program for
+  // every geometry in the scene, and it is half of what the first light paid for
+  camera.layers.disable(NOCC_LAYER);
+  scene.overrideMaterial = matDepthOnly;
+  renderer.setRenderTarget(depthRT);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+  scene.overrideMaterial = null;
+  camera.layers.enable(NOCC_LAYER);
+  // then one frame down the path the app actually uses, clipped to a few pixels
+  // in a corner: enough fragments that the driver has to build the raymarch
+  // pipeline for real, few enough to cost nothing, and the next frame repaints
+  // over it. Going through the composer matters — a program compiled for the
+  // default framebuffer is not necessarily the one the bloom path will want.
+  renderer.setScissorTest(true);
+  renderer.setScissor(0, 0, 8, 8);
+  if (bloomOn) composer.render(); else renderer.render(scene, camera);
+  renderer.setScissorTest(false);
+  flameVol.visible = wasVisible;
+}
+
 function loop(tms) {
   if (!running) return;
   rafId = requestAnimationFrame(loop);
@@ -4242,6 +4311,8 @@ function loop(tms) {
       camera.layers.enable(NOCC_LAYER);
     }
     if (bloomOn) composer.render(); else renderer.render(scene, camera);
+    // second frame, not the first: the opening paint stays as quick as it was
+    if (!volWarmed && frames > 0) warmVolumePrograms();
   }
   // The raymarch is the one thing here that can be too expensive. Trade sample
   // count for frame rate first — that degrades softly — and only bail out to
@@ -4251,6 +4322,7 @@ function loop(tms) {
     volSteps = clamp(want, CFG.FLAME_STEPS_MIN, CFG.FLAME_STEPS);
   }
   if (volOk && warm > 8 && fpsEma < CFG.FPS_VOL_OFF && volSteps <= CFG.FLAME_STEPS_MIN + 0.01) volOk = false;
+  if (dtRaw > 0) updateFpsReadout(tms, dtRaw);
   frames++;
 }
 rafId = requestAnimationFrame(loop);
