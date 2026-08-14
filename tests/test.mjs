@@ -36,6 +36,9 @@ console.log('booted, frames rendering');
 const pinCfg = () => page.evaluate(() => {
   LIGHTER.CFG.FLINT_LIFE = 1e9;
   LIGHTER.CFG.FUEL_BURN_S = 1e9;
+  // SwiftShader runs at a few fps, so the volumetric flame's own low-fps
+  // fallback would trip and the volume path would never be exercised here
+  LIGHTER.CFG.FPS_VOL_OFF = 0;
 });
 await pinCfg();
 check('motion sensors idle at boot', await page.evaluate(() => LIGHTER.motionAttached) === false);
@@ -112,6 +115,17 @@ check('state still OUT after closed strike', await L('LIGHTER.state') === 'OUT')
 await settleLid(true);
 await lightIt();
 check('fast strike with lid open ignites', true);
+{ // the flame is a raymarched volume, with the sprite stack kept as a fallback
+  check('the flame renders as a volume', await L('LIGHTER.volActive') === true);
+  await L('(LIGHTER.CFG.FLAME_VOL = false, 0)');
+  // condition-waits, not sleeps: one frame is ~330ms under SwiftShader
+  await waitL('LIGHTER.volActive === false', 8000);
+  check('it falls back to sprites when the volume is off',
+    await L('LIGHTER.scene.children.filter(o => o.isSprite && o.visible).length') > 0);
+  await L('(LIGHTER.CFG.FLAME_VOL = true, 0)');
+  await waitL('LIGHTER.volActive === true', 8000);
+  check('and back to the volume again', true);
+}
 
 /* 3 ── chimney swipes: slow smothers, fast only flickers (wick straight) */
 await swipeAcrossMouth(300);            // slow (threshold = 1.5*vmin = 585 px/s)

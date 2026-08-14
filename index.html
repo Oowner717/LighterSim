@@ -437,6 +437,10 @@ const CFG = {
   FLAME_PUFF_LAG: 0.35,      // cycles of delay root -> tip = the wave's travel time
   // world units the flame billboards ride toward the camera (see the layer loop)
   FLAME_DEPTH_BIAS: 0.62,
+  FLAME_VOL: true,           // raymarched flame; falls back to the sprite stack
+  FLAME_STEPS: 30,           // ray samples through the volume
+  FLAME_VOL_GAIN: 1.45,      // emission gain for the raymarch
+  FPS_VOL_OFF: 26,           // sustained fps below this drops back to sprites
   FLAME_LIGHT: 8,            // point light intensity while LIT (11 bloomed orange smears onto the lid)
   EMBER_LIFE: 12,            // s of unattended pilot before it dies
   TURB_TIME: 0.9,            // s of hard flicker after a fast swipe
@@ -502,6 +506,9 @@ const _qI = new THREE.Quaternion();
 // can never clobber a temp its caller is still holding
 const _fa = new THREE.Vector3(), _fb = new THREE.Vector3();
 const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _lag = new THREE.Vector3();
+const _m1 = new THREE.Matrix4();
+let volOn = false, volOk = true;
+const VOL_MARGIN = 1.35;   // box half-width / flame half-width   // volumetric flame active / still affordable
 
 /* ============================== RENDERER / SCENE ============================== */
 const canvas = document.getElementById('c');
@@ -519,6 +526,10 @@ renderer.toneMappingExposure = 1.06;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(CFG.FOV, 1, 0.1, 120);
+const NOCC_LAYER = 3;   // things that must NOT write the occluder depth prepass
+function noOcclude(o) { o.layers.set(NOCC_LAYER); }
+camera.layers.enable(NOCC_LAYER);
+
 
 // Dark product-studio environment: off-axis softboxes so flat faces reflect
 // mostly darkness while rounded edges catch defined light strips. A bright
@@ -1895,6 +1906,7 @@ const FLAME_COLS = {
     glow: [[0, 'rgba(255,175,80,0.6)'], [0.5, 'rgba(255,130,40,0.25)'], [1, 'rgba(255,110,30,0)']],
     layers: [[1.5, 0.8, 0.38], [1.9, 1.5, 1.2], [2.5, 2.1, 1.6], [0.75, 1.15, 2.6], [2.8, 1.7, 0.7]],
     pilot: [2.4, 1.4, 0.55], pilotGlow: [1.9, 0.85, 0.3],
+    vol: [1.0, 1.0, 1.0], volCool: [0.30, 0.58, 1.95],
     light: 0xff9a3c,
   },
   blue: {
@@ -1908,6 +1920,7 @@ const FLAME_COLS = {
     glow: [[0, 'rgba(110,180,255,0.6)'], [0.5, 'rgba(60,130,255,0.25)'], [1, 'rgba(40,110,255,0)']],
     layers: [[0.5, 0.95, 1.6], [1.2, 1.6, 2.1], [1.6, 2.0, 2.6], [1.1, 0.95, 2.6], [0.8, 1.6, 2.8]],
     pilot: [0.8, 1.5, 2.4], pilotGlow: [0.5, 1.0, 1.9],
+    vol: [0.34, 0.72, 1.55], volCool: [0.55, 0.45, 1.95],
     light: 0x5f9dff,
   },
   emerald: {
@@ -1921,6 +1934,7 @@ const FLAME_COLS = {
     glow: [[0, 'rgba(130,255,170,0.6)'], [0.5, 'rgba(70,220,120,0.25)'], [1, 'rgba(50,200,110,0)']],
     layers: [[0.75, 1.5, 0.8], [1.4, 2.0, 1.5], [1.7, 2.5, 1.8], [0.8, 2.5, 1.5], [1.0, 2.8, 1.2]],
     pilot: [1.0, 2.3, 1.2], pilotGlow: [0.7, 1.8, 0.85],
+    vol: [0.36, 1.35, 0.62], volCool: [0.40, 1.30, 1.30],
     light: 0x57e084,
   },
   violet: {
@@ -1934,6 +1948,7 @@ const FLAME_COLS = {
     glow: [[0, 'rgba(210,140,255,0.6)'], [0.5, 'rgba(170,80,255,0.25)'], [1, 'rgba(150,60,255,0)']],
     layers: [[1.3, 0.75, 1.6], [1.8, 1.4, 2.1], [2.2, 1.7, 2.6], [2.5, 1.1, 1.9], [2.2, 1.0, 2.8]],
     pilot: [2.0, 1.1, 2.4], pilotGlow: [1.5, 0.8, 1.9],
+    vol: [1.05, 0.42, 1.60], volCool: [1.20, 0.45, 1.95],
     light: 0xb46aff,
   },
 };
@@ -1992,6 +2007,157 @@ const flameLayers = [
 ].map(L => ({ ...L, spr: makeSprite(TEX[L.tex], L.col), ph: Math.random() * 100 }));
 const pilotSpr = makeSprite(TEX.core, [2.4, 1.4, 0.55]);
 const pilotGlow = makeSprite(TEX.glow, [1.9, 0.85, 0.3]);   // inside the chimney: leaks via the holes
+for (const L of flameLayers) noOcclude(L.spr);
+noOcclude(pilotSpr); noOcclude(pilotGlow);
+/* ===================== VOLUMETRIC FLAME =====================
+   The sprite stack above is a stand-in: five camera-facing quads. Flat from
+   every angle, and because a quad's occlusion is decided for the whole quad at
+   once, the chimney kept slicing it into hard wedges — which no amount of
+   parameter tuning fixes.
+
+   This renders the flame as what it is: a volume. A proxy box is fitted around
+   the flame each frame; the fragment shader marches the camera ray through it
+   and integrates emission through a density field. That buys three things the
+   quads could never have — real depth (it foreshortens when you look down at
+   it), a soft translucent edge, and per-pixel occlusion: a depth prepass tells
+   each ray exactly where the metal is, so the march simply stops there. No
+   depth bias, no wedges, and the flame ducks behind the windshield on a folded
+   wick because the geometry says so, not because a fudge factor says so.
+   ========================================================= */
+
+// Half-res depth of the solid lighter only. Rendered solely while the flame is
+// alight, so an unlit lighter pays nothing for any of this.
+let depthRT = null;
+function makeDepthRT(w, h) {
+  if (depthRT) depthRT.dispose();
+  depthRT = new THREE.WebGLRenderTarget(Math.max(2, w), Math.max(2, h), {
+    depthTexture: new THREE.DepthTexture(Math.max(2, w), Math.max(2, h), THREE.UnsignedIntType),
+    depthBuffer: true, stencilBuffer: false,
+  });
+}
+const matDepthOnly = new THREE.MeshBasicMaterial();   // cheap: depth is all we want
+
+const FLAME_VERT = `
+  varying vec3 vWorld;
+  void main() {
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorld = wp.xyz;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }`;
+
+const FLAME_FRAG = `
+  precision highp float;
+  varying vec3 vWorld;
+  uniform mat4 uInvModel;
+  uniform sampler2D uDepth;
+  uniform vec2 uRes;
+  uniform vec3 uCamDir;
+  uniform vec3 uTint;
+  uniform vec3 uCool;          // the colour of the clean-burning root
+  uniform float uNear, uFar, uTime, uSteps, uIntensity, uTurb, uLean, uCoolAmt;
+  uniform vec2 uSpineOff;      // lateral drift of the tip, in flame space
+  uniform float uRad;          // flame radius as a fraction of the box half-width
+
+  float hash(vec3 p) {
+    p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+  float vnoise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), f.x),
+                   mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+                   mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+  }
+  // the tuned teardrop: round bulb on the wick, long concave taper to a point
+  float profile(float t) {
+    if (t < 0.28) { float k = (0.28 - t) / 0.40; return sqrt(max(0.0, 1.0 - k * k)); }
+    return pow(max(0.0, 1.0 - (t - 0.28) / 0.72), 1.12);
+  }
+  float sceneDist(vec2 uv) {
+    float z = texture2D(uDepth, uv).x;
+    if (z >= 1.0) return uFar;
+    float n = z * 2.0 - 1.0;
+    return (2.0 * uNear * uFar) / (uFar + uNear - n * (uFar - uNear));
+  }
+  void main() {
+    vec3 ro = cameraPosition;
+    vec3 rd = normalize(vWorld - ro);
+    // slab test in object space, parameterised by the SAME t as world space so
+    // the non-uniform box scale cannot distort the march
+    vec3 roO = (uInvModel * vec4(ro, 1.0)).xyz;
+    vec3 rdO = (uInvModel * vec4(ro + rd, 1.0)).xyz - roO;
+    vec3 t1 = (vec3(-0.5) - roO) / rdO, t2 = (vec3(0.5) - roO) / rdO;
+    vec3 tsm = min(t1, t2), tbg = max(t1, t2);
+    float tn = max(max(tsm.x, tsm.y), max(tsm.z, 0.0));
+    float tf = min(min(tbg.x, tbg.y), tbg.z);
+    if (tf <= tn) discard;
+    // stop the ray where the metal is: one depth fetch, exact for the whole ray
+    float along = max(1e-4, dot(rd, uCamDir));
+    tf = min(tf, sceneDist(gl_FragCoord.xy / uRes) / along);
+    if (tf <= tn) discard;
+
+    float steps = uSteps;
+    float dt = (tf - tn) / steps;
+    // jitter the first sample per pixel, or the fixed step positions show up as
+    // banding rings through the soft edge
+    float jit = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    vec3 acc = vec3(0.0);
+    for (float i = 0.0; i < 64.0; i += 1.0) {
+      if (i >= steps) break;
+      vec3 q = roO + rdO * (tn + (i + jit) * dt);
+      float y = q.y + 0.5;                       // 0 at the root, 1 at the tip
+      if (y <= 0.0 || y >= 1.0) continue;
+      vec2 lat = q.xz - uSpineOff * y * y;       // the column leans as it rises
+      float w = profile(y) * 0.5 * uRad;
+      if (w <= 0.001) continue;
+      float r = length(lat) / w;
+      // turbulence grows with height, so the root stays steady and the tip boils
+      vec3 np = vec3(q.x * 6.0, y * 5.0 - uTime * 1.6, q.z * 6.0);
+      float n = vnoise3(np) * 0.65 + vnoise3(np * 2.3 + 11.0) * 0.35;
+      r += (n - 0.5) * uTurb * (0.12 + y * 2.1);
+      float d = smoothstep(1.0, 0.35, r) * smoothstep(0.0, 0.12, y);
+      if (d <= 0.002) continue;
+      // hot and pale low down, cooling to orange at the tip
+      float heat = pow(d, 1.15) * (1.0 - 0.8 * y);
+      vec3 col = vec3(1.0, 0.42 + 0.55 * heat, 0.09 + 0.62 * pow(heat, 2.2)) * uTint;
+      // the clean-burning collar right at the wick
+      col = mix(col, uCool, pow(max(0.0, 1.0 - y / 0.26), 1.6) * uCoolAmt * d);
+      acc += col * d * d * dt;
+    }
+    gl_FragColor = vec4(acc * uIntensity, 1.0);
+  }`;
+
+const flameVol = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.ShaderMaterial({
+  vertexShader: FLAME_VERT, fragmentShader: FLAME_FRAG,
+  uniforms: {
+    uInvModel: { value: new THREE.Matrix4() },
+    uDepth: { value: null }, uRes: { value: new THREE.Vector2(1, 1) },
+    uCamDir: { value: new THREE.Vector3(0, 0, -1) },
+    uTint: { value: new THREE.Color(1, 1, 1) },
+    uCool: { value: new THREE.Color(0.35, 0.62, 1.9) },
+    uNear: { value: 0.1 }, uFar: { value: 120 }, uTime: { value: 0 },
+    uSteps: { value: 30 }, uIntensity: { value: 1 }, uTurb: { value: 0.55 },
+    uLean: { value: 0 }, uCoolAmt: { value: 1 },
+    uSpineOff: { value: new THREE.Vector2() }, uRad: { value: 1 / 1.35 },
+  },
+  side: THREE.BackSide,          // the far faces: the ray's exit, always drawn
+  transparent: true, depthWrite: false,
+  depthTest: false,              // occlusion comes from the depth texture instead
+  blending: THREE.AdditiveBlending,
+}));
+// the ground quads, the contact shadow, the handle and the particles are all
+// transparent helpers: none of them should shadow the flame in the prepass
+for (const o of [shadowMesh, bendHandle]) noOcclude(o);
+bendHandle.traverse(noOcclude);
+flameVol.renderOrder = 10;
+flameVol.frustumCulled = false;
+flameVol.visible = false;
+noOcclude(flameVol);
+scene.add(flameVol);
+
 const flameLight = new THREE.PointLight(0xff9a3c, 0, 11, 2);
 scene.add(flameLight);
 // No warm floor pool: faking bounce light with one horizontal quad only works
@@ -2036,7 +2202,9 @@ function cycleFlameCol() {
 
 const sparks = [];
 for (let i = 0; i < 40; i++) {
-  sparks.push({ spr: makeSprite(TEX.spark, [3, 2.2, 1.3]), pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1 });
+  const spr = makeSprite(TEX.spark, [3, 2.2, 1.3]);
+  noOcclude(spr);
+  sparks.push({ spr, pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1 });
 }
 function spawnSparks(n, speedK) {
   insertG.updateWorldMatrix(true, false);
@@ -2063,6 +2231,7 @@ const smoke = [];
 for (let i = 0; i < 16; i++) {
   const spr = makeSprite(TEX.smoke, [1, 1, 1]);
   spr.material.blending = THREE.NormalBlending;
+  noOcclude(spr);
   smoke.push({ spr, pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1, ph: Math.random() * 40, k: 1 });
 }
 function spawnSmoke(n, strength) {
@@ -2736,6 +2905,38 @@ function updateFrame(dt, tSec) {
     // centre clears the rim while most of the quad is still down in the metal.
     const bias = CFG.FLAME_DEPTH_BIAS * (1 - bent);
     const wob = 1 + 2.4 * F.turb;
+    // ---- volumetric flame: fit the proxy box around the column ----
+    volOn = CFG.FLAME_VOL && volOk;
+    flameVol.visible = volOn;
+    if (volOn) {
+      // the flame's own half-width at its widest, in world units
+      const halfW = 0.34 * len * CFG.FLAME_W;
+      // local Y runs along the flame, so the march works in flame space; _bx/_by
+      // are already the perpendicular basis built just above
+      _m1.makeBasis(_bx, flameDir, _by);
+      flameVol.quaternion.setFromRotationMatrix(_m1);
+      // MARGIN over the flame itself, so lean and turbulence stay inside the box
+      const boxH = len * 1.06;
+      flameVol.position.copy(spineA).addScaledVector(flameDir, boxH * 0.5 - 0.04);
+      flameVol.scale.set(halfW * 2 * VOL_MARGIN, boxH, halfW * 2 * VOL_MARGIN);
+      flameVol.updateMatrixWorld(true);
+      const u = flameVol.material.uniforms;
+      u.uInvModel.value.copy(flameVol.matrixWorld).invert();
+      u.uNear.value = camera.near; u.uFar.value = camera.far;
+      u.uTime.value = tSec;
+      u.uSteps.value = CFG.FLAME_STEPS;
+      u.uTurb.value = 0.42 + 0.5 * F.turb + 0.12 * (1 - grow);
+      u.uIntensity.value = CFG.FLAME_VOL_GAIN * grow * (1 + 1.1 * F.flare) * flick;
+      u.uCoolAmt.value = 1 - 0.55 * bent;
+      camera.getWorldDirection(u.uCamDir.value);
+      // how far the tip has drifted off the axis, in the box's own units
+      _v5.subVectors(spineC, spineA).addScaledVector(flameDir, -len);
+      const boxHalf = halfW * VOL_MARGIN;
+      u.uSpineOff.value.set(_v5.dot(_bx) / boxHalf, _v5.dot(_by) / boxHalf);
+      const fc = FLAME_COLS[sim.flameCol] || FLAME_COLS.classic;
+      u.uTint.value.setRGB(fc.vol[0], fc.vol[1], fc.vol[2]);
+      u.uCool.value.setRGB(fc.volCool[0], fc.volCool[1], fc.volCool[2]);
+    }
     // screen-space spine tilt so the teardrop bodies lean with the bend
     toScreen(spineA, _s1);
     toScreen(spineC, _s2);
@@ -2746,7 +2947,7 @@ function updateFrame(dt, tSec) {
       + vnoise(tSec * 6.2 + 23) * 0.14;
     for (const L of flameLayers) {
       const spr = L.spr;
-      spr.visible = true;
+      spr.visible = !volOn;
       bezier(L.t, _v1);
       // ONE disturbance climbing the column rather than independent per-layer
       // jitter: a buoyant flame sheds a vortex low down, and it grows as it
@@ -3931,6 +4132,11 @@ function onResize() {
   renderer.setSize(w, h);
   composer.setPixelRatio(Math.min(window.devicePixelRatio || 1, CFG.MAX_DPR));
   composer.setSize(w, h);
+  // half res: the flame is soft, and the depth only decides where metal starts
+  const dpr = Math.min(window.devicePixelRatio || 1, CFG.MAX_DPR);
+  makeDepthRT(Math.round(w * dpr * 0.5), Math.round(h * dpr * 0.5));
+  flameVol.material.uniforms.uDepth.value = depthRT.depthTexture;
+  flameVol.material.uniforms.uRes.value.set(w * dpr, h * dpr);
   computeFit();
   idleT = 0;
 }
@@ -3974,8 +4180,25 @@ function loop(tms) {
   idleT = simIsIdle() ? idleT + dt : 0;
   if (idleT < 1.5 || tms - lastPresentT > 500) {
     lastPresentT = tms;
+    // Occluder depth for the volumetric flame. Only while it is actually
+    // burning, so an unlit lighter never pays for it. The flame itself and
+    // every transparent helper sit on NOCC_LAYER and are skipped, or the
+    // flame's own glow would occlude it.
+    if (volOn && depthRT) {
+      camera.layers.disable(NOCC_LAYER);
+      scene.overrideMaterial = matDepthOnly;
+      renderer.setRenderTarget(depthRT);
+      renderer.clear(true, true, false);
+      renderer.render(scene, camera);
+      renderer.setRenderTarget(null);
+      scene.overrideMaterial = null;
+      camera.layers.enable(NOCC_LAYER);
+    }
     if (bloomOn) composer.render(); else renderer.render(scene, camera);
   }
+  // the raymarch is the one thing here that can be too expensive; drop to the
+  // sprite flame rather than let the whole app crawl
+  if (volOk && warm > 6 && fpsEma < CFG.FPS_VOL_OFF) volOk = false;
   frames++;
 }
 rafId = requestAnimationFrame(loop);
@@ -4032,6 +4255,7 @@ window.LIGHTER = {
   wickBent: wickIsBent,
   get wickK() { return wick.k; },   // the arc parameter every bend rides on
   get bendHandleShown() { return bendHandleK > 0.5; },
+  get volActive() { return volOn; },
   wickTipLocalY,
   bendWick: setWickBend,
   straighten: () => { wick.straightening = true; },
