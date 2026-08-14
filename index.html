@@ -179,6 +179,72 @@
   #hFuel { background: linear-gradient(90deg, #d97a2b, #ffb648); }
   #hud.low #hFuel { background: #ff6242; }
   #hFlint { background: linear-gradient(90deg, #78909f, #a9bfcd); }
+  #style {
+    position: fixed; inset: 0; z-index: 11;
+    background: rgba(4, 6, 9, 0.55);
+    display: none;
+  }
+  #style.show { display: block; }
+  #stylePanel {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: 0;
+    width: min(100%, 560px);
+    max-height: 84dvh;
+    box-sizing: border-box;
+    border-radius: 18px 18px 0 0;
+    border: 1px solid rgba(160, 175, 190, 0.22); border-bottom: none;
+    background: rgba(14, 18, 23, 0.97);
+    color: rgba(228, 234, 240, 0.92);
+    display: flex; flex-direction: column;
+  }
+  #styleHead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px 8px;
+    font-size: 15px; letter-spacing: 0.02em;
+  }
+  #styleClose {
+    position: relative;
+    width: 32px; height: 32px; border-radius: 50%;
+    border: 1px solid rgba(160, 175, 190, 0.3);
+    background: rgba(30, 36, 44, 0.8);
+    color: rgba(225, 232, 240, 0.9);
+    font-size: 17px; line-height: 1; padding: 0;
+  }
+  #styleBody {
+    overflow-y: auto; touch-action: pan-y; overscroll-behavior: contain;
+    padding: 0 18px calc(18px + env(safe-area-inset-bottom, 0px));
+  }
+  .swsec { padding: 4px 0 12px; }
+  .swsec + .swsec { border-top: 1px solid rgba(160, 175, 190, 0.14); padding-top: 12px; }
+  .swsec h4 {
+    margin: 0 0 9px; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: rgba(200, 210, 220, 0.72);
+  }
+  /* auto-fill, so fourteen swatches reflow instead of overflowing a narrow phone */
+  .swgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 9px; }
+  .sw {
+    position: relative;
+    padding: 0; border-radius: 12px;
+    border: 1px solid rgba(160, 175, 190, 0.26);
+    background: transparent;
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 7px 2px 6px;
+    color: rgba(206, 214, 222, 0.66);
+    font-size: 9px; letter-spacing: 0.03em;
+  }
+  .sw i {
+    display: block; width: 28px; height: 28px; border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background-size: cover;
+  }
+  .sw.on {
+    border-color: rgba(255, 190, 110, 0.85);
+    background: rgba(255, 176, 80, 0.10);
+    color: rgba(255, 214, 170, 0.95);
+  }
+  /* the flame swatches are lit shapes, not discs, so they get a soft halo */
+  #swFlame .sw i { box-shadow: 0 0 9px currentColor; }
   #guide {
     position: fixed; inset: 0; z-index: 10;
     background: rgba(4, 6, 9, 0.55);
@@ -272,6 +338,19 @@
 <div id="hud" aria-hidden="true">
   <div class="hrow"><span>fuel</span><div class="hbar"><i id="hFuel"></i></div></div>
   <div class="hrow"><span>flint</span><div class="hbar"><i id="hFlint"></i></div></div>
+</div>
+<div id="style" role="dialog" aria-modal="true" aria-label="Appearance">
+  <div id="stylePanel">
+    <div id="styleHead">
+      <b>Appearance</b>
+      <button id="styleClose" type="button" aria-label="Close">&#215;</button>
+    </div>
+    <div id="styleBody">
+      <section class="swsec"><h4>Case</h4><div class="swgrid" id="swCase"></div></section>
+      <section class="swsec"><h4>Flame</h4><div class="swgrid" id="swFlame"></div></section>
+      <section class="swsec"><h4>Background</h4><div class="swgrid" id="swBack"></div></section>
+    </div>
+  </div>
 </div>
 <div id="guide" role="dialog" aria-modal="true" aria-label="How it works">
   <div id="guidePanel">
@@ -597,9 +676,29 @@ function radialCanvas(size, stops, inner = 0) {
   g.fillStyle = gr; g.fillRect(0, 0, size, size);
   return cv;
 }
-{
+/* ============================== BACKDROPS ============================== */
+// A pool of light behind the lighter, darkening to the corners. Kept dim on
+// purpose: the flame is the brightest thing in the scene and a bright backdrop
+// flattens it. `swatch` is what the menu shows, and is the pool's centre.
+const BACKDROPS = {
+  midnight: { swatch: '#222933', stops: ['#222933', '#151a21', '#07090c'] },
+  noir:     { swatch: '#121212', stops: ['#141414', '#0a0a0a', '#000000'] },
+  slate:    { swatch: '#2a3441', stops: ['#2a3441', '#182029', '#080b0f'] },
+  ember:    { swatch: '#3a2118', stops: ['#3a2118', '#20120d', '#0a0605'] },
+  oxblood:  { swatch: '#3a151c', stops: ['#3a151c', '#1f0b10', '#0a0406'] },
+  forest:   { swatch: '#16301f', stops: ['#16301f', '#0d1c13', '#040806'] },
+  indigo:   { swatch: '#1e2148', stops: ['#1e2148', '#12142a', '#06070f'] },
+  plum:     { swatch: '#301a3c', stops: ['#301a3c', '#1b0f23', '#08040b'] },
+  teal:     { swatch: '#123236', stops: ['#123236', '#0a1e21', '#03090a'] },
+  sand:     { swatch: '#3a3025', stops: ['#3a3025', '#211b14', '#0a0806'] },
+  ash:      { swatch: '#2e2e30', stops: ['#2e2e30', '#1b1b1d', '#08080a'] },
+};
+const BACKDROP_ORDER = Object.keys(BACKDROPS);
+function applyBackdrop(name) {
+  if (!BACKDROPS[name]) name = 'midnight';
+  sim.backdrop = name;
+  const cv = radialCanvas(512, BACKDROPS[name].stops.map((c, i) => [i * 0.5, c]));
   // ±2/255 noise dithers the gradient so OLED screens don't show banding rings
-  const cv = radialCanvas(512, [[0, '#222933'], [0.5, '#151a21'], [1, '#07090c']]);
   const g = cv.getContext('2d');
   const id = g.getImageData(0, 0, 512, 512);
   for (let i = 0; i < id.data.length; i += 4) {
@@ -609,6 +708,9 @@ function radialCanvas(size, stops, inner = 0) {
   g.putImageData(id, 0, 0);
   const bg = new THREE.CanvasTexture(cv);
   bg.colorSpace = THREE.SRGBColorSpace;
+  // the old one is dead the moment it is replaced: swapping backdrops from the
+  // menu would otherwise leak a 512x512 texture per tap
+  if (scene.background && scene.background.isTexture) scene.background.dispose();
   scene.background = bg;
 }
 
@@ -1278,7 +1380,7 @@ const sim = {
   ember: { t: 0 },
   fuel: 1, flint: 0, flintDudRun: 0, sputterNext: 0, warnedLowFuel: false,
   flintMissing: false, overfilled: false,
-  finish: 'chrome', finishFlash: 0, flameCol: 'classic',
+  finish: 'chrome', finishFlash: 0, flameCol: 'classic', backdrop: 'midnight',
   svc: {   // insert service ritual — deliberately never persisted
     state: 'seated',            // seated | pulling | out | seating
     y: 0, yV: 0,                // extraction lift while pulling
@@ -1297,7 +1399,7 @@ const sim = {
   upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
   gWorld: new THREE.Vector3(0, -1, 0),
   timers: [],
-  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false, flameCol: false, service: false, bend: false },
+  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false, flameCol: false, backdrop: false, service: false, bend: false },
   counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0, duds: 0, refills: 0, services: 0 },
 };
 // discovered tricks persist, so returning players skip the beginner hints
@@ -1307,7 +1409,8 @@ function saveStats() {
   try {
     localStorage.setItem('lighter.stats', JSON.stringify({
       v: 1, fuel: sim.fuel, flint: sim.flint, flintMissing: sim.flintMissing,
-      finish: sim.finish, flameCol: sim.flameCol, counts: sim.counts,
+      finish: sim.finish, flameCol: sim.flameCol, backdrop: sim.backdrop,
+      counts: sim.counts,
     }));
   } catch (e) { /* ignore */ }
 }
@@ -1318,10 +1421,121 @@ try {
     if (Number.isFinite(+s.flint)) sim.flint = Math.max(0, s.flint | 0);
     if (typeof s.finish === 'string') sim.finish = s.finish;
     if (typeof s.flameCol === 'string') sim.flameCol = s.flameCol;
+    if (typeof s.backdrop === 'string') sim.backdrop = s.backdrop;
     sim.flintMissing = s.flintMissing === true;
     Object.assign(sim.counts, s.counts || {});
   }
 } catch (e) { /* ignore */ }
+
+// Case DESIGNS are roughness maps: the pattern shows as varying gloss under the
+// same metal, the way a real engine-turned or hammered case catches light.
+// Built on demand and cached -- generating ten canvases at boot to show one is
+// exactly the kind of thing that makes a cold start feel slow.
+function patternTex(kind) {
+  const N = 256;
+  const cv = document.createElement('canvas'); cv.width = cv.height = N;
+  const g = cv.getContext('2d');
+  g.fillStyle = 'rgb(122,122,122)'; g.fillRect(0, 0, N, N);
+  const line = (a, w) => { g.strokeStyle = `rgba(255,255,255,${a})`; g.lineWidth = w; };
+  const dark = (a, w) => { g.strokeStyle = `rgba(20,20,20,${a})`; g.lineWidth = w; };
+  const seg = (x0, y0, x1, y1) => { g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke(); };
+  if (kind === 'engine') {                       // engine-turned: overlapping arcs
+    for (let y = 0; y < N; y += 22) for (let x = 0; x < N; x += 22) {
+      for (let r = 2.5; r < 13; r += 2.2) {
+        line(0.55, 1.6);
+        g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
+        dark(0.42, 1.2);
+        g.beginPath(); g.arc(x, y, r + 1.1, 0, Math.PI * 2); g.stroke();
+      }
+    }
+  } else if (kind === 'hammer') {                // hammered: soft dished dents
+    for (let i = 0; i < 150; i++) {
+      const x = Math.random() * N, y = Math.random() * N, r = 7 + Math.random() * 13;
+      const gr = g.createRadialGradient(x - r * 0.3, y - r * 0.3, 1, x, y, r);
+      gr.addColorStop(0, 'rgba(255,255,255,0.30)');
+      gr.addColorStop(1, 'rgba(30,30,30,0.22)');
+      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+    }
+  } else if (kind === 'cross') {                 // crosshatch
+    for (let d = -N; d < N * 2; d += 9) { line(0.30, 2); seg(d, 0, d + N, N); dark(0.26, 1); seg(d + 3, 0, d + N + 3, N); }
+    for (let d = -N; d < N * 2; d += 9) { line(0.22, 2); seg(d + N, 0, d, N); }
+  } else if (kind === 'herring') {               // herringbone
+    for (let y = 0; y < N; y += 16) for (let x = 0; x < N; x += 16) {
+      line(0.34, 3); const up = ((x / 16 + y / 16) | 0) % 2 === 0;
+      seg(x, up ? y + 14 : y, x + 14, up ? y : y + 14);
+    }
+  } else if (kind === 'hex') {                   // honeycomb outlines
+    line(0.32, 2);
+    for (let row = 0; row * 22 < N + 22; row++) for (let col = 0; col * 26 < N + 26; col++) {
+      const cx = col * 26 + (row % 2 ? 13 : 0), cy = row * 22;
+      g.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 3 * i + Math.PI / 6, px = cx + 13 * Math.cos(a), py = cy + 13 * Math.sin(a);
+        i ? g.lineTo(px, py) : g.moveTo(px, py);
+      }
+      g.closePath(); g.stroke();
+    }
+  } else if (kind === 'stripe') {                // pinstripe
+    for (let x = 0; x < N; x += 11) { line(0.34, 3); seg(x, 0, x, N); dark(0.28, 2); seg(x + 4, 0, x + 4, N); }
+  } else if (kind === 'diamond') {               // quilted diamonds with pins
+    for (let d = -N; d < N * 2; d += 22) { line(0.30, 3); seg(d, 0, d + N, N); seg(d + N, 0, d, N); }
+    g.fillStyle = 'rgba(20,20,20,0.5)';
+    for (let y = 0; y < N; y += 22) for (let x = 0; x < N; x += 22) {
+      g.beginPath(); g.arc(x, y, 2.4, 0, Math.PI * 2); g.fill();
+    }
+  } else if (kind === 'weave') {                 // carbon-fibre twill
+    for (let y = 0; y < N; y += 16) for (let x = 0; x < N; x += 16) {
+      const warp = ((x / 16 + y / 16) | 0) % 2 === 0;
+      g.fillStyle = warp ? 'rgba(235,235,235,0.30)' : 'rgba(24,24,24,0.30)';
+      g.fillRect(x, y, 16, 16);
+      line(0.16, 1);
+      for (let k = 2; k < 16; k += 4) warp ? seg(x + k, y, x + k, y + 16) : seg(x, y + k, x + 16, y + k);
+    }
+  } else if (kind === 'wave') {                  // damascus ripple
+    for (let y = -20; y < N + 20; y += 7) {
+      line(0.26, 3); g.beginPath();
+      for (let x = 0; x <= N; x += 8) {
+        const yy = y + Math.sin(x * 0.055 + y * 0.22) * 7;
+        x ? g.lineTo(x, yy) : g.moveTo(x, yy);
+      }
+      g.stroke();
+    }
+  } else {                                       // 'scale': overlapping fish scales
+    for (let row = 0; row * 13 < N + 13; row++) for (let col = 0; col * 22 < N + 22; col++) {
+      line(0.30, 2);
+      g.beginPath(); g.arc(col * 22 + (row % 2 ? 11 : 0), row * 13, 12, Math.PI, 0); g.stroke();
+    }
+  }
+  const rough = new THREE.CanvasTexture(cv);
+  rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
+  rough.repeat.set(2, 2);
+  // A roughness map alone is nearly invisible on metal this polished -- it only
+  // blurs a reflection slightly. Real engine-turning or hammering is GEOMETRY,
+  // so read the pattern as a height field and derive a normal map from its
+  // slope. That is what actually catches the light.
+  const src = g.getImageData(0, 0, N, N).data;
+  const out = g.createImageData(N, N);
+  const at = (x, y) => src[(((y + N) % N) * N + ((x + N) % N)) * 4];   // wraps, like the tile does
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const dx = (at(x + 1, y) - at(x - 1, y)) / 255;
+    const dy = (at(x, y + 1) - at(x, y - 1)) / 255;
+    const nx = -dx * 2.4, ny = -dy * 2.4, nz = 1;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    const i = (y * N + x) * 4;
+    out.data[i] = (nx / len * 0.5 + 0.5) * 255;
+    out.data[i + 1] = (ny / len * 0.5 + 0.5) * 255;
+    out.data[i + 2] = (nz / len * 0.5 + 0.5) * 255;
+    out.data[i + 3] = 255;
+  }
+  const ncv = document.createElement('canvas'); ncv.width = ncv.height = N;
+  ncv.getContext('2d').putImageData(out, 0, 0);
+  const normal = new THREE.CanvasTexture(ncv);
+  normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
+  normal.repeat.set(2, 2);
+  return { rough, normal };
+}
+const PATTERN_CACHE = {};
+const patternMap = kind => PATTERN_CACHE[kind] || (PATTERN_CACHE[kind] = patternTex(kind));
 
 /* ============================== CASE FINISHES ============================== */
 const FINISHES = {
@@ -1346,7 +1560,73 @@ const FINISHES = {
     insert: 0x565c63, inner: 0x767c84,
   },
 };
-const FINISH_ORDER = ['chrome', 'matte', 'brass', 'gunmetal'];
+// Ten more, several of them DESIGNS: `map` naming a pattern instead of just
+// asking for the brushed grain. `swatch` is the CSS the menu paints, so a design
+// can hint at its texture instead of showing as a flat colour.
+const FINISH_EXTRA = {
+  copper: {
+    swatch: '#c87540',
+    chrome: { color: 0xc87540, rough: 0.46, map: true, metal: 1.0, env: 1.0 },
+    dark: { color: 0xa85f32, rough: 0.32, map: true, metal: 1.0, env: 1.0 },
+    insert: 0x8a5f3d, inner: 0xa06038,
+  },
+  rosegold: {
+    swatch: '#e0a08c',
+    chrome: { color: 0xe0a08c, rough: 0.42, map: true, metal: 1.0, env: 1.05 },
+    dark: { color: 0xc2836f, rough: 0.30, map: true, metal: 1.0, env: 1.0 },
+    insert: 0x93705f, inner: 0xbb826e,
+  },
+  gold: {
+    swatch: 'repeating-linear-gradient(45deg, #f0c95a 0 3px, #d8b143 3px 6px)',
+    chrome: { color: 0xf0c95a, rough: 0.52, map: 'diamond', metal: 1.0, env: 1.15 },
+    dark: { color: 0xd0a83c, rough: 0.42, map: 'diamond', metal: 1.0, env: 1.05 },
+    insert: 0x9a854a, inner: 0xc7a545,
+  },
+  obsidian: {
+    swatch: 'radial-gradient(circle at 32% 30%, #3c4249 0%, #14171a 70%)',
+    chrome: { color: 0x555e69, rough: 0.58, map: 'engine', metal: 0.70, env: 1.25 },
+    dark: { color: 0x424953, rough: 0.48, map: 'engine', metal: 0.75, env: 1.15 },
+    insert: 0x4a4f55, inner: 0x40454b,
+  },
+  titanium: {
+    swatch: 'radial-gradient(circle at 34% 30%, #a6adb5 0%, #5f666d 72%)',
+    chrome: { color: 0x8d949c, rough: 0.62, map: 'hex', metal: 1.0, env: 1.05 },
+    dark: { color: 0x737a82, rough: 0.38, map: 'hex', metal: 1.0, env: 1.0 },
+    insert: 0x666c73, inner: 0x878e96,
+  },
+  damascus: {
+    swatch: 'repeating-linear-gradient(0deg, #a6aeb8 0 3px, #6f7780 3px 6px)',
+    chrome: { color: 0x9aa3ad, rough: 0.58, map: 'wave', metal: 1.0, env: 1.1 },
+    dark: { color: 0x7c848d, rough: 0.32, map: 'wave', metal: 1.0, env: 1.05 },
+    insert: 0x6d747c, inner: 0x8d959e,
+  },
+  carbon: {
+    swatch: 'repeating-linear-gradient(90deg, #30343a 0 3px, #16181b 3px 6px)',
+    chrome: { color: 0x3d4249, rough: 0.66, map: 'weave', metal: 0.45, env: 0.9 },
+    dark: { color: 0x2e3238, rough: 0.56, map: 'weave', metal: 0.5, env: 0.85 },
+    insert: 0x4b5158, inner: 0x3a3e43,
+  },
+  crimson: {
+    swatch: 'radial-gradient(circle at 34% 30%, #c0454f 0%, #6d1620 72%)',
+    chrome: { color: 0x9e2b36, rough: 0.58, map: 'hammer', metal: 0.75, env: 0.85 },
+    dark: { color: 0x7d1f28, rough: 0.46, map: 'hammer', metal: 0.8, env: 0.9 },
+    insert: 0x6a4046, inner: 0x8a3a42,
+  },
+  navy: {
+    swatch: 'repeating-linear-gradient(45deg, #2e3b5c 0 3px, #1d2740 3px 6px)',
+    chrome: { color: 0x27324e, rough: 0.60, map: 'herring', metal: 0.75, env: 0.9 },
+    dark: { color: 0x1c2540, rough: 0.48, map: 'herring', metal: 0.8, env: 0.95 },
+    insert: 0x4a5470, inner: 0x394664,
+  },
+  forest: {
+    swatch: 'repeating-linear-gradient(45deg, #2c5340 0 3px, #16301f 3px 6px)',
+    chrome: { color: 0x224534, rough: 0.60, map: 'cross', metal: 0.78, env: 0.9 },
+    dark: { color: 0x183326, rough: 0.48, map: 'cross', metal: 0.82, env: 0.95 },
+    insert: 0x47614f, inner: 0x33513e,
+  },
+};
+Object.assign(FINISHES, FINISH_EXTRA);
+const FINISH_ORDER = ['chrome', 'matte', 'brass', 'gunmetal', ...Object.keys(FINISH_EXTRA)];
 function applyFinish(name) {
   if (!FINISHES[name]) name = 'chrome';
   sim.finish = name;
@@ -1356,9 +1636,14 @@ function applyFinish(name) {
     m.roughness = p.rough;
     m.metalness = p.metal;
     m.envMapIntensity = p.env;
-    const map = p.map ? brushed : null;
-    // dropping/adding the roughness map changes the shader: recompile only then
+    // `map` is true for the plain brushed grain, or names a design pattern
+    const des = typeof p.map === 'string' ? patternMap(p.map) : null;
+    const map = p.map === true ? brushed : (des ? des.rough : null);
+    const nrm = des ? des.normal : null;
+    // adding or dropping either map changes the shader: recompile only then
     if (m.roughnessMap !== map) { m.roughnessMap = map; m.needsUpdate = true; }
+    if (m.normalMap !== nrm) { m.normalMap = nrm; m.needsUpdate = true; }
+    if (nrm) m.normalScale.set(0.85, 0.85);
   }
   matInsert.color.setHex(fp.insert);
   // the cavity is the same metal as the shell: a brass case cannot have a
@@ -1366,8 +1651,17 @@ function applyFinish(name) {
   matCaseInner.color.setHex(fp.inner);
   // the main-screen swatch button wears the current finish
   const sw = document.getElementById('finishSwatch');
-  if (sw) sw.style.backgroundColor = '#' + fp.chrome.color.toString(16).padStart(6, '0');
+  if (sw) {
+    const hex = '#' + fp.chrome.color.toString(16).padStart(6, '0');
+    // designs declare a gradient; plain metals stay a solid colour so the
+    // existing "swatch wears the finish" check still reads a backgroundColor
+    sw.style.background = '';
+    if (fp.swatch && fp.swatch.indexOf('gradient') >= 0) sw.style.background = fp.swatch;
+    else sw.style.backgroundColor = fp.swatch || hex;
+  }
 }
+// no longer bound to a tap -- the appearance sheet replaced cycling -- but kept
+// on the debug API, where stepping the whole list is still the quickest check
 function cycleFinish() {
   const i = FINISH_ORDER.indexOf(sim.finish);
   applyFinish(FINISH_ORDER[(i + 1) % FINISH_ORDER.length]);
@@ -1393,6 +1687,7 @@ function doRefill() {
   updateHints();
 }
 applyFinish(sim.finish);
+applyBackdrop(sim.backdrop);
 const lidIsOpen = () => sim.lid.theta > CFG.LID_OPEN * 0.75;
 const lidIsClosed = () => sim.lid.theta < 0.12;
 function after(t, fn) { sim.timers.push({ t, fn }); }
@@ -1972,7 +2267,65 @@ const FLAME_COLS = {
     light: 0xb46aff,
   },
 };
-const FLAME_ORDER = ['classic', 'blue', 'emerald', 'violet'];
+// A scheme is really three colours -- the hot body, the cooling tip, and the
+// collar at the wick -- so the rest is derived instead of hand-written. The four
+// originals above stay literal: they were tuned by eye and reproducing them from
+// a formula would only move them.
+function flameScheme(swatch, body, tip, collar) {
+  const mixc = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+  const rgb = c => `${c[0] | 0},${c[1] | 0},${c[2] | 0}`;
+  const hdr = (c, k) => [c[0] / 255 * k, c[1] / 255 * k, c[2] / 255 * k];
+  const pale = mixc(body, [255, 255, 255], 0.6);
+  // The volume shader carries its own orange ramp, so a scheme's tint is the
+  // ratio that turns that orange into this hue. Raw ratios blow a channel out on
+  // saturated targets (blue wants 5.6x), so pull it back toward neutral.
+  const BASE = [1.00, 0.62, 0.16], bm = (BASE[0] + BASE[1] + BASE[2]) / 3;
+  const volTint = c => {
+    const m = (c[0] + c[1] + c[2]) / 3 || 1;
+    return c.map((v, i) => +clamp(Math.pow((v / m) / (BASE[i] / bm), 0.55), 0.20, 1.95).toFixed(2));
+  };
+  const hex = c => '#' + ((c[0] | 0) << 16 | (c[1] | 0) << 8 | (c[2] | 0)).toString(16).padStart(6, '0');
+  return {
+    // The swatch IS the ramp, root colour at the bottom to tip colour at the top.
+    // Two combinations whose bodies are close read as one flat dot otherwise, and
+    // a combination that shows as a single colour is not advertising what it is.
+    swatch: `linear-gradient(0deg, ${hex(body)} 0%, ${hex(tip)} 100%)`,
+    glow: swatch,
+    tear: (a, t) => {
+      const heat = Math.pow(a, 1.28) * (1 - 0.42 * t);
+      const c = mixc(mixc(body, tip, clamp01(t)), pale, heat * 0.8);
+      const cool = Math.pow(clamp01(1 - t / 0.26), 1.5) * Math.pow(a, 0.5);
+      return [lerp(c[0], collar[0], cool * 0.95), lerp(c[1], collar[1], cool * 0.78),
+              lerp(c[2], collar[2], cool * 0.95)];
+    },
+    flame: [[0, 'rgba(255,255,255,1)'], [0.22, `rgba(${rgb(pale)},0.95)`],
+            [0.55, `rgba(${rgb(body)},0.5)`], [1, `rgba(${rgb(tip)},0)`]],
+    core: [[0, 'rgba(255,255,255,1)'], [0.35, `rgba(${rgb(mixc(collar, [255, 255, 255], 0.5))},0.85)`],
+           [1, `rgba(${rgb(collar)},0)`]],
+    glow: [[0, `rgba(${rgb(body)},0.6)`], [0.5, `rgba(${rgb(tip)},0.25)`], [1, `rgba(${rgb(tip)},0)`]],
+    layers: [hdr(pale, 1.7), hdr(body, 2.1), hdr(body, 2.6), hdr(collar, 2.3), hdr(tip, 2.7)],
+    pilot: hdr(body, 2.4), pilotGlow: hdr(body, 1.9),
+    vol: volTint(body), vol2: volTint(tip), volCool: volTint(collar).map(v => +(v * 1.15).toFixed(2)),
+    light: (body[0] << 16 | body[1] << 8 | body[2]) & 0xffffff,
+  };
+}
+const FLAME_EXTRA = {
+  // single-hue additions
+  amber:   flameScheme('#ffbf40', [255, 191,  64], [232, 116,  18], [120, 180, 255]),
+  crimson: flameScheme('#ff4d5e', [255,  77,  94], [176,  18,  40], [255, 120, 150]),
+  ice:     flameScheme('#9fe8ff', [159, 232, 255], [ 60, 150, 214], [225, 250, 255]),
+  gold:    flameScheme('#ffd76a', [255, 215, 106], [214, 150,  20], [140, 200, 255]),
+  rose:    flameScheme('#ff8fc4', [255, 143, 196], [200,  40, 120], [255, 190, 220]),
+  // combinations: the body and the tip are different hues, and the volume now
+  // tints by height, so these read as a gradient rather than an average
+  sunset:  flameScheme('#ff6ea8', [255, 110, 168], [255, 186,  60], [140, 190, 255]),
+  toxic:   flameScheme('#b6ff3d', [182, 255,  61], [ 40, 190, 120], [220, 255, 180]),
+  aurora:  flameScheme('#6cffc8', [108, 255, 200], [150,  90, 255], [200, 255, 240]),
+  peacock: flameScheme('#3ad8ff', [ 58, 216, 255], [ 90,  70, 235], [210, 245, 255]),
+  magma:   flameScheme('#ffd23d', [255, 210,  61], [190,  26,  22], [120, 175, 255]),
+};
+Object.assign(FLAME_COLS, FLAME_EXTRA);
+const FLAME_ORDER = ['classic', 'blue', 'emerald', 'violet', ...Object.keys(FLAME_EXTRA)];
 const TEX = {
   flame: spriteTex(FLAME_COLS.classic.flame),
   tear: teardropTex(FLAME_COLS.classic.tear),
@@ -2072,7 +2425,8 @@ const FLAME_FRAG = `
   uniform sampler2D uDepth;
   uniform vec2 uRes;
   uniform vec3 uCamDir;
-  uniform vec3 uTint;
+  uniform vec3 uTint;         // hue of the hot body
+  uniform vec3 uTint2;        // hue of the cooling tip (equal to uTint when single-hue)
   uniform vec3 uCool;          // the colour of the clean-burning root
   uniform float uNear, uFar, uTime, uSteps, uIntensity, uTurb, uLean, uCoolAmt;
   uniform float uDensity;      // extinction per unit depth at full density
@@ -2164,7 +2518,9 @@ const FLAME_FRAG = `
       // it sits inside, so it is confined by radius as well as by height.
       col = mix(col, uCool, pow(max(0.0, 1.0 - y / 0.15), 1.7)
                             * smoothstep(1.35, 0.50, r) * uCoolAmt);
-      col *= uTint;
+      // tint by height, so a two-hue scheme reads as a gradient up the column
+      // instead of averaging into one muddy colour
+      col *= mix(uTint, uTint2, smoothstep(0.12, 0.80, y));
       // Emission-absorption, not plain summation. Without the extinction term the
       // core kept accumulating along the ray and clipped to a flat white blob
       // sitting over the chimney; with it, depth saturates the way a real flame's
@@ -2193,6 +2549,7 @@ const flameVol = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.Shader
     uDepth: { value: null }, uRes: { value: new THREE.Vector2(1, 1) },
     uCamDir: { value: new THREE.Vector3(0, 0, -1) },
     uTint: { value: new THREE.Color(1, 1, 1) },
+    uTint2: { value: new THREE.Color(1, 1, 1) },
     uCool: { value: new THREE.Color(0.35, 0.62, 1.9) },
     uNear: { value: 0.1 }, uFar: { value: 120 }, uTime: { value: 0 },
     uSteps: { value: 30 }, uIntensity: { value: 1 }, uTurb: { value: 0.55 },
@@ -2994,6 +3351,8 @@ function updateFrame(dt, tSec) {
       u.uSpineOff.value.set(_v5.dot(_bx) / boxHalf, _v5.dot(_by) / boxHalf);
       const fc = FLAME_COLS[sim.flameCol] || FLAME_COLS.classic;
       u.uTint.value.setRGB(fc.vol[0], fc.vol[1], fc.vol[2]);
+      const v2 = fc.vol2 || fc.vol;
+      u.uTint2.value.setRGB(v2[0], v2[1], v2[2]);
       u.uCool.value.setRGB(fc.volCool[0], fc.volCool[1], fc.volCool[2]);
     }
     // screen-space spine tilt so the teardrop bodies lean with the bend
@@ -3860,7 +4219,8 @@ window.addEventListener('keydown', e => {
   if (e.repeat) return;
   // while the guide sheet is up, only its own keys work — the sim keys would
   // operate the lighter invisibly behind the modal
-  if (guideIsOpen() && e.key !== 'i' && e.key !== 'I' && e.key !== '?' && e.key !== 'Escape') return;
+  if ((guideIsOpen() || styleIsOpen())
+      && e.key !== 'i' && e.key !== 'I' && e.key !== '?' && e.key !== 'Escape') return;
   if (Audio.ensure()) Audio.resume();
   switch (e.key) {
     case ' ': Actions.flipLid(!lidIsOpen()); break;
@@ -3870,7 +4230,7 @@ window.addEventListener('keydown', e => {
     case 'j': case 'J': Actions.jerk(); break;
     case 'k': case 'K': Actions.shake(); break;
     case 'i': case 'I': case '?': guideIsOpen() ? closeGuide() : openGuide(); break;
-    case 'Escape': closeGuide(); break;
+    case 'Escape': closeStyle(); closeGuide(); break;
   }
 });
 
@@ -4053,11 +4413,88 @@ function closeGuide() {
   for (const el of guideBackground()) el.removeAttribute('inert');
   try { infoBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
 }
+/* ============================== APPEARANCE SHEET ============================== */
+// One sheet for all three: case, flame, backdrop. With fourteen finishes and
+// fourteen flames, tap-to-cycle stopped being a usable way to reach anything.
+const styleEl = document.getElementById('style');
+const styleCloseBtn = document.getElementById('styleClose');
+const styleIsOpen = () => styleEl.classList.contains('show');
+// Every swatch, keyed by section, so picking one can repaint the selection
+// without rebuilding the grids (which would drop the button you just tapped).
+const swBtns = { case: [], flame: [], back: [] };
+function paintStyleSelection() {
+  for (const b of swBtns.case) b.el.classList.toggle('on', b.key === sim.finish);
+  for (const b of swBtns.flame) b.el.classList.toggle('on', b.key === sim.flameCol);
+  for (const b of swBtns.back) b.el.classList.toggle('on', b.key === sim.backdrop);
+}
+function buildSwatches(hostId, group, keys, css, label, pick) {
+  const host = document.getElementById(hostId);
+  for (const key of keys) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'sw';
+    btn.setAttribute('aria-label', label(key));
+    const dot = document.createElement('i');
+    const paint = css(key);
+    if (paint.indexOf('gradient') >= 0) dot.style.background = paint;
+    else { dot.style.backgroundColor = paint; dot.style.color = paint; }
+    const cap = document.createElement('span');
+    cap.textContent = label(key);
+    btn.append(dot, cap);
+    btn.addEventListener('click', () => {
+      if (Audio.ensure()) Audio.resume();
+      pick(key);
+      paintStyleSelection();
+      saveStats();
+      updateHints();
+    });
+    host.appendChild(btn);
+    swBtns[group].push({ key, el: btn });
+  }
+}
+buildSwatches('swCase', 'case', FINISH_ORDER,
+  k => FINISHES[k].swatch || '#' + FINISHES[k].chrome.color.toString(16).padStart(6, '0'),
+  k => k, k => {
+    applyFinish(k);
+    sim.finishFlash = 1;
+    sim.disc.finish = true;
+    Audio.polish();
+    buzz([8, 30, 8]);
+  });
+buildSwatches('swFlame', 'flame', FLAME_ORDER,
+  k => FLAME_COLS[k].swatch, k => k, k => {
+    applyFlameCol(k);
+    sim.disc.flameCol = true;
+    buzz(12);
+  });
+buildSwatches('swBack', 'back', BACKDROP_ORDER,
+  k => BACKDROPS[k].swatch, k => k, k => {
+    applyBackdrop(k);
+    sim.disc.backdrop = true;
+    buzz(12);
+  });
+function openStyle() {
+  paintStyleSelection();
+  styleEl.classList.add('show');
+  resetPointers();   // any finger already on the canvas is void once the sheet is up
+  for (const el of guideBackground()) el.setAttribute('inert', '');
+  try { styleCloseBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+}
+function closeStyle() {
+  if (!styleIsOpen()) return;
+  styleEl.classList.remove('show');
+  for (const el of guideBackground()) el.removeAttribute('inert');
+  try { finishBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
+}
+styleCloseBtn.addEventListener('click', closeStyle);
+styleEl.addEventListener('click', e => { if (e.target === styleEl) closeStyle(); });
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
-finishBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); cycleFinish(); });
+// both swatch buttons open the same sheet: they still show what is currently
+// selected, and either one is a way in to all three sets
+finishBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openStyle(); });
 document.getElementById('flameBtn').addEventListener('click', () => {
   if (Audio.ensure()) Audio.resume();
-  cycleFlameCol();
+  openStyle();
 });
 // debug: fast-forward the wear systems so refills are testable without waiting
 document.getElementById('ffFuel').addEventListener('click', () => {
@@ -4351,7 +4788,8 @@ applyFlameCol(sim.flameCol);
 /* ============================== DEBUG / TEST API ============================== */
 window.LIGHTER = {
   CFG, sim, Actions, cam, renderer, scene,
-  mats: { chrome: matChrome, chromeDark: matChromeDark, steel: matSteel, insert: matInsert },
+  mats: { chrome: matChrome, chromeDark: matChromeDark, steel: matSteel, insert: matInsert,
+    flameVol: flameVol.material },
   get state() { return sim.flame.state; },
   get lidTheta() { return sim.lid.theta; },
   get frames() { return frames; },
@@ -4373,6 +4811,15 @@ window.LIGHTER = {
   get flameLightHex() { return flameLight.color.getHexString(); },
   cycleFlameCol,
   setFlameCol: n => { applyFlameCol(n); saveStats(); },
+  // the pair of volume tints a scheme resolves to, so a test can tell a
+  // combination from a single hue without the flame having to be alight
+  flameTint: n => { const f = FLAME_COLS[n] || FLAME_COLS.classic; return { vol: f.vol, vol2: f.vol2 || f.vol }; },
+  get backdrop() { return sim.backdrop; },
+  setBackdrop: n => { applyBackdrop(n); saveStats(); },
+  get styleOpen() { return styleIsOpen(); },
+  openStyle: () => openStyle(),
+  closeStyle: () => closeStyle(),
+  FINISH_ORDER, FLAME_ORDER, BACKDROP_ORDER,
   save: saveStats,
   uiScale,
   lidOpen: lidIsOpen,

@@ -642,31 +642,69 @@ await settleLid(false);
     before.f === after.f && before.r === after.r && before.fin === after.fin);
 }
 
-/* 13 ── finishes: API cycle round-trips through all four */
+/* 13 ── finishes: the API cycle walks the whole list and lands back on chrome */
 {
   const hex0 = await L('LIGHTER.mats.chrome.color.getHexString()');
+  const n = await L('LIGHTER.FINISH_ORDER.length');
   await L('LIGHTER.cycleFinish()');
   check('cycleFinish changes the case material',
     await L('LIGHTER.mats.chrome.color.getHexString()') !== hex0 && await L('LIGHTER.finish') === 'matte');
-  await L('LIGHTER.cycleFinish()');
-  await L('LIGHTER.cycleFinish()');
-  await L('LIGHTER.cycleFinish()');
-  check('four cycles round-trip to chrome',
-    await L('LIGHTER.finish') === 'chrome' && await L('LIGHTER.mats.chrome.color.getHexString()') === hex0);
+  // every finish, not a hard-coded four: the list grew and the old count silently
+  // stopped meaning "all of them"
+  const seen = new Set([await L('LIGHTER.finish')]);
+  for (let i = 1; i < n; i++) { await L('LIGHTER.cycleFinish()'); seen.add(await L('LIGHTER.finish')); }
+  check('a full cycle visits every finish and returns to chrome',
+    seen.size === n && await L('LIGHTER.finish') === 'chrome'
+    && await L('LIGHTER.mats.chrome.color.getHexString()') === hex0, `saw ${seen.size}/${n}`);
 }
 
-/* 14 ── the swatch button swaps the finish; case holds never do */
+/* 14 ── the appearance sheet: case, flame and backdrop in one place */
 {
-  const fin0 = await L('LIGHTER.finish');
   await page.click('#finishBtn');
-  check('swatch button cycles the finish',
-    await L('LIGHTER.finish') !== fin0 && await L('LIGHTER.sim.disc.finish') === true);
-  check('swatch wears the current finish color',
-    await L('document.getElementById("finishSwatch").style.backgroundColor') === 'rgb(35, 38, 42)');
-  await page.click('#finishBtn');
-  await page.click('#finishBtn');
-  await page.click('#finishBtn');
-  check('swatch taps round-trip to chrome', await L('LIGHTER.finish') === 'chrome');
+  check('the swatch button opens the appearance sheet', await L('LIGHTER.styleOpen') === true);
+  // one grid per set, and every option in each set is reachable — with fourteen
+  // finishes, an off-by-one in the grid build hides options with no other symptom
+  const counts = await page.evaluate(() => ({
+    c: document.querySelectorAll('#swCase .sw').length,
+    f: document.querySelectorAll('#swFlame .sw').length,
+    b: document.querySelectorAll('#swBack .sw').length,
+  }));
+  const want = await page.evaluate(() => ({
+    c: LIGHTER.FINISH_ORDER.length, f: LIGHTER.FLAME_ORDER.length, b: LIGHTER.BACKDROP_ORDER.length,
+  }));
+  check('every case is on the sheet', counts.c === want.c && want.c >= 14, `${counts.c}/${want.c}`);
+  check('every flame is on the sheet', counts.f === want.f && want.f >= 14, `${counts.f}/${want.f}`);
+  check('every backdrop is on the sheet', counts.b === want.b && want.b >= 11, `${counts.b}/${want.b}`);
+
+  await page.click('#swCase .sw:nth-child(12)');          // crimson: a design, not a plain metal
+  check('picking a case applies it',
+    await L('LIGHTER.finish') === 'crimson' && await L('LIGHTER.sim.disc.finish') === true);
+  check('a design hangs a normal map on the case',
+    await L('!!LIGHTER.mats.chrome.normalMap') === true);
+  check('the picked swatch is the marked one',
+    await L('document.querySelector("#swCase .sw.on span").textContent') === 'crimson');
+
+  await page.click('#swBack .sw:nth-child(4)');           // ember
+  check('picking a backdrop applies it', await L('LIGHTER.backdrop') === 'ember');
+  check('the backdrop is a live texture', await L('!!LIGHTER.scene.background') === true);
+
+  await page.click('#swFlame .sw:nth-child(10)');         // sunset: a two-hue combination
+  check('picking a flame applies it', await L('LIGHTER.flameCol') === 'sunset');
+  // read the scheme, not the live uniforms: those are only written while LIT, so
+  // a stale pair here would pass or fail on render state rather than on the data
+  const two = await L('JSON.stringify(LIGHTER.flameTint("sunset"))');
+  const one = await L('JSON.stringify(LIGHTER.flameTint("classic"))');
+  check('a combination tints the volume by height',
+    JSON.parse(two).vol.join() !== JSON.parse(two).vol2.join(), two);
+  check('a single-hue flame tints it evenly',
+    JSON.parse(one).vol.join() === JSON.parse(one).vol2.join(), one);
+
+  await L('(LIGHTER.setFinish("chrome"), LIGHTER.setFlameCol("classic"), LIGHTER.setBackdrop("midnight"), 0)');
+  check('a plain metal drops the normal map again',
+    await L('!!LIGHTER.mats.chrome.normalMap') === false);
+  await page.click('#styleClose');
+  check('the sheet closes', await L('LIGHTER.styleOpen') === false);
+
   // the retired press-and-hold gesture must no longer swap anything
   const bc = await L('LIGHTER.anchor("baseCenter")');
   await page.evaluate(async ([p]) => {
@@ -746,13 +784,14 @@ check('four fuel taps drain the tank dry', await L('LIGHTER.fuel') === 0);
 await L('LIGHTER.refill()');
 {
   await page.click('#flameBtn');
-  check('flame swatch cycles the colour',
+  check('the flame button opens the same sheet', await L('LIGHTER.styleOpen') === true);
+  await page.click('#swFlame .sw:nth-child(2)');
+  check('picking blue lights it blue',
     await L('LIGHTER.flameCol') === 'blue' && await L('LIGHTER.flameLightHex') === '5f9dff');
-  await page.click('#flameBtn');
-  await page.click('#flameBtn');
-  await page.click('#flameBtn');
-  check('flame colours round-trip to classic',
+  await page.click('#swFlame .sw:nth-child(1)');
+  check('picking classic puts it back',
     await L('LIGHTER.flameCol') === 'classic' && await L('LIGHTER.flameLightHex') === 'ff9a3c');
+  await page.click('#styleClose');
 }
 
 /* 18 ── the service ritual: pull, refuel, re-flint, reassemble */
