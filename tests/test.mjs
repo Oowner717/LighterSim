@@ -745,6 +745,70 @@ await settleLid(false);
   await page.click('#styleClose');
   check('the sheet closes', await L('LIGHTER.styleOpen') === false);
 
+  // Three equivalent ways out. The grab handle promises the third, and a handle
+  // that does not do what it looks like it does is worse than no handle at all.
+  const dragSheet = async (dy, steps = 14, stepMs = 16) => {
+    const box = await page.locator('#styleGrab').boundingBox();
+    await page.evaluate(async ([x, y0, dy, steps, stepMs]) => {
+      const panel = document.getElementById('stylePanel');
+      const mk = (t, cy, el) => (el || panel).dispatchEvent(new PointerEvent(t, {
+        pointerId: 77, clientX: x, clientY: cy, pointerType: 'touch',
+        bubbles: true, cancelable: true, isPrimary: true,
+      }));
+      mk('pointerdown', y0, document.getElementById('styleGrab'));
+      for (let i = 1; i <= steps; i++) {
+        await new Promise(r => setTimeout(r, stepMs));
+        mk('pointermove', y0 + dy * (i / steps));
+      }
+      mk('pointerup', y0 + dy);
+    }, [box.x + box.width / 2, box.y + box.height / 2, dy, steps, stepMs]);
+    await page.waitForTimeout(420);
+  };
+  const reopen = async () => { await page.click('#styleBtn'); await page.waitForTimeout(420); };
+
+  await reopen();
+  await page.mouse.click(195, 56);          // the scrim, well clear of the panel
+  check('tapping outside closes the sheet', await L('LIGHTER.styleOpen') === false);
+
+  await reopen();
+  await dragSheet(210);
+  check('sliding the sheet down closes it', await L('LIGHTER.styleOpen') === false);
+
+  await reopen();
+  await dragSheet(150, 4, 8);               // short but fast
+  check('a quick flick closes it too', await L('LIGHTER.styleOpen') === false,
+    'distance alone would ignore this');
+
+  await reopen();
+  await dragSheet(38);                      // not far enough to mean it
+  check('a small drag springs back instead', await L('LIGHTER.styleOpen') === true);
+  await page.click('#styleClose');
+  await page.waitForTimeout(300);
+
+  // The design belongs to the case shell. The insert -- chimney, tank, flint
+  // tube, screw -- is a separate part you could swap between cases, so it keeps
+  // its own metal whatever the case is wearing.
+  {
+    const read = () => L('({ c: LIGHTER.mats.chrome.color.getHexString(),' +
+      ' ins: LIGHTER.mats.insertMetal.color.getHexString(),' +
+      ' insMap: !!LIGHTER.mats.insertMetal.map,' +
+      ' hwMap: !!LIGHTER.mats.chromeDark.map })');
+    await L('LIGHTER.setFinish("chrome")');
+    const a = await read();
+    await L('LIGHTER.setFinish("sunburst")');   // a design, not just a colour
+    const b = await read();
+    await L('LIGHTER.setFinish("patina")');     // and one that carries an albedo map
+    const c = await read();
+    check('the case itself changes with the finish', a.c !== b.c || b.c !== c.c);
+    check('the insert keeps its own colour', a.ins === b.ins && b.ins === c.ins,
+      `${a.ins} / ${b.ins} / ${c.ins}`);
+    check('no design map ever reaches the insert',
+      a.insMap === false && b.insMap === false && c.insMap === false);
+    check('no design map reaches the hinge and cam either',
+      a.hwMap === false && b.hwMap === false && c.hwMap === false);
+    await L('LIGHTER.setFinish("chrome")');
+  }
+
   // the retired press-and-hold gesture must no longer swap anything
   const bc = await L('LIGHTER.anchor("baseCenter")');
   await page.evaluate(async ([p]) => {

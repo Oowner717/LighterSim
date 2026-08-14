@@ -205,11 +205,20 @@
   @media (prefers-reduced-motion: reduce) {
     #style.show, #style.show #stylePanel { animation: none; }
   }
+  /* the handle promises a drag, so it and the header own their gesture outright */
   #styleGrab {
+    position: relative;        /* the enlarged target below is absolute to this */
     width: 38px; height: 4px; border-radius: 99px;
     margin: 9px auto 0;
-    background: rgba(190, 202, 214, 0.28);
+    background: rgba(190, 202, 214, 0.34);
   }
+  #styleGrab::after {           /* the bar is 4px; the target it stands for is not */
+    content: ''; position: absolute; left: 0; right: 0;
+    margin-top: -13px; height: 30px;
+  }
+  #styleGrab, #styleHead { touch-action: none; }
+  #stylePanel.drag { transition: none; }
+  #stylePanel.snap { transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.25, 1); }
   #styleHead {
     display: flex; align-items: center; justify-content: space-between;
     padding: 14px 18px 8px;
@@ -1008,6 +1017,12 @@ const brushed = brushedRoughnessTex();
 const matChrome = new THREE.MeshStandardMaterial({
   color: 0xd9dee3, metalness: 1.0, roughness: 0.55, roughnessMap: brushed, envMapIntensity: 1.0,
 });
+// The insert is its own part. It never follows the case: no design maps, no
+// retint. Pull it out of one case and drop it in another and it looks the same,
+// which is the whole point of it being an insert.
+const matInsertMetal = new THREE.MeshStandardMaterial({
+  color: 0x9aa1a9, metalness: 1.0, roughness: 0.42, envMapIntensity: 1.0,
+});
 const matChromeDark = new THREE.MeshStandardMaterial({
   color: 0xb8c0c7, metalness: 1.0, roughness: 0.36, roughnessMap: brushed, envMapIntensity: 1.0,
 });
@@ -1294,15 +1309,15 @@ lidG.add(lidShellG);
   const broadHoles = [];
   for (let i = 0; i < 4; i++) broadHoles.push([-0.75 + i * 0.5, 0.23, 0.1], [-0.75 + i * 0.5, -0.23, 0.1]);
   const pg = perforatedPlate(W, broadHoles);
-  const front = new THREE.Mesh(pg, matChromeDark);
+  const front = new THREE.Mesh(pg, matInsertMetal);
   front.position.set(CFG.CHIM_X, CFG.BASE_H + H / 2, CFG.CHIM_D / 2 - TH / 2);
-  const back = new THREE.Mesh(pg, matChromeDark);
+  const back = new THREE.Mesh(pg, matInsertMetal);
   back.position.set(CFG.CHIM_X, CFG.BASE_H + H / 2, -CFG.CHIM_D / 2 + TH / 2);
   insertG.add(front, back);
   const eg = perforatedPlate(CFG.CHIM_D - TH * 2, [[0, 0.23, 0.1], [0, -0.23, 0.1]]);
   eg.rotateY(Math.PI / 2);
   for (const sx of [-1, 1]) {
-    const side = new THREE.Mesh(eg, matChromeDark);
+    const side = new THREE.Mesh(eg, matInsertMetal);
     side.position.set(CFG.CHIM_X + sx * (W / 2 - TH / 2), CFG.BASE_H + H / 2, 0);
     insertG.add(side);
   }
@@ -1317,11 +1332,11 @@ const wheelSpin = new THREE.Mesh(
   insertG.add(wg);
   const bg = new THREE.BoxGeometry(0.56, 0.6, 0.06);
   for (const sz of [-1, 1]) {
-    const b = new THREE.Mesh(bg, matChromeDark);
+    const b = new THREE.Mesh(bg, matInsertMetal);
     b.position.set(CFG.WHEEL_X, CFG.WHEEL_Y - 0.12, sz * (CFG.WHEEL_T / 2 + 0.055));
     insertG.add(b);
   }
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.14, 12), matChromeDark);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.14, 12), matInsertMetal);
   collar.position.set(CFG.WHEEL_X, CFG.BASE_H + 0.04, 0);
   insertG.add(collar);
 }
@@ -1458,7 +1473,7 @@ const svcParts = {};
   // short of the case floor so lifting it out never scrapes through.
   const TANK_H = CFG.BASE_H - 0.85;
   const tank = new THREE.Mesh(
-    new RoundedBoxGeometry(CFG.BODY_W - 0.24, TANK_H, CFG.BODY_D - 0.24, 3, 0.1), matChromeDark);
+    new RoundedBoxGeometry(CFG.BODY_W - 0.24, TANK_H, CFG.BODY_D - 0.24, 3, 0.1), matInsertMetal);
   tank.position.y = TANK_H / 2 + 0.66;
   insertG.add(tank);
   // a shallow well holds the packing, so the pad has something to cover
@@ -1471,7 +1486,7 @@ const svcParts = {};
   insertG.add(underG);
   // sized to stay inside the case cavity so nothing pokes out when seated
   const wellRim = new THREE.Mesh(
-    roundedWallGeo(2.34, CFG.BODY_D - 0.38, 0.12, 0.09, 0.16), matChromeDark);
+    roundedWallGeo(2.34, CFG.BODY_D - 0.38, 0.12, 0.09, 0.16), matInsertMetal);
   wellRim.position.set(-0.62, 0.06, 0);
   underG.add(wellRim);
   // Packing cotton: sits down in the well, so peeling the pad reveals it.
@@ -1503,7 +1518,7 @@ const svcParts = {};
   const boreFloor = new THREE.Mesh(new THREE.CircleGeometry(0.115, 16), matDark);
   boreFloor.rotation.x = Math.PI / 2;
   boreFloor.position.set(BORE_X, BORE_Y + 0.61, 0);
-  const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.135, 0.03, 10, 22), matChromeDark);
+  const collarRing = new THREE.Mesh(new THREE.TorusGeometry(0.135, 0.03, 10, 22), matInsertMetal);
   collarRing.rotation.x = Math.PI / 2;
   collarRing.position.set(BORE_X, BORE_Y + 0.01, 0);
   underG.add(bore, boreFloor, collarRing);
@@ -1520,7 +1535,7 @@ const svcParts = {};
   // screw head — the spring below it is drawn separately so it can stretch
   const screwG = new THREE.Group();
   screwG.position.set(BORE_X, BORE_Y, 0);
-  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.145, 0.08, 18), matChromeDark);
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.145, 0.08, 18), matInsertMetal);
   const slot = new THREE.Mesh(new THREE.BoxGeometry(0.29, 0.085, 0.05), matDark);
   slot.position.y = -0.01;
   const shank = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.16, 12), matSteel);
@@ -2168,11 +2183,16 @@ function applyFinish(name) {
   if (!FINISHES[name]) name = 'chrome';
   sim.finish = name;
   const fp = FINISHES[name];
-  for (const [m, p] of [[matChrome, fp.chrome], [matChromeDark, fp.dark]]) {
+  // The DESIGN belongs to the case shell alone. matChromeDark is now just the
+  // hinge knuckles and the lid cam -- small turned fittings, where a sunburst or
+  // a quilt figure is nonsense -- so they take the finish's colour and polish
+  // and none of its maps.
+  for (const [m, p, withMaps] of [[matChrome, fp.chrome, true], [matChromeDark, fp.dark, false]]) {
     m.color.setHex(p.color);
     m.roughness = p.rough;
     m.metalness = p.metal;
     m.envMapIntensity = p.env;
+    if (!withMaps) continue;
     // `map` is true for the plain brushed grain, or names a design pattern
     // `corrode` supplies albedo, roughness AND normal from a single height field,
     // so the oxide sits in the dents instead of floating over them
@@ -2190,9 +2210,12 @@ function applyFinish(name) {
     if (m.map !== alb) { m.map = alb; m.needsUpdate = true; }
     if (nrm) m.normalScale.set(p.nscale || 0.85, p.nscale || 0.85);
   }
-  matInsert.color.setHex(fp.insert);
-  // the cavity is the same metal as the shell: a brass case cannot have a
-  // chrome-coloured inside, which is what it had before
+  // The insert does NOT follow the case. It is a separate part -- chimney, tank,
+  // flint tube, screw, shoulder plate -- and it keeps its own metal whatever the
+  // case is wearing, the way a real insert you swap between cases does.
+  // The cavity DOES follow: that is the inside face of the case shell itself,
+  // not part of the insert, and a brass case cannot have a chrome-coloured
+  // inside. Finishes still declare `insert:`; it is simply no longer applied.
   matCaseInner.color.setHex(fp.inner);
   // the main-screen swatch button wears the current finish
   const sw = document.getElementById('finishSwatch');
@@ -4049,6 +4072,8 @@ function updateFrame(dt, tSec) {
   const shineK = 1 + 1.6 * sim.finishFlash * sim.finishFlash;
   matChrome.envMapIntensity = finP.chrome.env * shineK;
   matChromeDark.envMapIntensity = finP.dark.env * shineK;
+  // matInsertMetal is deliberately absent: the insert did not change, so it has
+  // nothing to sparkle about
 
   // flame direction: real-world up + bend spring + a bit of wick tangent when bent
   flameDir.copy(sim.upDir).add(F.bend);
@@ -5280,6 +5305,8 @@ buildSwatches('swBack', 'back', BACKDROP_ORDER,
     buzz(12);
   });
 function openStyle() {
+  stylePanel.classList.remove('drag', 'snap');
+  panelOffset(0);         // or it reopens wherever the last drag left it
   paintStyleSelection();
   styleEl.classList.add('show');
   resetPointers();   // any finger already on the canvas is void once the sheet is up
@@ -5288,12 +5315,71 @@ function openStyle() {
 }
 function closeStyle() {
   if (!styleIsOpen()) return;
+  panelOffset(0);
+  stylePanel.classList.remove('drag', 'snap');
   styleEl.classList.remove('show');
   for (const el of guideBackground()) el.removeAttribute('inert');
   try { styleBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
 }
 styleCloseBtn.addEventListener('click', closeStyle);
 styleEl.addEventListener('click', e => { if (e.target === styleEl) closeStyle(); });
+
+/* Drag the sheet down to dismiss. The grab handle promises this, and a handle
+   that does not do what it looks like it does is worse than no handle. Three
+   ways out now, all equivalent: the close button, the scrim, and this. */
+const stylePanel = document.getElementById('stylePanel');
+const styleGrabEl = document.getElementById('styleGrab');
+const styleHeadEl = document.getElementById('styleHead');
+const styleBodyEl = document.getElementById('styleBody');
+let dragId = null, dragY0 = 0, dragT0 = 0, dragDy = 0, dragLive = false;
+function panelOffset(px) {
+  // the panel is centred with translateX(-50%), so the drag has to carry that
+  stylePanel.style.transform = px ? `translate(-50%, ${px}px)` : '';
+}
+function dragCanStart(target) {
+  if (target === styleCloseBtn || styleCloseBtn.contains(target)) return false;
+  if (styleGrabEl.contains(target) || styleHeadEl.contains(target)) return true;
+  // and from the list itself, but only when it is already at the top -- otherwise
+  // a downward drag means "scroll up", which is what the finger is actually for
+  return styleBodyEl.contains(target) && styleBodyEl.scrollTop <= 0;
+}
+stylePanel.addEventListener('pointerdown', e => {
+  if (dragId !== null || !dragCanStart(e.target)) return;
+  dragId = e.pointerId; dragY0 = e.clientY; dragT0 = performance.now();
+  dragDy = 0; dragLive = false;
+});
+stylePanel.addEventListener('pointermove', e => {
+  if (e.pointerId !== dragId) return;
+  const dy = e.clientY - dragY0;
+  if (!dragLive) {
+    if (dy <= 6) { if (dy < -6) dragId = null; return; }   // upward: it is a scroll
+    dragLive = true;
+    stylePanel.classList.add('drag');
+    stylePanel.classList.remove('snap');
+    try { stylePanel.setPointerCapture(dragId); } catch (err) { /* ignore */ }
+  }
+  dragDy = Math.max(0, dy);
+  if (e.cancelable) e.preventDefault();
+  panelOffset(dragDy);
+});
+function endStyleDrag(e) {
+  if (e.pointerId !== dragId) return;
+  const live = dragLive, dy = dragDy;
+  const v = dy / Math.max(1, performance.now() - dragT0);   // px per ms
+  dragId = null; dragLive = false; dragDy = 0;
+  stylePanel.classList.remove('drag');
+  if (!live) return;
+  // Distance OR speed. On distance alone a quick flick reads as being ignored,
+  // which is the exact complaint that gets levelled at sheets that only measure
+  // how far they travelled.
+  if (dy > 96 || v > 0.55) { closeStyle(); } else {
+    stylePanel.classList.add('snap');
+    panelOffset(0);
+    setTimeout(() => stylePanel.classList.remove('snap'), 260);
+  }
+}
+stylePanel.addEventListener('pointerup', endStyleDrag);
+stylePanel.addEventListener('pointercancel', endStyleDrag);
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
 styleBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openStyle(); });
 // debug: fast-forward the wear systems so refills are testable without waiting
@@ -5600,6 +5686,7 @@ applyFlameCol(sim.flameCol);
 window.LIGHTER = {
   CFG, sim, Actions, cam, renderer, scene,
   mats: { chrome: matChrome, chromeDark: matChromeDark, steel: matSteel, insert: matInsert,
+    insertMetal: matInsertMetal,
     flameVol: flameVol.material },
   get state() { return sim.flame.state; },
   get lidTheta() { return sim.lid.theta; },
