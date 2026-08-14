@@ -2725,6 +2725,13 @@ function updateFrame(dt, tSec) {
     if (Math.abs(flameDir.z) > 0.9) _fa.set(1, 0, 0);
     _bx.crossVectors(_fa, flameDir).normalize();
     _by.crossVectors(flameDir, _bx);
+    // The bias only makes sense for a flame sitting ON TOP of the chimney. Fold
+    // the wick and the flame drops INSIDE, where being hidden by the metal and
+    // glowing through the holes is the entire point of the trick — so the bias
+    // fades out as the wick folds. Testing each sprite against the rim plane
+    // instead does not work: the body layer is taller than the chimney, so its
+    // centre clears the rim while most of the quad is still down in the metal.
+    const bias = CFG.FLAME_DEPTH_BIAS * (1 - bent);
     const wob = 1 + 2.4 * F.turb;
     // screen-space spine tilt so the teardrop bodies lean with the bend
     toScreen(spineA, _s1);
@@ -2758,9 +2765,9 @@ function updateFrame(dt, tSec) {
       // stops cutting the flame while the lid still occludes it properly.
       const camD = _v5.subVectors(camera.position, _v1);
       const camDist = camD.length() || 1;
-      _v1.addScaledVector(camD, CFG.FLAME_DEPTH_BIAS / camDist);
+      _v1.addScaledVector(camD, bias / camDist);
       // ...and shrink by the same ratio, so moving it closer changes no size
-      const biasK = 1 - CFG.FLAME_DEPTH_BIAS / camDist;
+      const biasK = 1 - bias / camDist;
       spr.position.copy(_v1);
       // the tip breathes taller/shorter; the bulb at the base barely moves
       const lick = 1 + (flick - 1) * (0.35 + 1.1 * L.t);
