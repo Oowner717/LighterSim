@@ -418,7 +418,7 @@ const CFG = {
   FLAME_WHIP_K: 34, FLAME_WHIP_C: 7.2,   // the tip's lag spring (~0.17s behind the body)
   // Buoyant puffing. A diffusion flame sheds a vortex at f ~ 1.68/sqrt(D) Hz —
   // around 12 for a flame this size; 8.5 reads better than it strobes at 60fps.
-  FLAME_PUFF_HZ: 8.5,
+  FLAME_PUFF_HZ: 6.2,
   // 0.35 not 0.62: with only a handful of sprites in the column, a bigger lag
   // puts neighbours at opposite phase and the flame visibly shears into lobes
   FLAME_PUFF_LAG: 0.35,      // cycles of delay root -> tip = the wave's travel time
@@ -2647,8 +2647,11 @@ function updateFrame(dt, tSec) {
 
   const F = sim.flame;
   const bent = wickBentness();
-  const flick = 0.88 + 0.15 * vnoise(tSec * 8.5) + 0.07 * vnoise(tSec * 21 + 7)
-    + 0.05 * vnoise(tSec * 41 + 3);
+  // Two octaves, both slow. This used to run a third at 41Hz, which changes
+  // faster than the display can show it: measured, the tip's width was moving
+  // 8.3% of its size EVERY FRAME, peaking at 28%. That reads as buzz, not as
+  // fire. The slow range is kept — the flame still varies hugely over a second.
+  const flick = 0.92 + 0.10 * vnoise(tSec * 4.5) + 0.04 * vnoise(tSec * 9.5 + 7);
   // a low tank starves the flame; each sputter dips it further
   const fuelK = lerp(CFG.FUEL_MIN_H, 1, clamp01(sim.fuel / CFG.FUEL_LOW))
     * (1 - CFG.FUEL_SPUTTER_DIP * F.sputter);
@@ -2681,8 +2684,8 @@ function updateFrame(dt, tSec) {
     // whole-flame length pulses with the shedding, so the column visibly
     // lengthens and snaps back as each puff lets go of the tip
     const len = CFG.FLAME_H * fuelK * (1 - 0.22 * bent) * (0.9 + 0.14 * vnoise(tSec * 3.1))
-      * (1 + 0.05 * Math.sin((tSec * puffHz - CFG.FLAME_PUFF_LAG) * Math.PI * 2))
-      * (0.25 + 0.75 * grow) * (1 + 1.15 * F.flare) * (1 - 0.35 * F.turb * Math.abs(vnoise(tSec * 31)))
+      * (1 + 0.03 * Math.sin((tSec * puffHz - CFG.FLAME_PUFF_LAG) * Math.PI * 2))
+      * (0.25 + 0.75 * grow) * (1 + 1.15 * F.flare) * (1 - 0.35 * F.turb * Math.abs(vnoise(tSec * 18)))
       * (1 - 0.78 * F.cover);
     level = clamp01(len / CFG.FLAME_H);
     // start the bulb just below the wick tip so the flame engulfs the char
@@ -2715,7 +2718,7 @@ function updateFrame(dt, tSec) {
     // a flame is anchored at the wick and loose at the tip: the higher a layer
     // sits on the spine, the more it wanders and the harder it flickers
     const sway = vnoise(tSec * 1.7) * 0.5 + vnoise(tSec * 4.3 + 11) * 0.3
-      + vnoise(tSec * 8.1 + 23) * 0.18;
+      + vnoise(tSec * 6.2 + 23) * 0.14;
     for (const L of flameLayers) {
       const spr = L.spr;
       spr.visible = true;
@@ -2739,10 +2742,10 @@ function updateFrame(dt, tSec) {
       const fs = lick * (1 + 0.55 * F.flare);
       // a puff is a BULGE travelling up, so it swells the width and necks the
       // length as it passes — not merely a sideways nudge
-      const bulge = 1 + 0.15 * puff * climb;
+      const bulge = 1 + 0.09 * puff * climb;
       spr.scale.set(L.sx * len * fs * CFG.FLAME_W * bulge,
-        L.sy * len * fs * (1 + 0.35 * F.flare) * (1 - 0.07 * puff * climb), 1);
-      spr.material.opacity = L.op * grow * (0.82 + 0.18 * lick);
+        L.sy * len * fs * (1 + 0.35 * F.flare) * (1 - 0.045 * puff * climb), 1);
+      spr.material.opacity = L.op * grow * (0.9 + 0.1 * lick);
       if (L.rot) {
         spr.material.rotation = spineRot
           + (puff * 0.055 * climb + sway * 0.05) * wob * (0.3 + L.t);

@@ -1,0 +1,18 @@
+import { chromium } from 'playwright';
+const dir='/tmp/claude-0/-home-user-LighterSim/cf51c021-eccd-5a3d-afe4-844decbebd1f/scratchpad/';
+const browser = await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome',headless:true,args:['--no-sandbox','--enable-unsafe-swiftshader','--use-gl=angle','--use-angle=swiftshader']});
+const p = await browser.newPage({viewport:{width:390,height:844},deviceScaleFactor:2,hasTouch:true});
+await p.goto('http://localhost:8741/index.html');
+await p.waitForFunction(()=>window.__booted && LIGHTER.frames>10,null,{timeout:60000});
+await p.evaluate(()=>LIGHTER.openLid());
+await p.waitForFunction(()=>LIGHTER.lidOpen(),null,{timeout:8000});
+await p.waitForTimeout(2500);
+await p.screenshot({path:dir+'open_cold.png'});
+const info = await p.evaluate(()=>({handle:LIGHTER.anchor('bendHandle'),tip:LIGHTER.anchor('tip'),mouth:LIGHTER.anchor('mouth'),wheel:LIGHTER.anchor('wheel'),shown:LIGHTER.bendHandleShown}));
+console.log(JSON.stringify(info));
+await p.click('#infoBtn'); await p.waitForTimeout(600);
+await p.screenshot({path:dir+'guide_top.png'});
+await p.evaluate(()=>{document.getElementById('guideBody').scrollTop=document.getElementById('guideBody').scrollHeight;});
+await p.waitForTimeout(400);
+await p.screenshot({path:dir+'guide_bot.png'});
+await browser.close();
