@@ -715,6 +715,19 @@ await L('(LIGHTER.sim.fuel = 0.2, LIGHTER.sim.flint = 70, 0)');
   await waitL('document.getElementById("hint").textContent.includes("felt pad")', 8000);
   check('service instructions take over the pill', true);
   check('done button offered', await L('document.getElementById("svcDone").classList.contains("show")'));
+  { // the done button used to paint over the multi-line service instruction, and
+    // the pill used to ellipsise its own text away — both on every phone width
+    const box = await L(`(() => {
+      const h = document.getElementById('hint'), d = document.getElementById('svcDone');
+      const a = h.getBoundingClientRect(), b = d.getBoundingClientRect();
+      return { overlap: Math.max(0, b.bottom - a.top), clipped: h.scrollWidth > h.clientWidth + 1,
+        onscreen: a.bottom <= window.innerHeight && b.top >= 0 };
+    })()`);
+    check('the done button never covers the service instruction', box.overlap === 0,
+      `overlap ${box.overlap}px`);
+    check('the instruction is never cut off', box.clipped === false);
+    check('both stay on screen', box.onscreen);
+  }
   check('striking is locked mid-service', await L('LIGHTER.strike(3)') === false);
 }
 { // tap the felt pad open; the fluid can arrives

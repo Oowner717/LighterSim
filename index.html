@@ -26,10 +26,18 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   #c { display: block; width: 100%; height: 100%; touch-action: none; }
-  #hint {
+  /* One bottom-anchored column, so the done button always sits ABOVE the hint
+     however many lines the hint runs to. Two independent `bottom:` offsets let
+     the button paint over multi-line service instructions on every phone. */
+  #bottomBar {
     position: fixed;
     left: 50%; transform: translateX(-50%);
     bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    width: max-content; max-width: 92vw;
+    pointer-events: none;
+  }
+  #hint {
     max-width: 82vw;
     padding: 9px 16px;
     border-radius: 999px;
@@ -38,10 +46,10 @@
     font-size: 13px; letter-spacing: 0.02em; text-align: center;
     backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
     opacity: 0; transition: opacity 0.6s ease;
-    pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    pointer-events: none; white-space: normal;
   }
   #hint.show { opacity: 1; }
-  #hint.wrap { white-space: normal; max-width: 78vw; border-radius: 16px; }
+  #hint.wrap { max-width: 78vw; border-radius: 16px; }
   #motionBtn {
     position: fixed;
     right: calc(12px + env(safe-area-inset-right, 0px));
@@ -110,10 +118,8 @@
     content: ''; position: absolute; inset: -7px; border-radius: 50%;
   }
   #svcDone {
-    position: fixed;
-    left: 50%; transform: translateX(-50%);
-    bottom: calc(58px + env(safe-area-inset-bottom, 0px));
     padding: 10px 18px;
+    pointer-events: auto;
     border-radius: 999px;
     border: 1px solid rgba(160, 200, 235, 0.4);
     background: rgba(24, 34, 44, 0.78);
@@ -234,7 +240,7 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="hint"></div>
+
 <button id="motionBtn" type="button">Enable motion</button>
 <button id="infoBtn" type="button" aria-label="How it works">?</button>
 <button id="finishBtn" type="button" aria-label="Change case finish"><i id="finishSwatch"></i></button>
@@ -243,7 +249,10 @@
   <button id="ffFuel" type="button" title="Fast-forward fuel consumption">&#187; fuel</button>
   <button id="ffFlint" type="button" title="Fast-forward flint wear">&#187; flint</button>
 </div>
-<button id="svcDone" type="button">&#10003; done &mdash; slide it back in</button>
+<div id="bottomBar">
+  <button id="svcDone" type="button">&#10003; done &mdash; slide it back in</button>
+  <div id="hint"></div>
+</div>
 <div id="hud" aria-hidden="true">
   <div class="hrow"><span>fuel</span><div class="hbar"><i id="hFuel"></i></div></div>
   <div class="hrow"><span>flint</span><div class="hbar"><i id="hFlint"></i></div></div>
@@ -284,6 +293,9 @@
         <p class="how">Here: a fast swipe through the flame only makes it flicker; a slow
           pass &mdash; or a finger held over the chimney &mdash; smothers it. Closing the lid
           always puts it out.</p>
+        <p class="how">The phone counts as weather too, once you allow motion: a steady shake
+          snuffs a lit flame, a sharp jolt slams it sideways (or wakes a hiding ember), and
+          tilting steers which way is up &mdash; hold it over and the flame licks up the case.</p>
       </section>
       <section>
         <h3>Fuel</h3>
@@ -327,10 +339,11 @@
       <section>
         <h3>The case</h3>
         <p>The same windproof works has been dressed in hundreds of finishes over the
-          decades &mdash; polished chrome, brushed steel, matte lacquer, solid brass &mdash;
-          built to be serviced for a lifetime rather than thrown away.</p>
-        <p class="how">Here: tap the round swatch button at the top left to swap
-          finishes.</p>
+          decades &mdash; polished chrome, matte lacquer, solid brass, blackened gunmetal
+          &mdash; built to be serviced for a lifetime rather than thrown away.</p>
+        <p class="how">Here: tap the round metal swatch (top left) to swap between those four
+          finishes. Below it, the flame-drop button tints the flame itself &mdash; classic,
+          blue, emerald or violet. That one is pure fiction: a real one burns as it burns.</p>
       </section>
       <p id="guideLegal">An original simulation of a classic windproof lighter.
         Not affiliated with or endorsed by any lighter manufacturer.</p>
@@ -3735,15 +3748,23 @@ function updateGauges() {
   }
 }
 const guideIsOpen = () => guideEl.classList.contains('show');
+// aria-modal alone does not stop Tab walking out of the sheet into the controls
+// behind it, which are still clickable through the scrim
+function guideBackground() {
+  return [infoBtn, finishBtn, motionBtn, svcDoneBtn,
+    document.getElementById('flameBtn'), document.getElementById('debug')].filter(Boolean);
+}
 function openGuide() {
   guideEl.classList.add('show');
   updateGauges();    // after 'show' so the stats line refreshes too
   resetPointers();   // any finger already on the canvas is void once the sheet is up
+  for (const el of guideBackground()) el.setAttribute('inert', '');
   try { guideCloseBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
 }
 function closeGuide() {
   if (!guideIsOpen()) return;
   guideEl.classList.remove('show');
+  for (const el of guideBackground()) el.removeAttribute('inert');
   try { infoBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
 }
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
@@ -3812,7 +3833,7 @@ const HINTS = [
   { id: 'squeeze', text: () => 'try the squeeze: pinch lid-top + base-bottom', done: () => sim.disc.pop },
   { id: 'smother', text: () => 'swipe slowly across the flame to snuff it', done: () => sim.disc.smother },
   { id: 'bend', text: () => 'drag the blue ball to fold the wick — either way', done: () => sim.disc.bend },
-  { id: 'ember', text: () => 'bend the wick low, then swipe the flame away…', done: () => sim.disc.ember },
+  { id: 'ember', text: () => (wickIsBent() ? 'now swipe across the flame — it hides as an ember' : 'put it out, fold the wick low, then light it and swipe'), done: () => sim.disc.ember },
   { id: 'relight', text: relightHint, done: () => sim.disc.relight },
   { id: 'refuel', text: () => 'tank’s low — close the lid, hold the base to refill', done: () => sim.disc.refuel },
   { id: 'service', text: () => 'or service it properly: flame out, lid open, pull the insert up and out', done: () => sim.disc.service },
