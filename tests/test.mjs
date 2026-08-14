@@ -723,7 +723,7 @@ await settleLid(false);
   // contract that matters is that a scheme without effects leaves every effect
   // uniform at zero -- otherwise adding an effect quietly alters the ten plain
   // flames, which is the kind of regression nothing else here would catch.
-  const fxUniforms = ['uSpark', 'uShell', 'uPulse', 'uSwirl', 'uToon', 'uCore'];
+  const fxUniforms = ['uSpark', 'uShell', 'uPulse', 'uSwirl', 'uToon', 'uCore', 'uPrism'];
   const readFx = async () => L(`(() => { const u = LIGHTER.mats.flameVol.uniforms;
     return ${JSON.stringify(fxUniforms)}.map(k => {
       const v = u[k].value; return v.toArray ? Math.max(...v.toArray().map(Math.abs)) : Math.abs(v); }); })()`);
@@ -733,7 +733,8 @@ await settleLid(false);
   check('a plain flame leaves every effect uniform at zero',
     (await readFx()).every(v => v === 0), JSON.stringify(await readFx()));
   for (const [name, key] of [['cinder', 'spark'], ['vortex', 'swirl'], ['strata', 'toon'],
-                             ['torch', 'core'], ['sodium', 'shell'], ['wisp', 'pulse']]) {
+                             ['torch', 'core'], ['sodium', 'shell'], ['wisp', 'pulse'],
+                             ['prism', 'prism']]) {
     const fx = await L(`JSON.stringify(LIGHTER.flameFx(${JSON.stringify(name)}))`);
     check(`${name} carries its effect`, fx && JSON.parse(fx) && JSON.parse(fx)[key] !== undefined, fx);
   }

@@ -556,7 +556,7 @@ const CFG = {
   FLAME_STEPS_MIN: 10,       // floor before giving up and using sprites
   FLAME_VOL_GAIN: 3.4,       // peak radiance of the raymarch (it saturates now, so this IS the peak)
   FLAME_VOL_DENS: 3.1,       // extinction per world unit through the core
-  FLAME_SAT: 1.55,           // chroma pushed before ACES, which otherwise whitens the core
+  FLAME_DEEP: 0.78,          // chroma deepening before ACES, which otherwise whitens the core
   // just shy of straight up/down: at exactly +/-PI/2 the up vector degenerates
   PITCH_MAX: 1.5,
   FPS_VOL_OFF: 26,           // sustained fps below this drops back to sprites
@@ -2326,7 +2326,10 @@ function flameScheme(swatch, body, tip, collar, fx) {
   const mixc = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
   const rgb = c => `${c[0] | 0},${c[1] | 0},${c[2] | 0}`;
   const hdr = (c, k) => [c[0] / 255 * k, c[1] / 255 * k, c[2] / 255 * k];
-  const pale = mixc(body, [255, 255, 255], 0.6);
+  // the sprite fallback mirrors the volume's hot root, or the two paths
+  // disagree about what the base of the flame looks like
+  const hotc = body.map(v => Math.min(255, v * 1.8 + 30));
+  const pale = mixc(body, hotc, 0.6);
   // the shader ramp is heat-only now, so a scheme just hands it colours:
   // normalised to a peak of 1 so uIntensity alone decides how bright it burns
   const bodyK = 1 / (Math.max(body[0], body[1], body[2]) || 1);
@@ -2337,7 +2340,8 @@ function flameScheme(swatch, body, tip, collar, fx) {
     // Two combinations whose bodies are close read as one flat dot otherwise, and
     // a combination that shows as a single colour is not advertising what it is.
     swatch: `linear-gradient(0deg, ${hex(body)} 0%, ${hex(tip)} 100%)`,
-    glow: swatch,
+    halo: swatch,          // the swatch's glow. NOT `glow`: that name is the
+                           // sprite gradient below, and one literal cannot hold both
     tear: (a, t) => {
       const heat = Math.pow(a, 1.28) * (1 - 0.42 * t);
       const c = mixc(mixc(body, tip, clamp01(t)), pale, heat * 0.8);
@@ -2370,7 +2374,7 @@ const FLAME_EXTRA = {
   // ---- effect options: these change how the flame is BUILT, not just its hue ----
   // embers kindling in a dark garnet column: the only option with visible texture
   cinder:  flameScheme('#ff7a2a', [176,  38,  30], [ 92,  14,  12], [255, 150,  70],
-                       { spark: 1.0 }),
+                       { spark: 1.15, gain: 0.72, turb: 0.8 }),
   // two ribbons corkscrewing up, turbulence shearing with them
   vortex:  flameScheme('#ff5ad0', [255,  90, 208], [120,  40, 235], [235, 180, 255],
                        { swirl: [0.34, 5.6, 2.1] }),
@@ -2378,14 +2382,23 @@ const FLAME_EXTRA = {
   strata:  flameScheme('#31e8ff', [ 60, 240, 255], [ 22,  16, 110], [200, 250, 255],
                        { toon: [6.0, 0.5, 1.0] }),
   // a butane micro-torch: a hard blade of gas inside a slack grey envelope
-  torch:   flameScheme('#ffe08a', [255, 224, 138], [130, 150, 170], [110, 190, 255],
-                       { core: [0.85, 0.52, 0.72] }),
+  torch:   flameScheme('#8fd8ff', [143, 216, 255], [ 46,  58,  86], [200, 240, 255],
+                       { core: [0.85, 0.52, 0.72], turb: 0.45, dens: 1.25 }),
   // sodium in the fire: a brilliant sheath around a darker gas core
   sodium:  flameScheme('#ffe14a', [255, 225,  74], [ 74,  56, 190], [255, 240, 160],
-                       { shell: 0.9 }),
+                       { shell: 0.8 }),
   // a will-o'-the-wisp: cold, barely there, with a slow swell climbing it
   wisp:    flameScheme('#9dffe0', [157, 255, 224], [ 60, 130, 190], [220, 255, 245],
-                       { pulse: 0.55 }),
+                       { pulse: 0.55, gain: 0.8, dens: 0.6 }),
+  // a spectrum carried up the column by the gas: the only option whose colour is
+  // a function of time. Body and tip are warm neutrals ON PURPOSE -- at 85%
+  // spectrum blend the scheme colours only bias the sweep, and a neutral bias
+  // keeps it luminous instead of tinting the whole rainbow.
+  prism:   Object.assign(
+    flameScheme('#f4d0b0', [244, 208, 176], [176, 200, 255], [205, 235, 255],
+                { prism: [0.85, 0.26, 0.85] }),
+    { swatch: 'linear-gradient(0deg,#ff3ca0 0%,#ffb03c 26%,#7cff5a 50%,#3cd8ff 74%,#9a6cff 100%)',
+      halo: '#7cff5a' }),
 };
 Object.assign(FLAME_COLS, FLAME_EXTRA);
 const FLAME_ORDER = ['classic', 'blue', 'emerald', 'violet', ...Object.keys(FLAME_EXTRA)];
@@ -2493,7 +2506,7 @@ const FLAME_FRAG = `
   uniform vec3 uCool;          // the colour of the clean-burning root
   uniform float uNear, uFar, uTime, uSteps, uIntensity, uTurb, uLean, uCoolAmt;
   uniform float uDensity;      // extinction per unit depth at full density
-  uniform float uSat;          // chroma push applied before ACES flattens it
+  uniform float uDeep;         // chroma deepening applied before ACES flattens it
   // ---- effect parameters. Every one is ZERO for an ordinary flame, and every
   // branch below is written so zero leaves the render bit-identical. That is the
   // whole contract: adding effects must not disturb the ten schemes that do not
@@ -2504,6 +2517,7 @@ const FLAME_FRAG = `
   uniform vec3 uSwirl;         // arm amplitude, twist per unit height, radians/sec (vortex)
   uniform vec3 uToon;          // band count, bands/sec scroll, edge hardness (strata)
   uniform vec3 uCore;          // blade amount, blade radius, blade height (torch)
+  uniform vec3 uPrism;         // hue turns across height, scroll turns/sec, spectrum blend
   uniform vec2 uSpineOff;      // lateral drift of the tip, in flame space
   uniform float uRad;          // flame radius as a fraction of the box half-width
 
@@ -2575,11 +2589,13 @@ const FLAME_FRAG = `
       // the lateral vector by normalising it -- no atan2 -- and the double angle
       // follows from the identity, so a two-armed spiral costs one inversesqrt
       // and one sincos rather than a transcendental per sample.
+      float arm = 0.0;
       if (uSwirl.x > 0.0) {
         vec2 u = lat * inversesqrt(dot(lat, lat) + 1e-8);
         float c2 = u.x * u.x - u.y * u.y, s2 = 2.0 * u.x * u.y;
         float ph = uSwirl.y * y - uSwirl.z * uTime;
-        r -= uSwirl.x * (c2 * cos(ph) + s2 * sin(ph)) * smoothstep(0.02, 0.45, y);
+        arm = c2 * cos(ph) + s2 * sin(ph);          // = cos(2*theta + ph)
+        r -= uSwirl.x * arm * smoothstep(0.02, 0.45, y);
       }
       vec3 np = vec3(q.x * 6.0, y * 5.0 - uTime * 1.6, q.z * 6.0);
       // the second octave is kept as its own value rather than being averaged
@@ -2630,17 +2646,43 @@ const FLAME_FRAG = `
       // The hot root is a PALE version of the scheme, not pure white, and it is
       // kept short: a broad white puck buried both the scheme's colour and the
       // blue collar underneath it.
-      vec3 col = mix(mix(uTint, vec3(1.0), 0.45), uTint, smoothstep(0.01, 0.15, h));
+      // PRISM: a spectrum riding up the column with the gas. The hue phase uses
+      // fract(uTime * rate), not raw uTime -- the triangle wave is periodic in 1
+      // so it is mathematically identical and stays bounded, which is exactly the
+      // wrap the band phase had to learn the hard way. The (n - 0.5) term detunes
+      // neighbouring filaments by a fraction of a turn for an oil-slick shimmer;
+      // scaling it by d ties it to dense filaments so it fades out gracefully
+      // instead of turning into hue noise when the step count drops.
+      vec3 c1 = uTint, c2 = uTint2;
+      if (uPrism.z > 0.0) {
+        float hp = h * uPrism.x - fract(uTime * uPrism.y) + (n - 0.5) * 0.18 * d;
+        vec3 spec = clamp(abs(fract(hp + vec3(0.0, 0.6667, 0.3333)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+        c1 = mix(uTint, spec, uPrism.z);
+        c2 = mix(uTint2, spec, uPrism.z);
+      }
+      vec3 hot = min(vec3(1.0), c1 * 1.8 + 0.12);
+      vec3 col = mix(mix(c1, hot, 0.55), c1, smoothstep(0.01, 0.15, h));
       // SODIUM: with uShell up, the second colour stops being "the tip" and
       // becomes "the outside", so the flame reads as a bright sheath around a
-      // darker gas core instead of a solid teardrop.
-      col = mix(col, uTint2, mix(smoothstep(0.24, 0.80, h), smoothstep(0.22, 0.95, r), uShell));
+      // darker gas core instead of a solid teardrop. The band sits at r 0.18..0.72
+      // because density is smoothstep(1.0, 0.35, r) and alpha goes as d*d -- out
+      // at r=0.9 that is 0.004, so a band placed there is painted into fringe that
+      // renders nothing. It fades out with height too: turbulence displaces r by
+      // roughly +/-0.4 near the tip, comparable to the whole window, so ungated the
+      // top half becomes per-sample yellow/blue churn.
+      float shellT = 0.0;
+      if (uShell > 0.0) shellT = smoothstep(0.18, 0.72, r) * (1.0 - 0.62 * smoothstep(0.40, 0.90, y));
+      col = mix(col, c2, mix(smoothstep(0.24, 0.80, h), shellT, uShell));
       col *= 1.0 - 0.42 * smoothstep(0.78, 1.0, h);
-      // ACES pulls anything bright toward white, and every channel here leaves at
-      // several times 1.0 -- which is exactly why the colours arrived on screen
-      // pastel however saturated the scheme was. Push chroma BEFORE the tone
-      // mapper so it lands at the intended depth after it, not before.
-      col = max(vec3(0.0), mix(vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), col, uSat));
+      // Deepen in RATIO space, not by extrapolating away from luma. The old push
+      // raised the peak channel (classic went to 1.19, further into the very ACES
+      // knee the push existed to escape) and hard-clipped the low channel to zero,
+      // so it was already exhausted at 1.55. Squaring the normalised channels
+      // holds the peak at its original value, drives the secondaries down, and
+      // cannot clip -- so it can be pushed as far as a scheme wants.
+      float mx = max(col.r, max(col.g, col.b));
+      vec3 ch = col / max(mx, 1e-4);
+      col = mx * mix(ch, ch * ch, uDeep);
       // The clean-burning collar right at the wick: a small cone hugging the wick,
       // NOT a band across the whole bulb. It has to stay narrower than the yellow
       // it sits inside, so it is confined by radius as well as by height.
@@ -2670,6 +2712,13 @@ const FLAME_FRAG = `
       // thin to see, so quantising the tint alone produced no visible steps at
       // all -- the effect was running and doing nothing.
       if (hq >= 0.0) emis *= mix(1.35, 0.30, hq);
+      // the sheath GLOWS: extra radiance without extra alpha, which under the
+      // premultiplied OVER composite reads as light added over the background
+      // rather than as the shell occluding what is behind it
+      if (uShell > 0.0) emis *= 1.0 + 1.4 * uShell * shellT;
+      // and the swirl arms are lit, not merely displaced -- density alone moved
+      // the silhouette without making the ribbons look like they were burning
+      if (uSwirl.x > 0.0) emis *= 1.0 + 1.1 * max(0.0, arm) * smoothstep(0.10, 0.70, y);
       // CINDER: embers kindling inside the column. It thresholds the high octave
       // that was already fetched for the turbulence, so the only cost is the
       // shaping -- no new noise, which is what makes a textured flame affordable.
@@ -2696,11 +2745,12 @@ const flameVol = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.Shader
     uSteps: { value: 30 }, uIntensity: { value: 1 }, uTurb: { value: 0.55 },
     uLean: { value: 0 }, uCoolAmt: { value: 1 },
     uDensity: { value: 3.1 },
-    uSat: { value: 1.55 },
+    uDeep: { value: 0.75 },
     uSpark: { value: 0 }, uShell: { value: 0 }, uPulse: { value: 0 },
     uSwirl: { value: new THREE.Vector3() },
     uToon: { value: new THREE.Vector3() },
     uCore: { value: new THREE.Vector3() },
+    uPrism: { value: new THREE.Vector3() },
     uSpineOff: { value: new THREE.Vector2() }, uRad: { value: 1 / 1.35 },
   },
   side: THREE.BackSide,          // the far faces: the ray's exit, always drawn
@@ -2779,7 +2829,7 @@ function applyFlameCol(name) {
   const sw = document.getElementById('flameSwatch');
   if (sw) {
     // generated schemes carry a gradient swatch, so the halo comes off `glow`
-    const halo = fc.glow || fc.swatch;
+    const halo = fc.halo || fc.swatch;
     sw.style.background = '';
     if (fc.swatch.indexOf('gradient') >= 0) sw.style.background = fc.swatch;
     else sw.style.backgroundColor = fc.swatch;
@@ -3528,29 +3578,31 @@ function updateFrame(dt, tSec) {
       u.uNear.value = camera.near; u.uFar.value = camera.far;
       u.uTime.value = tSec;
       u.uSteps.value = volSteps;
-      u.uTurb.value = 0.42 + 0.5 * F.turb + 0.12 * (1 - grow);
-      u.uIntensity.value = CFG.FLAME_VOL_GAIN * grow * (1 + 1.1 * F.flare) * flick;
-      u.uCoolAmt.value = 1 - 0.55 * bent;
-      u.uDensity.value = CFG.FLAME_VOL_DENS;
-      u.uSat.value = CFG.FLAME_SAT;
+      const fc = FLAME_COLS[sim.flameCol] || FLAME_COLS.classic;
+      // ?? not ||: fx.cool = 0 is a legitimate value that || would turn into 1
+      const fx = fc.fx || EMPTY_FX;
+      u.uTurb.value = (0.42 + 0.5 * F.turb + 0.12 * (1 - grow)) * (fx.turb ?? 1);
+      u.uIntensity.value = CFG.FLAME_VOL_GAIN * grow * (1 + 1.1 * F.flare) * flick * (fx.gain ?? 1);
+      u.uCoolAmt.value = (1 - 0.55 * bent) * (fx.cool ?? 1);
+      u.uDensity.value = CFG.FLAME_VOL_DENS * (fx.dens ?? 1);
+      u.uDeep.value = CFG.FLAME_DEEP * (fx.deep ?? 1);
       camera.getWorldDirection(u.uCamDir.value);
       // how far the tip has drifted off the axis, in the box's own units
       _v5.subVectors(spineC, spineA).addScaledVector(flameDir, -len);
       const boxHalf = halfW * VOL_MARGIN;
       u.uSpineOff.value.set(_v5.dot(_bx) / boxHalf, _v5.dot(_by) / boxHalf);
-      const fc = FLAME_COLS[sim.flameCol] || FLAME_COLS.classic;
       u.uTint.value.setRGB(fc.vol[0], fc.vol[1], fc.vol[2]);
       const v2 = fc.vol2 || fc.vol;
       u.uTint2.value.setRGB(v2[0], v2[1], v2[2]);
       // a scheme without an `fx` block leaves every one of these at zero, which
       // is exactly the render it had before effects existed
-      const fx = fc.fx || EMPTY_FX;
       u.uSpark.value = fx.spark || 0;
       u.uShell.value = fx.shell || 0;
       u.uPulse.value = fx.pulse || 0;
       u.uSwirl.value.fromArray(fx.swirl || ZERO3);
       u.uToon.value.fromArray(fx.toon || ZERO3);
       u.uCore.value.fromArray(fx.core || ZERO3);
+      u.uPrism.value.fromArray(fx.prism || ZERO3);
       u.uCool.value.setRGB(fc.volCool[0], fc.volCool[1], fc.volCool[2]);
     }
     // screen-space spine tilt so the teardrop bodies lean with the bend
@@ -4625,7 +4677,7 @@ function paintStyleSelection() {
   for (const b of swBtns.flame) b.el.classList.toggle('on', b.key === sim.flameCol);
   for (const b of swBtns.back) b.el.classList.toggle('on', b.key === sim.backdrop);
 }
-function buildSwatches(hostId, group, keys, css, label, pick) {
+function buildSwatches(hostId, group, keys, css, halo, label, pick) {
   const host = document.getElementById(hostId);
   for (const key of keys) {
     const btn = document.createElement('button');
@@ -4635,7 +4687,8 @@ function buildSwatches(hostId, group, keys, css, label, pick) {
     const dot = document.createElement('i');
     const paint = css(key);
     if (paint.indexOf('gradient') >= 0) dot.style.background = paint;
-    else { dot.style.backgroundColor = paint; dot.style.color = paint; }
+    else dot.style.backgroundColor = paint;
+    dot.style.color = halo(key);   // drives the glow; a gradient leaves currentColor unset
     const cap = document.createElement('span');
     cap.textContent = label(key);
     btn.append(dot, cap);
@@ -4650,9 +4703,9 @@ function buildSwatches(hostId, group, keys, css, label, pick) {
     swBtns[group].push({ key, el: btn });
   }
 }
+const caseHex = k => '#' + FINISHES[k].chrome.color.toString(16).padStart(6, '0');
 buildSwatches('swCase', 'case', FINISH_ORDER,
-  k => FINISHES[k].swatch || '#' + FINISHES[k].chrome.color.toString(16).padStart(6, '0'),
-  k => k, k => {
+  k => FINISHES[k].swatch || caseHex(k), caseHex, k => k, k => {
     applyFinish(k);
     sim.finishFlash = 1;
     sim.disc.finish = true;
@@ -4660,13 +4713,13 @@ buildSwatches('swCase', 'case', FINISH_ORDER,
     buzz([8, 30, 8]);
   });
 buildSwatches('swFlame', 'flame', FLAME_ORDER,
-  k => FLAME_COLS[k].swatch, k => k, k => {
+  k => FLAME_COLS[k].swatch, k => FLAME_COLS[k].halo || FLAME_COLS[k].swatch, k => k, k => {
     applyFlameCol(k);
     sim.disc.flameCol = true;
     buzz(12);
   });
 buildSwatches('swBack', 'back', BACKDROP_ORDER,
-  k => BACKDROPS[k].swatch, k => k, k => {
+  k => BACKDROPS[k].swatch, k => BACKDROPS[k].swatch, k => k, k => {
     applyBackdrop(k);
     sim.disc.backdrop = true;
     buzz(12);
