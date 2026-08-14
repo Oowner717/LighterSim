@@ -719,6 +719,24 @@ await settleLid(false);
     const d = await spread(n);
     check(`${n} burns one hue`, d < 30, `${d.toFixed(0)} degrees apart`);
   }
+  // The effect schemes change how the flame is BUILT, not just its hue. The
+  // contract that matters is that a scheme without effects leaves every effect
+  // uniform at zero -- otherwise adding an effect quietly alters the ten plain
+  // flames, which is the kind of regression nothing else here would catch.
+  const fxUniforms = ['uSpark', 'uShell', 'uPulse', 'uSwirl', 'uToon', 'uCore'];
+  const readFx = async () => L(`(() => { const u = LIGHTER.mats.flameVol.uniforms;
+    return ${JSON.stringify(fxUniforms)}.map(k => {
+      const v = u[k].value; return v.toArray ? Math.max(...v.toArray().map(Math.abs)) : Math.abs(v); }); })()`);
+  await L('LIGHTER.setFlameCol("classic")');
+  await waitL('LIGHTER.state === "LIT"', 8000).catch(() => {});
+  await page.waitForTimeout(400);
+  check('a plain flame leaves every effect uniform at zero',
+    (await readFx()).every(v => v === 0), JSON.stringify(await readFx()));
+  for (const [name, key] of [['cinder', 'spark'], ['vortex', 'swirl'], ['strata', 'toon'],
+                             ['torch', 'core'], ['sodium', 'shell'], ['wisp', 'pulse']]) {
+    const fx = await L(`JSON.stringify(LIGHTER.flameFx(${JSON.stringify(name)}))`);
+    check(`${name} carries its effect`, fx && JSON.parse(fx) && JSON.parse(fx)[key] !== undefined, fx);
+  }
 
   await L('(LIGHTER.setFinish("chrome"), LIGHTER.setFlameCol("classic"), LIGHTER.setBackdrop("midnight"), 0)');
   check('a plain metal drops the normal map again',

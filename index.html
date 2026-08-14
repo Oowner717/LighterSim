@@ -629,6 +629,7 @@ const _fa = new THREE.Vector3(), _fb = new THREE.Vector3();
 const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _lag = new THREE.Vector3();
 const _m1 = new THREE.Matrix4();
 let volOn = false, volOk = true, volSteps = 22;   // steps adapt to measured fps
+const EMPTY_FX = {}, ZERO3 = [0, 0, 0];
 const VOL_MARGIN = 1.35;   // box half-width / flame half-width   // volumetric flame active / still affordable
 
 /* ============================== RENDERER / SCENE ============================== */
@@ -2321,14 +2322,15 @@ const FLAME_COLS = {
 // collar at the wick -- so the rest is derived instead of hand-written. The four
 // originals above stay literal: they were tuned by eye and reproducing them from
 // a formula would only move them.
-function flameScheme(swatch, body, tip, collar) {
+function flameScheme(swatch, body, tip, collar, fx) {
   const mixc = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
   const rgb = c => `${c[0] | 0},${c[1] | 0},${c[2] | 0}`;
   const hdr = (c, k) => [c[0] / 255 * k, c[1] / 255 * k, c[2] / 255 * k];
   const pale = mixc(body, [255, 255, 255], 0.6);
   // the shader ramp is heat-only now, so a scheme just hands it colours:
   // normalised to a peak of 1 so uIntensity alone decides how bright it burns
-  const volTint = c => { const m = Math.max(c[0], c[1], c[2]) || 1; return c.map(v => +(v / m).toFixed(3)); };
+  const bodyK = 1 / (Math.max(body[0], body[1], body[2]) || 1);
+  const volTint = c => c.map(v => +(v * bodyK).toFixed(3));
   const hex = c => '#' + ((c[0] | 0) << 16 | (c[1] | 0) << 8 | (c[2] | 0)).toString(16).padStart(6, '0');
   return {
     // The swatch IS the ramp, root colour at the bottom to tip colour at the top.
@@ -2350,6 +2352,7 @@ function flameScheme(swatch, body, tip, collar) {
     glow: [[0, `rgba(${rgb(body)},0.6)`], [0.5, `rgba(${rgb(tip)},0.25)`], [1, `rgba(${rgb(tip)},0)`]],
     layers: [hdr(pale, 1.7), hdr(body, 2.1), hdr(body, 2.6), hdr(collar, 2.3), hdr(tip, 2.7)],
     pilot: hdr(body, 2.4), pilotGlow: hdr(body, 1.9),
+    fx,
     vol: volTint(body), vol2: volTint(tip), volCool: volTint(collar).map(v => +(v * 1.5).toFixed(2)),
     light: (body[0] << 16 | body[1] << 8 | body[2]) & 0xffffff,
   };
@@ -2364,6 +2367,25 @@ const FLAME_EXTRA = {
   aurora:  flameScheme('#6cffc8', [108, 255, 200], [150,  90, 255], [200, 255, 240]),
   peacock: flameScheme('#3ad8ff', [ 58, 216, 255], [ 90,  70, 235], [210, 245, 255]),
   magma:   flameScheme('#ffd23d', [255, 210,  61], [190,  26,  22], [120, 175, 255]),
+  // ---- effect options: these change how the flame is BUILT, not just its hue ----
+  // embers kindling in a dark garnet column: the only option with visible texture
+  cinder:  flameScheme('#ff7a2a', [176,  38,  30], [ 92,  14,  12], [255, 150,  70],
+                       { spark: 1.0 }),
+  // two ribbons corkscrewing up, turbulence shearing with them
+  vortex:  flameScheme('#ff5ad0', [255,  90, 208], [120,  40, 235], [235, 180, 255],
+                       { swirl: [0.34, 5.6, 2.1] }),
+  // a cel-shaded flame: flat bands of heat climbing the column
+  strata:  flameScheme('#31e8ff', [ 60, 240, 255], [ 22,  16, 110], [200, 250, 255],
+                       { toon: [6.0, 0.5, 1.0] }),
+  // a butane micro-torch: a hard blade of gas inside a slack grey envelope
+  torch:   flameScheme('#ffe08a', [255, 224, 138], [130, 150, 170], [110, 190, 255],
+                       { core: [0.85, 0.52, 0.72] }),
+  // sodium in the fire: a brilliant sheath around a darker gas core
+  sodium:  flameScheme('#ffe14a', [255, 225,  74], [ 74,  56, 190], [255, 240, 160],
+                       { shell: 0.9 }),
+  // a will-o'-the-wisp: cold, barely there, with a slow swell climbing it
+  wisp:    flameScheme('#9dffe0', [157, 255, 224], [ 60, 130, 190], [220, 255, 245],
+                       { pulse: 0.55 }),
 };
 Object.assign(FLAME_COLS, FLAME_EXTRA);
 const FLAME_ORDER = ['classic', 'blue', 'emerald', 'violet', ...Object.keys(FLAME_EXTRA)];
@@ -2472,6 +2494,16 @@ const FLAME_FRAG = `
   uniform float uNear, uFar, uTime, uSteps, uIntensity, uTurb, uLean, uCoolAmt;
   uniform float uDensity;      // extinction per unit depth at full density
   uniform float uSat;          // chroma push applied before ACES flattens it
+  // ---- effect parameters. Every one is ZERO for an ordinary flame, and every
+  // branch below is written so zero leaves the render bit-identical. That is the
+  // whole contract: adding effects must not disturb the ten schemes that do not
+  // use them.
+  uniform float uSpark;        // embers kindling in the column (cinder)
+  uniform float uShell;        // second colour moves from the height axis to the radius (sodium)
+  uniform float uPulse;        // a luminous swell travelling up the column (wisp)
+  uniform vec3 uSwirl;         // arm amplitude, twist per unit height, radians/sec (vortex)
+  uniform vec3 uToon;          // band count, bands/sec scroll, edge hardness (strata)
+  uniform vec3 uCore;          // blade amount, blade radius, blade height (torch)
   uniform vec2 uSpineOff;      // lateral drift of the tip, in flame space
   uniform float uRad;          // flame radius as a fraction of the box half-width
 
@@ -2539,26 +2571,70 @@ const FLAME_FRAG = `
       // turbulence grows with height, so the root stays steady and the tip boils.
       // It eases off again right at the top: at full strength the taper stopped
       // reading as a flame and started reading as speckle.
+      // VORTEX: two ribbons corkscrewing up the column. The azimuth comes out of
+      // the lateral vector by normalising it -- no atan2 -- and the double angle
+      // follows from the identity, so a two-armed spiral costs one inversesqrt
+      // and one sincos rather than a transcendental per sample.
+      if (uSwirl.x > 0.0) {
+        vec2 u = lat * inversesqrt(dot(lat, lat) + 1e-8);
+        float c2 = u.x * u.x - u.y * u.y, s2 = 2.0 * u.x * u.y;
+        float ph = uSwirl.y * y - uSwirl.z * uTime;
+        r -= uSwirl.x * (c2 * cos(ph) + s2 * sin(ph)) * smoothstep(0.02, 0.45, y);
+      }
       vec3 np = vec3(q.x * 6.0, y * 5.0 - uTime * 1.6, q.z * 6.0);
-      float n = vnoise3(np) * 0.62 + vnoise3(np * 2.4 + 11.0) * 0.38;
+      // the second octave is kept as its own value rather than being averaged
+      // away: the ember field below reads it, so the sparkle costs no new lookup
+      float n2 = vnoise3(np * 2.4 + 11.0);
+      float n = vnoise3(np) * 0.62 + n2 * 0.38;
       r += (n - 0.5) * uTurb * (0.12 + y * 1.6) * (1.0 - 0.40 * smoothstep(0.70, 1.0, y));
       // thinning with height is what lets the tip wisp out instead of just ending
       float d = smoothstep(1.0, 0.35, r) * smoothstep(0.0, 0.035, y)
               * (1.0 - 0.72 * smoothstep(0.55, 1.0, y));
       d *= 1.0 - 0.30 * exp(-r * r * 5.0) * (1.0 - smoothstep(0.06, 0.40, y));
+      // TORCH: a hard blade of gas standing inside a slack envelope. The blade is
+      // dense and narrow, the envelope stays thin, so the two read as separate
+      // bodies rather than as one flame with a bright middle.
+      float blade = 0.0;
+      if (uCore.x > 0.0) {
+        blade = smoothstep(uCore.y, uCore.y * 0.45, r) * (1.0 - smoothstep(uCore.z * 0.62, uCore.z, y));
+        d = mix(d, max(d * 0.34, blade), uCore.x);
+      }
       if (d <= 0.002) continue;
       // A real flame stratifies by HEIGHT, not by how much of it you happen to be
       // looking through: white-hot off the wick, orange through the body, red and
       // failing at the tip. Density only nudges it hotter, so the core reads
       // brighter than the fringe without the fringe changing colour entirely.
       float h = clamp(y * 1.16 - 0.09 * d, 0.0, 1.0);
+      // STRATA: snap the heat ramp into flat bands that climb the column. The
+      // fract window is the anti-aliased band edge -- a bare floor() aliases into
+      // stair-stepping the moment the flame sways.
+      float hq = -1.0;
+      if (uToon.x > 0.0) {
+        // hardness 1 has to mean a NARROW blend window. Inverted, it selected the
+        // widest one and quietly smoothed the bands back into a gradient -- the
+        // effect ran, cost its ALU, and produced nothing.
+        float e = max(0.03, mix(0.5, 0.06, uToon.z));
+        // and drop the density term out of h while banding: it varies along the
+        // ray, so it dithers samples across band edges and blurs them out
+        // The scroll term MUST wrap. uTime grows without bound, so subtracting it
+        // raw walked the band index off to large negative values -- h went to
+        // about -8, which zeroed both colour smoothsteps and sent the emission
+        // multiplier to ~10. The flame rendered as a flat bright column and the
+        // banding was invisible because it was never in range to begin with.
+        float hb = clamp(y * 1.16, 0.0, 1.0) * uToon.x - fract(uTime * uToon.y);
+        hq = clamp((floor(hb) + smoothstep(0.5 - e * 0.5, 0.5 + e * 0.5, fract(hb))) / uToon.x, 0.0, 1.0);
+        h = hq;
+      }
       // white-hot where it leaves the wick, the scheme's body through the middle,
       // its tip colour at the top -- and the tip darkens as it cools out
       // The hot root is a PALE version of the scheme, not pure white, and it is
       // kept short: a broad white puck buried both the scheme's colour and the
       // blue collar underneath it.
       vec3 col = mix(mix(uTint, vec3(1.0), 0.45), uTint, smoothstep(0.01, 0.15, h));
-      col = mix(col, uTint2, smoothstep(0.24, 0.80, h));
+      // SODIUM: with uShell up, the second colour stops being "the tip" and
+      // becomes "the outside", so the flame reads as a bright sheath around a
+      // darker gas core instead of a solid teardrop.
+      col = mix(col, uTint2, mix(smoothstep(0.24, 0.80, h), smoothstep(0.22, 0.95, r), uShell));
       col *= 1.0 - 0.42 * smoothstep(0.78, 1.0, h);
       // ACES pulls anything bright toward white, and every channel here leaves at
       // several times 1.0 -- which is exactly why the colours arrived on screen
@@ -2585,6 +2661,22 @@ const FLAME_FRAG = `
       float emis = mix(0.30, 1.0, smoothstep(0.02, 0.16, y))
                  * (1.0 - 0.45 * smoothstep(0.30, 1.0, y))
                  * (0.50 + 0.50 * (1.0 - pf));
+      // WISP: a luminous swell that TRAVELS up the column rather than the whole
+      // flame throbbing at once -- the phase is height-dependent, the same lag
+      // trick the puff wave already uses.
+      if (uPulse > 0.0) emis *= 1.0 + uPulse * sin(y * 6.5 - uTime * 2.2);
+      // Bands have to step BRIGHTNESS, not just hue. The colour ramp only moves
+      // across the upper half of the column and the upper half is the part too
+      // thin to see, so quantising the tint alone produced no visible steps at
+      // all -- the effect was running and doing nothing.
+      if (hq >= 0.0) emis *= mix(1.35, 0.30, hq);
+      // CINDER: embers kindling inside the column. It thresholds the high octave
+      // that was already fetched for the turbulence, so the only cost is the
+      // shaping -- no new noise, which is what makes a textured flame affordable.
+      if (uSpark > 0.0) {
+        float sp = smoothstep(0.74, 0.94, n2) * smoothstep(0.04, 0.30, y) * d;
+        col += vec3(1.00, 0.72, 0.26) * sp * uSpark * 2.6;
+      }
       acc += T * a * col * emis;
       T *= 1.0 - a;
     }
@@ -2605,6 +2697,10 @@ const flameVol = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.Shader
     uLean: { value: 0 }, uCoolAmt: { value: 1 },
     uDensity: { value: 3.1 },
     uSat: { value: 1.55 },
+    uSpark: { value: 0 }, uShell: { value: 0 }, uPulse: { value: 0 },
+    uSwirl: { value: new THREE.Vector3() },
+    uToon: { value: new THREE.Vector3() },
+    uCore: { value: new THREE.Vector3() },
     uSpineOff: { value: new THREE.Vector2() }, uRad: { value: 1 / 1.35 },
   },
   side: THREE.BackSide,          // the far faces: the ray's exit, always drawn
@@ -3446,6 +3542,15 @@ function updateFrame(dt, tSec) {
       u.uTint.value.setRGB(fc.vol[0], fc.vol[1], fc.vol[2]);
       const v2 = fc.vol2 || fc.vol;
       u.uTint2.value.setRGB(v2[0], v2[1], v2[2]);
+      // a scheme without an `fx` block leaves every one of these at zero, which
+      // is exactly the render it had before effects existed
+      const fx = fc.fx || EMPTY_FX;
+      u.uSpark.value = fx.spark || 0;
+      u.uShell.value = fx.shell || 0;
+      u.uPulse.value = fx.pulse || 0;
+      u.uSwirl.value.fromArray(fx.swirl || ZERO3);
+      u.uToon.value.fromArray(fx.toon || ZERO3);
+      u.uCore.value.fromArray(fx.core || ZERO3);
       u.uCool.value.setRGB(fc.volCool[0], fc.volCool[1], fc.volCool[2]);
     }
     // screen-space spine tilt so the teardrop bodies lean with the bend
@@ -4901,6 +5006,7 @@ window.LIGHTER = {
   // the pair of volume tints a scheme resolves to, so a test can tell a
   // combination from a single hue without the flame having to be alight
   flameTint: n => { const f = FLAME_COLS[n] || FLAME_COLS.classic; return { vol: f.vol, vol2: f.vol2 || f.vol }; },
+  flameFx: n => (FLAME_COLS[n] || FLAME_COLS.classic).fx || null,
   get backdrop() { return sim.backdrop; },
   setBackdrop: n => { applyBackdrop(n); saveStats(); },
   get styleOpen() { return styleIsOpen(); },
