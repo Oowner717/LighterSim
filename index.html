@@ -939,10 +939,10 @@ const wheelSpin = new THREE.Mesh(
   wg.rotation.x = Math.PI / 2;             // cylinder axis -> world z
   wg.add(wheelSpin);
   insertG.add(wg);
-  const bg = new THREE.BoxGeometry(0.56, 0.6, 0.06);
+  const bg = new THREE.BoxGeometry(0.22, 0.62, 0.06);
   for (const sz of [-1, 1]) {
     const b = new THREE.Mesh(bg, matChromeDark);
-    b.position.set(CFG.WHEEL_X, CFG.WHEEL_Y - 0.12, sz * (CFG.WHEEL_T / 2 + 0.055));
+    b.position.set(CFG.WHEEL_X, CFG.WHEEL_Y - 0.20, sz * (CFG.WHEEL_T / 2 + 0.055));
     insertG.add(b);
   }
   const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.14, 12), matChromeDark);
@@ -1295,22 +1295,22 @@ const FINISHES = {
   chrome: {
     chrome: { color: 0xd9dee3, rough: 0.55, map: true, metal: 1.0, env: 1.0 },
     dark: { color: 0xb8c0c7, rough: 0.36, map: true, metal: 1.0, env: 1.0 },
-    insert: 0x757b82,
+    insert: 0x757b82, inner: 0x9aa2ab,
   },
   matte: {
-    chrome: { color: 0x23262a, rough: 0.86, map: false, metal: 0.85, env: 0.6 },
-    dark: { color: 0x2e3236, rough: 0.7, map: false, metal: 0.9, env: 0.8 },
-    insert: 0x5a5f66,
+    chrome: { color: 0x3c4046, rough: 0.72, map: false, metal: 0.45, env: 1.0 },
+    dark: { color: 0x484d54, rough: 0.6, map: false, metal: 0.55, env: 1.0 },
+    insert: 0x5a5f66, inner: 0x6b7078,
   },
   brass: {
     chrome: { color: 0xd6a84f, rough: 0.5, map: true, metal: 1.0, env: 1.0 },
     dark: { color: 0xb8913f, rough: 0.34, map: true, metal: 1.0, env: 1.0 },
-    insert: 0x8a7a55,
+    insert: 0x8a7a55, inner: 0x9c7c3c,
   },
   gunmetal: {
     chrome: { color: 0x62686f, rough: 0.44, map: true, metal: 1.0, env: 1.15 },
     dark: { color: 0x4d5359, rough: 0.3, map: true, metal: 1.0, env: 1.05 },
-    insert: 0x565c63,
+    insert: 0x565c63, inner: 0x7b828a,
   },
 };
 const FINISH_ORDER = ['chrome', 'matte', 'brass', 'gunmetal'];
@@ -1328,6 +1328,7 @@ function applyFinish(name) {
     if (m.roughnessMap !== map) { m.roughnessMap = map; m.needsUpdate = true; }
   }
   matInsert.color.setHex(fp.insert);
+  matCaseInner.color.setHex(fp.inner);
   // the main-screen swatch button wears the current finish
   const sw = document.getElementById('finishSwatch');
   if (sw) sw.style.backgroundColor = '#' + fp.chrome.color.toString(16).padStart(6, '0');
@@ -1889,7 +1890,7 @@ const FLAME_COLS = {
     core: [[0, 'rgba(255,255,255,1)'], [0.35, 'rgba(170,205,255,0.85)'], [1, 'rgba(60,90,255,0)']],
     glow: [[0, 'rgba(255,175,80,0.6)'], [0.5, 'rgba(255,130,40,0.25)'], [1, 'rgba(255,110,30,0)']],
     layers: [[1.5, 0.8, 0.38], [1.9, 1.5, 1.2], [2.5, 2.1, 1.6], [0.75, 1.15, 2.6], [2.8, 1.7, 0.7]],
-    pilot: [2.4, 1.4, 0.55], pilotGlow: [1.9, 0.85, 0.3],
+    pilot: [2.6, 1.0, 0.28], pilotGlow: [1.9, 0.85, 0.3],
     light: 0xff9a3c,
   },
   blue: {
@@ -1985,7 +1986,7 @@ const flameLayers = [
   // visibly detached blob instead of licking off the tip)
   { t: 0.82, sx: 0.13, sy: 0.38, tex: 'flame', col: [1.5, 0.92, 0.4], op: 0.44, nf: 19, na: 0.032, rot: true },
 ].map(L => ({ ...L, spr: makeSprite(TEX[L.tex], L.col), ph: Math.random() * 100 }));
-const pilotSpr = makeSprite(TEX.core, [2.4, 1.4, 0.55]);
+const pilotSpr = makeSprite(TEX.glow, [2.6, 1.0, 0.28]);
 const pilotGlow = makeSprite(TEX.glow, [1.9, 0.85, 0.3]);   // inside the chimney: leaks via the holes
 const flameLight = new THREE.PointLight(0xff9a3c, 0, 11, 2);
 scene.add(flameLight);
@@ -2004,7 +2005,7 @@ function applyFlameCol(name) {
     const c = fc.layers[i];
     L.spr.material.color.setRGB(c[0], c[1], c[2]);
   });
-  pilotSpr.material.map = tx.core;
+  pilotSpr.material.map = tx.glow;
   pilotSpr.material.color.setRGB(fc.pilot[0], fc.pilot[1], fc.pilot[2]);
   pilotGlow.material.map = tx.glow;
   pilotGlow.material.color.setRGB(fc.pilotGlow[0], fc.pilotGlow[1], fc.pilotGlow[2]);
@@ -2786,7 +2787,7 @@ function updateFrame(dt, tSec) {
     // pilot half-buried in the windshield, and that glow is the thing the hint
     // tells you to tap
     pilotSpr.position.copy(tipWorld).addScaledVector(flameDir, 0.15);
-    pilotSpr.scale.set(0.2 * pilotK * pf + 0.05, 0.26 * pilotK * pf + 0.06, 1);
+    pilotSpr.scale.set(0.30 * pilotK * pf + 0.07, 0.39 * pilotK * pf + 0.09, 1);
     pilotSpr.material.opacity = 0.85 * pf;
     // the money shot: warm glow pulsing through the windshield holes
     pilotGlow.visible = true;
@@ -2853,7 +2854,7 @@ function updateFrame(dt, tSec) {
     sm.spr.position.copy(sm.pos);
     sm.spr.scale.set(gr, gr, 1);
     sm.spr.material.rotation = sm.ph + (1 - k) * 0.7 * (sm.ph % 2 < 1 ? 1 : -1);
-    sm.spr.material.opacity = 0.8 * sm.k * k * (1 - k * 0.3);
+    sm.spr.material.opacity = 0.8 * sm.k * k * (1 - k * 0.3) * clamp01((1 - k) * 7);
   }
   updateCamera(dt, tSec);
 }
