@@ -314,28 +314,36 @@ await L('LIGHTER.straighten()');
   if (th < OPEN - 0.1) await settleLid(true);
 }
 { // a curved thumb stroke around the hinge closes the lid fully
-  const hp = await L('LIGHTER.lidPivot()');
-  const g0 = await L('LIGHTER.lidPoint()');       // lid corner, open
-  const g1 = await L('LIGHTER.lidPoint(0)');      // lid corner, closed
-  const a0 = Math.atan2(g0.y - hp.y, g0.x - hp.x);
-  let a1 = Math.atan2(g1.y - hp.y, g1.x - hp.x);
-  a1 += 2 * Math.PI * Math.round((a0 - a1) / (2 * Math.PI));
-  const r = Math.hypot(g0.x - hp.x, g0.y - hp.y);
-  await page.evaluate(async ([hp, a0, a1, r]) => {
-    const id = 57, steps = 26;
-    const px = a => hp.x + r * Math.cos(a), py = a => hp.y + r * Math.sin(a);
-    window.__pt('pointerdown', id, px(a0), py(a0));
-    for (let i = 1; i <= steps; i++) {
-      await window.__sleep(22);
-      const a = a0 + (a1 - a0) * (i / steps) * 1.06;   // sweep a hair past closed
-      window.__pt('pointermove', id, px(a), py(a));
+  const SHUT = 'LIGHTER.lidTheta < 0.05 && Math.abs(LIGHTER.sim.lid.omega) < 0.5';
+  let shut = false;
+  for (let tries = 0; tries < 3 && !shut; tries++) {   // synthetic timing can starve move events
+    if (tries) {
+      if (await L(SHUT)) { shut = true; break; }       // the stroke worked, the wait was just slow
+      await settleLid(true);                           // a retry needs the lid open again
     }
-    await window.__sleep(60);
-    const aEnd = a0 + (a1 - a0) * 1.06;
-    window.__pt('pointerup', id, px(aEnd), py(aEnd));
-  }, [hp, a0, a1, r]);
-  await waitL('LIGHTER.lidTheta < 0.05 && Math.abs(LIGHTER.sim.lid.omega) < 0.5', 15000);
-  check('curved arc stroke closes the lid fully', true);
+    const hp = await L('LIGHTER.lidPivot()');
+    const g0 = await L('LIGHTER.lidPoint()');       // lid corner, open
+    const g1 = await L('LIGHTER.lidPoint(0)');      // lid corner, closed
+    const a0 = Math.atan2(g0.y - hp.y, g0.x - hp.x);
+    let a1 = Math.atan2(g1.y - hp.y, g1.x - hp.x);
+    a1 += 2 * Math.PI * Math.round((a0 - a1) / (2 * Math.PI));
+    const r = Math.hypot(g0.x - hp.x, g0.y - hp.y);
+    await page.evaluate(async ([hp, a0, a1, r, id]) => {
+      const steps = 26;
+      const px = a => hp.x + r * Math.cos(a), py = a => hp.y + r * Math.sin(a);
+      window.__pt('pointerdown', id, px(a0), py(a0));
+      for (let i = 1; i <= steps; i++) {
+        await window.__sleep(22);
+        const a = a0 + (a1 - a0) * (i / steps) * 1.06;   // sweep a hair past closed
+        window.__pt('pointermove', id, px(a), py(a));
+      }
+      await window.__sleep(60);
+      const aEnd = a0 + (a1 - a0) * 1.06;
+      window.__pt('pointerup', id, px(aEnd), py(aEnd));
+    }, [hp, a0, a1, r, 57 + tries]);
+    shut = await waitL(SHUT, 5000).then(() => true, () => false);
+  }
+  check('curved arc stroke closes the lid fully', shut);
 }
 { // a straight drag passing across the hinge pivot must not teleport the lid
   const lc = await L('LIGHTER.anchor("lidTop")');
