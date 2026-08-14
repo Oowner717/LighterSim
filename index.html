@@ -556,6 +556,7 @@ const CFG = {
   FLAME_STEPS_MIN: 10,       // floor before giving up and using sprites
   FLAME_VOL_GAIN: 3.4,       // peak radiance of the raymarch (it saturates now, so this IS the peak)
   FLAME_VOL_DENS: 3.1,       // extinction per world unit through the core
+  FLAME_SAT: 1.55,           // chroma pushed before ACES, which otherwise whitens the core
   // just shy of straight up/down: at exactly +/-PI/2 the up vector degenerates
   PITCH_MAX: 1.5,
   FPS_VOL_OFF: 26,           // sustained fps below this drops back to sprites
@@ -2355,11 +2356,7 @@ function flameScheme(swatch, body, tip, collar) {
 }
 const FLAME_EXTRA = {
   // single-hue additions
-  amber:   flameScheme('#ffbf40', [255, 191,  64], [232, 116,  18], [120, 180, 255]),
   crimson: flameScheme('#ff4d5e', [255,  77,  94], [176,  18,  40], [255, 120, 150]),
-  ice:     flameScheme('#9fe8ff', [159, 232, 255], [ 60, 150, 214], [225, 250, 255]),
-  gold:    flameScheme('#ffd76a', [255, 215, 106], [214, 150,  20], [140, 200, 255]),
-  rose:    flameScheme('#ff8fc4', [255, 143, 196], [200,  40, 120], [255, 190, 220]),
   // combinations: the body and the tip are different hues, and the volume now
   // tints by height, so these read as a gradient rather than an average
   sunset:  flameScheme('#ff6ea8', [255, 110, 168], [255, 186,  60], [140, 190, 255]),
@@ -2474,6 +2471,7 @@ const FLAME_FRAG = `
   uniform vec3 uCool;          // the colour of the clean-burning root
   uniform float uNear, uFar, uTime, uSteps, uIntensity, uTurb, uLean, uCoolAmt;
   uniform float uDensity;      // extinction per unit depth at full density
+  uniform float uSat;          // chroma push applied before ACES flattens it
   uniform vec2 uSpineOff;      // lateral drift of the tip, in flame space
   uniform float uRad;          // flame radius as a fraction of the box half-width
 
@@ -2559,9 +2557,14 @@ const FLAME_FRAG = `
       // The hot root is a PALE version of the scheme, not pure white, and it is
       // kept short: a broad white puck buried both the scheme's colour and the
       // blue collar underneath it.
-      vec3 col = mix(mix(uTint, vec3(1.0), 0.70), uTint, smoothstep(0.01, 0.17, h));
-      col = mix(col, uTint2, smoothstep(0.26, 0.82, h));
-      col *= 1.0 - 0.30 * smoothstep(0.80, 1.0, h);
+      vec3 col = mix(mix(uTint, vec3(1.0), 0.45), uTint, smoothstep(0.01, 0.15, h));
+      col = mix(col, uTint2, smoothstep(0.24, 0.80, h));
+      col *= 1.0 - 0.42 * smoothstep(0.78, 1.0, h);
+      // ACES pulls anything bright toward white, and every channel here leaves at
+      // several times 1.0 -- which is exactly why the colours arrived on screen
+      // pastel however saturated the scheme was. Push chroma BEFORE the tone
+      // mapper so it lands at the intended depth after it, not before.
+      col = max(vec3(0.0), mix(vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), col, uSat));
       // The clean-burning collar right at the wick: a small cone hugging the wick,
       // NOT a band across the whole bulb. It has to stay narrower than the yellow
       // it sits inside, so it is confined by radius as well as by height.
@@ -2601,6 +2604,7 @@ const flameVol = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.Shader
     uSteps: { value: 30 }, uIntensity: { value: 1 }, uTurb: { value: 0.55 },
     uLean: { value: 0 }, uCoolAmt: { value: 1 },
     uDensity: { value: 3.1 },
+    uSat: { value: 1.55 },
     uSpineOff: { value: new THREE.Vector2() }, uRad: { value: 1 / 1.35 },
   },
   side: THREE.BackSide,          // the far faces: the ray's exit, always drawn
@@ -3432,6 +3436,7 @@ function updateFrame(dt, tSec) {
       u.uIntensity.value = CFG.FLAME_VOL_GAIN * grow * (1 + 1.1 * F.flare) * flick;
       u.uCoolAmt.value = 1 - 0.55 * bent;
       u.uDensity.value = CFG.FLAME_VOL_DENS;
+      u.uSat.value = CFG.FLAME_SAT;
       camera.getWorldDirection(u.uCamDir.value);
       // how far the tip has drifted off the axis, in the box's own units
       _v5.subVectors(spineC, spineA).addScaledVector(flameDir, -len);

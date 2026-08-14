@@ -672,9 +672,13 @@ await settleLid(false);
   const want = await page.evaluate(() => ({
     c: LIGHTER.FINISH_ORDER.length, f: LIGHTER.FLAME_ORDER.length, b: LIGHTER.BACKDROP_ORDER.length,
   }));
-  check('every case is on the sheet', counts.c === want.c && want.c >= 14, `${counts.c}/${want.c}`);
-  check('every flame is on the sheet', counts.f === want.f && want.f >= 14, `${counts.f}/${want.f}`);
-  check('every backdrop is on the sheet', counts.b === want.b && want.b >= 11, `${counts.b}/${want.b}`);
+  // What matters is that the grid shows EVERY option, not that there are N of
+  // them: a hard-coded count goes stale the moment the lists are curated, and
+  // then fails for a reason unrelated to what it is guarding. The floor is only
+  // there to catch a list collapsing to nothing.
+  check('every case is on the sheet', counts.c === want.c && want.c >= 8, `${counts.c}/${want.c}`);
+  check('every flame is on the sheet', counts.f === want.f && want.f >= 8, `${counts.f}/${want.f}`);
+  check('every backdrop is on the sheet', counts.b === want.b && want.b >= 8, `${counts.b}/${want.b}`);
 
   const pick = (sec, name) => page.click(`#${sec} .sw:has(span:text-is("${name}"))`);
   await pick('swCase', 'crimson');                       // a design, not a plain metal
