@@ -5,3 +5,7 @@ tests/sw.js
 tests/*.png
 tests/package-lock.json
 tests/index-base.html
+
+# survey/probe scratch scripts: agents write these into tests/ while exploring
+tests/_*.mjs
+tests/*.png
