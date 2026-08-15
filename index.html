@@ -1189,6 +1189,7 @@ const matChromeDark = new THREE.MeshStandardMaterial({
 // identical colour that plainly are metal. So the whole material is described
 // here, not just its colour: plain steel hardware, the same read as the insert.
 const HW = { color: 0x9aa1a9, metal: 1.0, rough: 0.42 };
+const HW_ROUGH_MIN = 0.50;
 const matSteel = new THREE.MeshStandardMaterial({
   color: 0xc8ccd2, metalness: 1.0, roughness: 0.55, bumpMap: knurlTex(), bumpScale: 1.3, envMapIntensity: 1.1,
 });
@@ -2439,7 +2440,13 @@ function applyFinish(name) {
       const mapped = p.tint || p.corrode;
       m.color.setHex(mapped ? HW.color : p.color);
       m.metalness = mapped ? HW.metal : p.metal;
-      m.roughness = mapped ? HW.rough : p.rough;
+      // Floor the polish. These are the hinge knuckles and the lid cam: turned
+      // parts a few millimetres across, and 18 of the 24 finishes ask them to be
+      // smoother than 0.50, down to 0.18. On a metal that small, GGX at 0.18 is
+      // very nearly a delta -- the lobe is narrower than the part, so the whole
+      // highlight lands inside a couple of pixels and clips to white however the
+      // exposure is set. A real knuckle is turned and handled, not lapped.
+      m.roughness = Math.max(HW_ROUGH_MIN, mapped ? HW.rough : p.rough);
       const grain = p.map === true ? brushed : null;
       if (m.roughnessMap !== grain) { m.roughnessMap = grain; m.needsUpdate = true; }
       continue;
