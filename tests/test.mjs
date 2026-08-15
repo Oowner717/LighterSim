@@ -809,6 +809,54 @@ await settleLid(false);
     await L('LIGHTER.setFinish("chrome")');
   }
 
+  // The case is TWO geometries -- a solid box while the insert is seated, an
+  // extruded shell once it lifts out -- and ExtrudeGeometry maps its side walls
+  // off world position, so the design landed at ~4x scale and jumped the moment
+  // you pulled the insert. Every surface that can wear a design has to agree on
+  // one UV convention or the swap is visible.
+  {
+    const uv = await L(`(() => {
+      const bad = [];
+      LIGHTER.scene.traverse(o => {
+        if (!o.isMesh || o.material !== LIGHTER.mats.chrome) return;
+        const a = o.geometry.attributes.uv;
+        if (!a) { bad.push(o.geometry.type + ':no-uv'); return; }
+        let lo = 1e9, hi = -1e9;
+        for (let i = 0; i < a.count; i++) {
+          lo = Math.min(lo, a.getX(i), a.getY(i));
+          hi = Math.max(hi, a.getX(i), a.getY(i));
+        }
+        if (lo < -0.01 || hi > 1.01) bad.push(o.geometry.type + ':' + lo.toFixed(2) + '..' + hi.toFixed(2));
+      });
+      return bad;
+    })()`);
+    check('every case surface uses the same 0..1 UV convention', uv.length === 0, uv.join(', '));
+  }
+
+  // The case swaps between a solid body and an open shell when the insert comes
+  // out, and they are different geometry classes: RoundedBoxGeometry maps 0..1
+  // per face, ExtrudeGeometry maps straight off world position. That left the
+  // shell spanning -1.90..1.90 by -2.85..1.00, so the design visibly resized the
+  // instant the insert lifted. Every surface that can wear a design has to agree.
+  {
+    const uv = await L(`(() => {
+      const bad = [];
+      LIGHTER.scene.traverse(o => {
+        if (!o.isMesh || o.material !== LIGHTER.mats.chrome) return;
+        const a = o.geometry.attributes.uv;
+        if (!a) { bad.push(o.geometry.type + ':no-uv'); return; }
+        let lo = 1e9, hi = -1e9;
+        for (let i = 0; i < a.count; i++) {
+          lo = Math.min(lo, a.getX(i), a.getY(i));
+          hi = Math.max(hi, a.getX(i), a.getY(i));
+        }
+        if (lo < -0.01 || hi > 1.01) bad.push(o.geometry.type + ':' + lo.toFixed(2) + '..' + hi.toFixed(2));
+      });
+      return bad;
+    })()`);
+    check('every case surface maps the design at the same scale', uv.length === 0, uv.join(' '));
+  }
+
   // the retired press-and-hold gesture must no longer swap anything
   const bc = await L('LIGHTER.anchor("baseCenter")');
   await page.evaluate(async ([p]) => {

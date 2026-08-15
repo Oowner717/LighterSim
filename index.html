@@ -1180,12 +1180,35 @@ function cottonWadGeo(w, h, d) {
   return g;
 }
 // the same profile as a wall ring: an open-topped shell you can see down into
+// ExtrudeGeometry maps its side walls straight off world position, so this
+// geometry came out with UVs spanning -1.90..1.90 by -2.85..1.00 while the solid
+// RoundedBoxGeometry it swaps with spans 0..1. Same texture, ~4x the scale and
+// offset: the case design visibly resized the instant the insert lifted out, and
+// the lid's did the same on opening. Reproject onto the box's convention -- 0..1
+// across whichever face a vertex looks at, 0..1 up the height -- so the two
+// halves of the swap agree.
+function boxProjectUV(g, w, d, h) {
+  g.computeVertexNormals();
+  const pos = g.attributes.position, nor = g.attributes.normal;
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const nx = Math.abs(nor.getX(i)), ny = Math.abs(nor.getY(i)), nz = Math.abs(nor.getZ(i));
+    let u, v;
+    if (ny > nx && ny > nz) { u = x / w + 0.5; v = z / d + 0.5; }   // the thin rims
+    else if (nx >= nz) { u = z / d + 0.5; v = y / h; }              // the narrow ends
+    else { u = x / w + 0.5; v = y / h; }                            // the broad faces
+    uv[i * 2] = u; uv[i * 2 + 1] = v;
+  }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return g;
+}
 function roundedWallGeo(w, d, r, wall, h) {
   const s = roundedOutline(new THREE.Shape(), w, d, r);
   s.holes.push(roundedOutline(new THREE.Path(), w - wall * 2, d - wall * 2, Math.max(0.04, r - wall)));
   const g = new THREE.ExtrudeGeometry(s, { depth: h, bevelEnabled: false, curveSegments: 12 });
   g.rotateX(-Math.PI / 2);
-  return g;
+  return boxProjectUV(g, w, d, h);
 }
 // The seated lighter keeps the solid, perfectly-shaded body. The moment the
 // insert lifts out we swap in an open-topped shell of the same silhouette, so
