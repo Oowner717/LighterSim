@@ -671,6 +671,33 @@ camera.layers.enable(NOCC_LAYER);
 // mostly darkness while rounded edges catch defined light strips. A bright
 // generic room blows the chrome to white at normal incidence. Rebaked on
 // WebGL context restore (the PMREM target has no CPU-side copy to restore).
+// One alpha mask shared by every environment panel: opaque through the middle,
+// feathered to nothing at the border, with a gentle centre-to-edge falloff on
+// top so the face is not perfectly even either. Built per-pixel rather than with
+// ctx.filter blur, which is not dependable on older iOS Safari.
+let softPanelCache = null;
+function softPanelTex() {
+  if (softPanelCache) return softPanelCache;
+  const N = 128, FEATHER = 0.25;             // fraction of the half-width to fade over
+  const cv = document.createElement('canvas'); cv.width = cv.height = N;
+  const g = cv.getContext('2d');
+  const img = g.createImageData(N, N);
+  const ss = t => { const x = clamp01(t); return x * x * (3 - 2 * x); };
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    // 0 at the middle, 1 at the border, per axis
+    const dx = Math.abs((x + 0.5) / N - 0.5) * 2, dy = Math.abs((y + 0.5) / N - 0.5) * 2;
+    const edge = ss((1 - dx) / FEATHER) * ss((1 - dy) / FEATHER);
+    const dome = 1 - 0.20 * Math.max(dx, dy);   // the diffuser is not evenly lit
+    const i = (y * N + x) * 4;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = 255;
+    img.data[i + 3] = Math.round(255 * edge * dome);
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  softPanelCache = t;
+  return t;
+}
 let envRT = null;
 function bakeEnvironment() {
   const env = new THREE.Scene();
@@ -689,10 +716,27 @@ function bakeEnvironment() {
     { w: 16, h: 1.1, pos: [0, 4.5, 11], c: [0.9, 0.9, 0.95] },  // thin frontal band for the brushed face
     { w: 10, h: 6, pos: [0, -8, 4], c: [0.7, 0.7, 0.75] },      // floor bounce
   ];
+  // Every panel wears the same soft-edged falloff. A bare PlaneGeometry of
+  // constant colour is a hard-edged rectangle of constant brightness, and its
+  // mirror image in near-mirror metal is a hard-edged band of constant
+  // brightness -- which is exactly the razor-thin uniform white piping that ran
+  // along every rounded edge and read as a drawn outline rather than a
+  // reflection. A real softbox is brightest at its middle and feathers out at
+  // its edges, so its reflection has a bright core that fades along its length.
+  // The mask throws away 32% of each panel's area, and a metal lit only by its
+  // environment gets darker in proportion -- measured -6% on chrome and -14% on
+  // gunmetal, and gunmetal is exactly the finish that has been hard to read.
+  // Give it back. 1.48 is 1/mean(mask), so total emitted energy matches what the
+  // flat panels put out, while the peak lands at 1.45 * 1.48 = 2.15 -- under the
+  // 2.2 the comment above warns turns a mirrored panel into a bloom rectangle.
+  const PANEL_GAIN = 1.48;
+  const soft = softPanelTex();
   for (const p of panels) {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(p.w, p.h),
-      new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
-    m.material.color.setRGB(p.c[0], p.c[1], p.c[2]);
+      new THREE.MeshBasicMaterial({
+        map: soft, side: THREE.DoubleSide, transparent: true, depthWrite: false,
+      }));
+    m.material.color.setRGB(p.c[0] * PANEL_GAIN, p.c[1] * PANEL_GAIN, p.c[2] * PANEL_GAIN);
     m.position.set(p.pos[0], p.pos[1], p.pos[2]);
     m.lookAt(0, 3, 0);
     env.add(m);
