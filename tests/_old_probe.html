@@ -339,8 +339,8 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    "three": "./vendor-three/build/three.module.js",
+    "three/addons/": "./vendor-three/examples/jsm/"
   }
 }
 </script>
@@ -498,7 +498,6 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* ============================== TUNABLES ============================== */
 const CFG = {
@@ -1213,16 +1212,7 @@ function cottonWadGeo(w, h, d) {
 // of how tall the piece itself happens to be. yOff lifts a piece's local origin
 // to where it sits in the part; hTotal is the part's height.
 function boxProjectUV(g, w, d, h, yOff = 0, hTotal = h) {
-  // Use the geometry's OWN normals; never recompute them here. This used to open
-  // with computeVertexNormals(), which was harmless while only the extruded
-  // rings came through -- but RoundedBoxGeometry is non-indexed and ships
-  // hand-built smooth fillet normals, and computeVertexNormals() on non-indexed
-  // geometry writes one flat normal per triangle. Routing the solid case, the
-  // plinth, the lid body and the cap through here therefore faceted every
-  // rounded edge (measured: 100% of triangles flat, 98.8% of normals changed,
-  // up to 9.9 degrees) and painted a hard bright outline around the whole
-  // silhouette -- the opposite of what this function is for.
-  if (!g.attributes.normal) g.computeVertexNormals();
+  g.computeVertexNormals();
   const pos = g.attributes.position, nor = g.attributes.normal;
   const uv = new Float32Array(pos.count * 2);
   for (let i = 0; i < pos.count; i++) {
@@ -1243,15 +1233,7 @@ function roundedWallGeo(w, d, r, wall, h, yOff = 0, hTotal = h) {
   s.holes.push(roundedOutline(new THREE.Path(), w - wall * 2, d - wall * 2, Math.max(0.04, r - wall)));
   const g = new THREE.ExtrudeGeometry(s, { depth: h, bevelEnabled: false, curveSegments: 12 });
   g.rotateX(-Math.PI / 2);
-  boxProjectUV(g, w, d, h, yOff, hTotal);
-  // ExtrudeGeometry ships flat per-triangle normals, so the twelve segments of
-  // each corner arc read as twelve facets -- and on metal a facet boundary is a
-  // hard specular step, which is most of why the open lid's rim showed a hard
-  // white line. Crease at 60 deg: the corner arcs (7.5 deg a segment) average
-  // into a smooth curve, the rims and the wall's own 90 deg edges stay sharp.
-  // After the UV pass on purpose, so the projection still classifies faces by
-  // the same normals it always did.
-  return toCreasedNormals(g, Math.PI / 3);
+  return boxProjectUV(g, w, d, h, yOff, hTotal);
 }
 // A RoundedBoxGeometry needs the same treatment: on its own it spreads the tile
 // over its own height, which is only right for the piece that IS the whole part.
@@ -5456,7 +5438,6 @@ buildSwatches('swBack', 'back', BACKDROP_ORDER,
   });
 function openStyle() {
   stylePanel.classList.remove('drag', 'snap');
-  dragId = null; dragLive = false; dragDy = 0;   // never inherit a stuck gesture
   panelOffset(0);         // or it reopens wherever the last drag left it
   paintStyleSelection();
   styleEl.classList.add('show');
@@ -5535,8 +5516,10 @@ function endStyleDrag(e) {
 // never reached a panel-bound listener. dragId stayed set and every later
 // pointerdown bailed at the guard above -- the handle died for the session,
 // and reopening the sheet did not clear it.
-window.addEventListener('pointerup', endStyleDrag);
-window.addEventListener('pointercancel', endStyleDrag);
+stylePanel.addEventListener('pointerup', endStyleDrag);
+stylePanel.addEventListener('pointercancel', endStyleDrag);
+
+window.__drag = () => ({ id: dragId, live: dragLive, dy: dragDy });
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
 styleBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openStyle(); });
 // debug: fast-forward the wear systems so refills are testable without waiting

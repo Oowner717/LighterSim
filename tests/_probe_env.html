@@ -339,8 +339,8 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    "three": "./vendor-three/build/three.module.js",
+    "three/addons/": "./vendor-three/examples/jsm/"
   }
 }
 </script>
@@ -498,7 +498,6 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* ============================== TUNABLES ============================== */
 const CFG = {
@@ -654,7 +653,7 @@ const svcDoneBtn = document.getElementById('svcDone');
 svcDoneBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); Actions.svcSeat(); });
 
 const renderer = new THREE.WebGLRenderer({
-  canvas, antialias: true, powerPreference: 'high-performance',
+  canvas, antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance',
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, CFG.MAX_DPR));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1213,16 +1212,7 @@ function cottonWadGeo(w, h, d) {
 // of how tall the piece itself happens to be. yOff lifts a piece's local origin
 // to where it sits in the part; hTotal is the part's height.
 function boxProjectUV(g, w, d, h, yOff = 0, hTotal = h) {
-  // Use the geometry's OWN normals; never recompute them here. This used to open
-  // with computeVertexNormals(), which was harmless while only the extruded
-  // rings came through -- but RoundedBoxGeometry is non-indexed and ships
-  // hand-built smooth fillet normals, and computeVertexNormals() on non-indexed
-  // geometry writes one flat normal per triangle. Routing the solid case, the
-  // plinth, the lid body and the cap through here therefore faceted every
-  // rounded edge (measured: 100% of triangles flat, 98.8% of normals changed,
-  // up to 9.9 degrees) and painted a hard bright outline around the whole
-  // silhouette -- the opposite of what this function is for.
-  if (!g.attributes.normal) g.computeVertexNormals();
+  g.computeVertexNormals();
   const pos = g.attributes.position, nor = g.attributes.normal;
   const uv = new Float32Array(pos.count * 2);
   for (let i = 0; i < pos.count; i++) {
@@ -1243,15 +1233,7 @@ function roundedWallGeo(w, d, r, wall, h, yOff = 0, hTotal = h) {
   s.holes.push(roundedOutline(new THREE.Path(), w - wall * 2, d - wall * 2, Math.max(0.04, r - wall)));
   const g = new THREE.ExtrudeGeometry(s, { depth: h, bevelEnabled: false, curveSegments: 12 });
   g.rotateX(-Math.PI / 2);
-  boxProjectUV(g, w, d, h, yOff, hTotal);
-  // ExtrudeGeometry ships flat per-triangle normals, so the twelve segments of
-  // each corner arc read as twelve facets -- and on metal a facet boundary is a
-  // hard specular step, which is most of why the open lid's rim showed a hard
-  // white line. Crease at 60 deg: the corner arcs (7.5 deg a segment) average
-  // into a smooth curve, the rims and the wall's own 90 deg edges stay sharp.
-  // After the UV pass on purpose, so the projection still classifies faces by
-  // the same normals it always did.
-  return toCreasedNormals(g, Math.PI / 3);
+  return boxProjectUV(g, w, d, h, yOff, hTotal);
 }
 // A RoundedBoxGeometry needs the same treatment: on its own it spreads the tile
 // over its own height, which is only right for the piece that IS the whole part.
@@ -5928,6 +5910,7 @@ window.LIGHTER = {
   bendWick: setWickBend,
   straighten: () => { wick.straightening = true; },
   anchor: name => anchorScreen(name),
+  _camera: camera, _lidG: lidG, _lidShellG: lidShellG, _lidMesh: lidMesh, _keyLight: keyLight, _fillLight: fillLight, _matChrome: matChrome, _matCaseInner: matCaseInner, _matChromeDark: matChromeDark, get _envRT(){return envRT;}, _bake: bakeEnvironment, _THREE: THREE, _HINGE_X: HINGE_X,
   lidPivot: () => toScreen(lidG.getWorldPosition(_v1), {}),
   lidPoint: th => lidPointScreen(th ?? sim.lid.theta, {}),
   classifyAt: (x, y) => classify(x, y),

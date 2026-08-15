@@ -941,6 +941,40 @@ await settleLid(false);
     check('every case surface uses the same 0..1 UV convention', uv.length === 0, uv.join(', '));
   }
 
+  // On metal a facet boundary is a hard specular step, so a faceted rounded edge
+  // paints a bright outline round the whole silhouette. boxProjectUV used to open
+  // with computeVertexNormals(); RoundedBoxGeometry is NON-indexed and ships
+  // hand-built smooth fillet normals, and computeVertexNormals on non-indexed
+  // geometry writes one flat normal per triangle -- so routing the case body,
+  // plinth, lid body and cap through it faceted every one of them (measured 100%
+  // of triangles flat). A flat-shaded triangle is one whose three vertices share
+  // a normal, which is what this counts.
+  {
+    const shading = await L(`(() => {
+      const out = [];
+      LIGHTER.scene.traverse(o => {
+        if (!o.isMesh || o.material !== LIGHTER.mats.chrome) return;
+        const g = o.geometry, n = g.attributes.normal, pos = g.attributes.position;
+        if (!n) { out.push({ t: g.type, flatPct: 100 }); return; }
+        let tris = 0, flat = 0;
+        for (let i = 0; i + 2 < pos.count; i += 3) {
+          tris++;
+          if ([1, 2].every(k => Math.abs(n.getX(i) - n.getX(i + k)) < 1e-6
+              && Math.abs(n.getY(i) - n.getY(i + k)) < 1e-6
+              && Math.abs(n.getZ(i) - n.getZ(i + k)) < 1e-6)) flat++;
+        }
+        out.push({ t: g.type, flatPct: 100 * flat / tris });
+      });
+      return out;
+    })()`);
+    // the rings keep genuinely flat rim and wall faces, so they sit near 50;
+    // a fully faceted piece is 100, which is the regression
+    const bad = shading.filter(r => r.flatPct > 75)
+      .map(r => `${r.t}:${r.flatPct.toFixed(0)}%`);
+    check('the case keeps its smooth fillet normals, so edges are not faceted',
+      shading.length >= 6 && bad.length === 0, `${bad.join(' ')} (of ${shading.length})`);
+  }
+
   // Range is not scale. This check used to be a byte-for-byte copy of the one
   // above -- it asserted 0..1 again under a name that promised something else,
   // and so it passed happily while the 0.40-tall plinth crushed a whole tile
