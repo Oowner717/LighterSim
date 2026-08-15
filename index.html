@@ -509,7 +509,13 @@ const CFG = {
   FIT_HALF_W: 3.4,
   CAM_TARGET_Y: 3.45,
   ZOOM_MIN: 0.62, ZOOM_MAX: 1.9,
-  BLOOM_STRENGTH: 0.5, BLOOM_RADIUS: 0.72, BLOOM_THRESHOLD: 1.1, // HDR flame only, not chrome
+  // Measured, the old 0.5 / 0.72 / 1.1 was NOT "flame only": it lifted the whole
+  // frame by 9.3/255 and touched 13.3% of pixels by 16 or more, smearing every
+  // bright edge on the case -- the comment claimed the opposite of what it did.
+  // At 3.0 the threshold clears the metal entirely (whole-frame lift 1.9, 1.7%
+  // of pixels) while the flame looks the same, because the flame's peak HDR
+  // luminance is 1.5 and it was never clearing 1.1 by more than a hair either.
+  BLOOM_STRENGTH: 0.30, BLOOM_RADIUS: 0.40, BLOOM_THRESHOLD: 3.0,
   BLOOM_RES: 512,            // bloom buffer size: below this the halo goes blocky
   FPS_BLOOM_OFF: 45,         // sustained fps below this disables bloom
 
@@ -575,7 +581,13 @@ const CFG = {
   SVC_PITCH: 0.62,           // eye height while the insert is out, so its upturned face reads
   FPS_VOL_OFF: 26,           // sustained fps below this drops back to sprites
   FLAME_LIGHT: 8,            // point light intensity while LIT (11 bloomed orange smears onto the lid)
-  KEY_LIGHT: 2.6,            // camera-riding key: what actually makes a dark case readable
+  // Camera-riding key. It does NOT make dark cases bright -- measured over a
+  // full orbit, obsidian, carbon, gunmetal and navy all sit BELOW their backdrop
+  // at every yaw. What it buys is low VARIANCE: it holds the orbit's brightness
+  // swing under about 1.5x, where a world-anchored lamp of the same intensity
+  // swings far more and blows out on the corner fillets. See the note on
+  // aimCameraLights() for why moving it is gated on a richer environment.
+  KEY_LIGHT: 2.6,
   FILL_LIGHT: 0.85,          // cool counter-light so the shadow side is not black
   EMBER_LIFE: 12,            // s of unattended pilot before it dies
   TURB_TIME: 0.9,            // s of hard flicker after a fast swipe
@@ -698,12 +710,90 @@ function softPanelTex() {
   softPanelCache = t;
   return t;
 }
+// The room the metal stands in. A mirror finish shows you whatever surrounds it,
+// and what surrounded it was a constant 0.095 grey box -- so between the five
+// panel reflections there was nothing at all, and a polished face read as a flat
+// slab with lines drawn on it. Metal is legible because of the DARK shapes it
+// reflects as much as the bright ones: a horizon, a floor that is not the wall,
+// the dark gaps between light stands. One small equirectangular image supplies
+// all of it, built once at boot and blurred away by the PMREM anyway, so it
+// costs nothing per frame.
+let roomTexCache = null;
+function roomTex() {
+  if (roomTexCache) return roomTexCache;
+  const W = 128, H = 96;
+  // The room is a MODULATION of the flat 0.095 box it replaces, not a profile
+  // that merely averages to it. Structure and exposure are separate knobs: the
+  // modulation is normalised to a solid-angle-weighted mean of exactly 1, so
+  // ROOM_BASE alone sets how much light is in the room and ROOM_CONTRAST alone
+  // sets how much shape it has. At contrast 0 this is bit-for-bit the old box.
+  // Averaging the raw profile instead was not enough -- a vertical polished face
+  // samples the upper hemisphere far more than the floor, so a profile with the
+  // right mean but a dark zenith cost chrome 34% and gunmetal 52%.
+  const ROOM_BASE = 0.095, ROOM_CONTRAST = 0.62;
+  const horizon = az => 0.50 + 0.012 * Math.sin(az * 2) + 0.007 * Math.sin(az * 3 + 1.1);
+  const MASSES = [[0.62, 0.30, 0.42], [2.35, 0.22, 0.34], [4.10, 0.26, 0.46]];
+  const shape = (v, az) => {
+    const hz = horizon(az);
+    let m;
+    if (v < hz) { const t = v / hz; m = 0.82 + 0.52 * t * t; }        // wall, up to the horizon
+    else { const t = (v - hz) / (1 - hz); m = 0.34 + 1.02 * Math.exp(-t * 2.0); }   // floor bounce
+    // light stands and the dark gaps between them: the shapes that make a
+    // reflection read as a room rather than as a lit surface
+    for (const [c, w, d] of MASSES) {
+      let dz = Math.abs(az - c); if (dz > Math.PI) dz = Math.PI * 2 - dz;
+      if (dz < w) m *= 1 - d * (1 - dz / w) * (v < hz ? 1 : 0.35);
+    }
+    return m;
+  };
+  // solid-angle weighted mean of the modulation, so normalising it is exact
+  let acc = 0, wsum = 0;
+  for (let y = 0; y < H; y++) {
+    const v = (y + 0.5) / H, w = Math.sin(Math.PI * v);
+    for (let x = 0; x < W; x++) { acc += shape(v, (x + 0.5) / W * Math.PI * 2) * w; wsum += w; }
+  }
+  const norm = wsum / acc;
+  const enc = L => Math.round(255 * (L <= 0.0031308 ? 12.92 * L
+    : 1.055 * Math.pow(L, 1 / 2.4) - 0.055));
+
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const img = g.createImageData(W, H);
+  for (let y = 0; y < H; y++) {
+    const v = (y + 0.5) / H;
+    for (let x = 0; x < W; x++) {
+      const az = (x + 0.5) / W * Math.PI * 2;
+      const m = shape(v, az) * norm;
+      const R = ROOM_BASE * (1 + ROOM_CONTRAST * (m - 1));
+      const i = (y * W + x) * 4;
+      // faintly cool above the horizon, warm below, the way a real room is
+      const warm = v < horizon(az);
+      // ENCODE. R is linear radiance -- the same quantity the flat box carried
+      // as material.color.setRGB(0.095, ...), which is linear too. The texture
+      // is tagged sRGB, so writing R straight into the byte made the shader
+      // decode 0.095 as 0.0091 and the room came out a tenth as bright: chrome
+      // fell 36%, gunmetal 54%. Encode properly and the exposure lands where the
+      // normalisation says it should, with the bonus that sRGB spends its bits
+      // where this image lives, in the darks.
+      img.data[i] = enc(R * (warm ? 0.97 : 1.06));
+      img.data[i + 1] = enc(R);
+      img.data[i + 2] = enc(R * (warm ? 1.09 : 0.94));
+      img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.mapping = THREE.EquirectangularReflectionMapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  roomTexCache = t;
+  return t;
+}
 let envRT = null;
 function bakeEnvironment() {
   const env = new THREE.Scene();
-  const shell = new THREE.Mesh(new THREE.BoxGeometry(60, 60, 60),
-    new THREE.MeshBasicMaterial({ side: THREE.BackSide }));
-  shell.material.color.setRGB(0.095, 0.1, 0.11);
+  // a sphere, not a box: a box puts four hard vertical creases in every mirror
+  const shell = new THREE.Mesh(new THREE.SphereGeometry(30, 32, 24),
+    new THREE.MeshBasicMaterial({ side: THREE.BackSide, map: roomTex() }));
   env.add(shell);
   // Panel brightness stays near the bloom threshold on purpose: ACES flattens
   // the visible difference, but a 2.2 panel mirrored in polished metal lands
@@ -1032,15 +1122,23 @@ composer.addPass(new OutputPass());
 let bloomOn = true;
 
 /* ============================== MATERIALS ============================== */
+// Seeded, like every other procedural texture here. This used Math.random(), so
+// no two page loads shared a brush -- which meant no two renders of the same
+// build were comparable, and any A/B on the metal had to patch the generator
+// before it could measure anything. The grain is meant to be this lighter's
+// grain, not a fresh one each visit.
 function brushedRoughnessTex() {
   const cv = document.createElement('canvas'); cv.width = cv.height = 256;
   const g = cv.getContext('2d');
   g.fillStyle = 'rgb(110,110,110)'; g.fillRect(0, 0, 256, 256);
   for (let i = 0; i < 1500; i++) {
-    const x = Math.random() * 256, l = 30 + Math.random() * 200;
-    const v = 60 + Math.random() * 110 | 0;
+    const x = hashN(i * 1.7) * 256, l = 30 + hashN(i * 3.1 + 11) * 200;
+    const v = 60 + hashN(i * 5.3 + 23) * 110 | 0;
     g.strokeStyle = `rgba(${v},${v},${v},0.16)`;
-    g.beginPath(); g.moveTo(x, Math.random() * 256 - l / 2); g.lineTo(x, Math.random() * 256 + l / 2); g.stroke();
+    g.beginPath();
+    g.moveTo(x, hashN(i * 7.7 + 37) * 256 - l / 2);
+    g.lineTo(x, hashN(i * 11.9 + 53) * 256 + l / 2);
+    g.stroke();
   }
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -1404,7 +1502,13 @@ lidG.add(lidShellG);
 }
 { // insert shoulder fills the case mouth + dark inner floor
   const plate = new THREE.Mesh(
-    roundedPlanGeo(CFG.BODY_W - 0.16, CFG.BODY_D - 0.16, CFG.EDGE_R - 0.07, 0.1), matInsert);
+    // Inset 0.30, not 0.16. The lid and case never actually meet -- their EDGE_R
+    // fillets have already drawn the body in to 3.506 x 1.016 by the height this
+    // sits at -- and at 0.16 the shoulder stood PROUD of both on all four sides,
+    // so the bright strip you read as the seam was this plate's lit rim filling
+    // the joint with a third part. Tucked inside the silhouette it reads as a
+    // shoulder the lid closes over, which is what it is.
+    roundedPlanGeo(CFG.BODY_W - 0.30, CFG.BODY_D - 0.30, CFG.EDGE_R - 0.07, 0.1), matInsert);
   plate.position.set(0, CFG.BASE_H - 0.08, 0);
   insertG.add(plate);
   const floor = new THREE.Mesh(new THREE.BoxGeometry(CFG.CHIM_W - 0.14, 0.05, CFG.CHIM_D - 0.14), matDark);
