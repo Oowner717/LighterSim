@@ -894,9 +894,17 @@ await settleLid(false);
       await L(`LIGHTER.setFinish(${JSON.stringify(n)})`);
       const hex = await L('LIGHTER.mats.chromeDark.color.getHexString()');
       const [r, g, bl] = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
-      if (Math.min(r, g, bl) > 0xc8) bad.push(`${n}:${hex}`);
+      if (Math.min(r, g, bl) > 0xc8) bad.push(`${n}:white ${hex}`);
+      // Colour was only a third of it. Those same finishes write metalness and
+      // roughness for the map too -- six of the eight run metalness well under 1
+      // (tortoise and marble at 0) -- so taking the colour alone painted steel
+      // grey onto a dielectric and the knuckles came out as pale plastic pegs.
+      const met = await L('LIGHTER.mats.chromeDark.metalness');
+      const rgh = await L('LIGHTER.mats.chromeDark.roughness');
+      if (met < 0.9) bad.push(`${n}:metal ${met}`);
+      if (rgh > 0.8) bad.push(`${n}:rough ${rgh}`);
     }
-    check('map-driven finishes give the fittings a real colour, not a white multiplier',
+    check('map-driven finishes give the fittings real hardware, not orphaned multipliers',
       bad.length === 0, bad.join(' '));
   }
   // matChromeDark had roughnessMap pinned on at construction and applyFinish
@@ -1063,9 +1071,16 @@ check('no brand names anywhere user-visible', await L(
   check('the guide quotes the real number of finishes, flames and backdrops',
     shown === `${nFin},${nFlame},${nBack}` && nFin > 4 && nFlame > 4,
     `shows ${shown}, actually ${nFin},${nFlame},${nBack}`);
-  const how = await L(`document.querySelector('#guide .how').textContent`);
+  // By id, not `#guide .how` -- the guide has NINE .how paragraphs and
+  // querySelector returned the FIRST (the lid-drag one), so these regexes were
+  // matched against text that never contained either phrase and never could.
+  // Vacuously true whatever the appearance copy said, which is precisely the
+  // failure this check exists to catch. The positive assertion is the guard
+  // against the selector silently going stale again.
+  const how = await L(`document.getElementById('guideStyleHow').textContent`);
   check('and no longer describes a second button below the swatch',
-    !/below it/i.test(how) && !/those four/i.test(how), how.slice(0, 120));
+    /split disc/i.test(how) && !/below it/i.test(how) && !/those four/i.test(how),
+    how.slice(0, 120));
 }
 check('affiliation disclaimer present', await L(
   'document.getElementById("guideLegal").textContent.includes("Not affiliated")'));

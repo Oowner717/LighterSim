@@ -464,7 +464,7 @@
         <p>The same windproof works has been dressed in hundreds of finishes over the
           decades &mdash; polished chrome, matte lacquer, solid brass, blackened gunmetal
           &mdash; built to be serviced for a lifetime rather than thrown away.</p>
-        <p class="how">Here: tap the split disc (top left) &mdash; case on its left half,
+        <p class="how" id="guideStyleHow">Here: tap the split disc (top left) &mdash; case on its left half,
           flame on its right &mdash; to open the appearance sheet. It holds
           <b><span id="guideNFin">?</span> case finishes</b>, <b><span id="guideNFlame">?</span> flame
           colours and effects</b> and <b><span id="guideNBack">?</span> backdrops</b>. Close it with
@@ -727,8 +727,10 @@ function bakeEnvironment() {
   // environment gets darker in proportion -- measured -6% on chrome and -14% on
   // gunmetal, and gunmetal is exactly the finish that has been hard to read.
   // Give it back. 1.48 is 1/mean(mask), so total emitted energy matches what the
-  // flat panels put out, while the peak lands at 1.45 * 1.48 = 2.15 -- under the
-  // 2.2 the comment above warns turns a mirrored panel into a bloom rectangle.
+  // flat panels put out, while the peak lands at 1.48 * 1.48 = 2.19 -- the key
+  // panel's blue channel is its brightest, and 2.19 is measured by float readback
+  // of the baked cube. Still under the 2.2 the comment above warns turns a
+  // mirrored panel into a bloom rectangle, but only just.
   const PANEL_GAIN = 1.48;
   const soft = softPanelTex();
   for (const p of panels) {
@@ -1079,12 +1081,16 @@ const matChromeDark = new THREE.MeshStandardMaterial({
   color: 0xb8c0c7, metalness: 1.0, roughness: 0.36, envMapIntensity: 1.0,
 });
 // Hinge knuckles and the lid cam when the finish's colour lives in a MAP the
-// fittings cannot wear. Those finishes set dark.color near-white on purpose --
-// it is a multiplier for the map -- so using it as a flat colour turned the
-// knuckles into bright white nubs down the seam of, say, a verdigris case.
-// Plain hardware on a painted or patinated body is also what the real thing
-// has. Matches the insert's metal, which is the same "unfinished part" read.
-const HW_STEEL = 0x9aa1a9;
+// fittings cannot wear. Colour is not the only field those finishes write for
+// the map's benefit: `metal` and `rough` are too. Six of the eight run metalness
+// well under 1 (tortoise and marble at 0, camo 0.15, livery 0.3, patina 0.5,
+// rust 0.65) because the map supplies the surface, and patina and rust set
+// roughness to a literal 1.0 that only ever made sense multiplied by the corrode
+// map. Take colour alone and the fittings came out as flat pale-grey pegs --
+// dielectric, no metallic gradient -- sitting against insert parts of the
+// identical colour that plainly are metal. So the whole material is described
+// here, not just its colour: plain steel hardware, the same read as the insert.
+const HW = { color: 0x9aa1a9, metal: 1.0, rough: 0.42 };
 const matSteel = new THREE.MeshStandardMaterial({
   color: 0xc8ccd2, metalness: 1.0, roughness: 0.55, bumpMap: knurlTex(), bumpScale: 1.3, envMapIntensity: 1.1,
 });
@@ -1783,7 +1789,10 @@ const sim = {
   upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
   gWorld: new THREE.Vector3(0, -1, 0),
   timers: [],
-  disc: { open: false, lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false, flameCol: false, backdrop: false, service: false, bend: false },
+  // one flag per discoverable trick, each with a HINTS entry that reads it.
+  // `open` and `backdrop` used to live here too, written but never read by any
+  // hint -- the writes went when they were found dead, and these went with them.
+  disc: { lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false, flameCol: false, service: false, bend: false },
   counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0, duds: 0, refills: 0, services: 0 },
 };
 // discovered tricks persist, so returning players skip the beginner hints
@@ -2316,20 +2325,23 @@ function applyFinish(name) {
   // a quilt figure is nonsense -- so they take the finish's colour and polish
   // and none of its maps.
   for (const [m, p, withMaps] of [[matChrome, fp.chrome, true], [matChromeDark, fp.dark, false]]) {
-    m.roughness = p.rough;
-    m.metalness = p.metal;
     m.envMapIntensity = p.env;
     if (!withMaps) {
-      // A finish whose colour comes from a map declares a near-white `color`
-      // as that map's multiplier, not as a colour -- so the fittings take plain
-      // hardware steel instead of that white. They still honour the plain
-      // brushed grain when the finish asks for it; a named design never
-      // reaches them, which is the whole point of the split.
-      m.color.setHex(p.tint || p.corrode ? (p.hw ?? HW_STEEL) : p.color);
+      // A finish whose colour, metalness and roughness are all written for a map
+      // the fittings cannot wear describes nothing usable here, so they fall back
+      // to plain hardware entire rather than wearing three orphaned multipliers.
+      // A finish that paints its fittings directly is honoured as written; only
+      // the plain brushed grain ever reaches them, never a named design.
+      const mapped = p.tint || p.corrode;
+      m.color.setHex(mapped ? HW.color : p.color);
+      m.metalness = mapped ? HW.metal : p.metal;
+      m.roughness = mapped ? HW.rough : p.rough;
       const grain = p.map === true ? brushed : null;
       if (m.roughnessMap !== grain) { m.roughnessMap = grain; m.needsUpdate = true; }
       continue;
     }
+    m.roughness = p.rough;
+    m.metalness = p.metal;
     m.color.setHex(p.color);
     // `map` is true for the plain brushed grain, or names a design pattern
     // `corrode` supplies albedo, roughness AND normal from a single height field,

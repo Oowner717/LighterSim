@@ -1,16 +1,14 @@
-tests/node_modules/
-tests/vendor-three
-tests/package-lock.json
-
-# Everything in tests/ is scratch unless it is named here. Agents and probes
-# write throwaway copies of the app and the scripts that drive them straight
-# into tests/ so the static server can reach them, and they do not follow any
-# one naming convention -- pattern-matching their names lost that race twice.
-# So: ignore the shapes wholesale and allowlist the files that are really ours.
-tests/*.html
-tests/*.mjs
-tests/*.png
-tests/sw.js
+# Everything under tests/ is scratch unless it is named here.
+#
+# Agents and probes write throwaway copies of the app, the scripts that drive
+# them, and whole directories of comparison screenshots straight into tests/ so
+# the static server can reach them. They follow no naming convention: pattern
+# rules chased _*.mjs, then _*.html, then *.png, and each time something arrived
+# in a shape the rules did not cover -- most recently anshots/, aoshots/ and
+# gzshots/, which a `git add -A` swept into a commit. Allowlisting is the only
+# rule that does not lose that race.
+tests/*
 !tests/build-local.mjs
+!tests/package.json
 !tests/profile.mjs
 !tests/test.mjs
