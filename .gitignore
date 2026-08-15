@@ -1,11 +1,16 @@
 tests/node_modules/
 tests/vendor-three
-tests/index.html
-tests/sw.js
-tests/*.png
 tests/package-lock.json
-tests/index-base.html
 
-# survey/probe scratch scripts: agents write these into tests/ while exploring
-tests/_*.mjs
+# Everything in tests/ is scratch unless it is named here. Agents and probes
+# write throwaway copies of the app and the scripts that drive them straight
+# into tests/ so the static server can reach them, and they do not follow any
+# one naming convention -- pattern-matching their names lost that race twice.
+# So: ignore the shapes wholesale and allowlist the files that are really ours.
+tests/*.html
+tests/*.mjs
 tests/*.png
+tests/sw.js
+!tests/build-local.mjs
+!tests/profile.mjs
+!tests/test.mjs
