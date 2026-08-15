@@ -727,10 +727,30 @@ await settleLid(false);
   const readFx = async () => L(`(() => { const u = LIGHTER.mats.flameVol.uniforms;
     return ${JSON.stringify(fxUniforms)}.map(k => {
       const v = u[k].value; return v.toArray ? Math.max(...v.toArray().map(Math.abs)) : Math.abs(v); }); })()`);
+  // These uniforms are only written while the volume is actually rendering, so
+  // the flame has to be LIT for any of it to mean anything. It used to tolerate
+  // not lighting (`.catch(() => {})`), which made the zero-check pass on a
+  // material nobody had touched -- vacuously true, whatever the code did.
+  await L('(LIGHTER.closeStyle && LIGHTER.closeStyle(), 0)').catch(() => {});
+  await page.evaluate(() => document.getElementById('styleClose')?.click());
+  await page.waitForTimeout(300);
+  await settleLid(true);
   await L('LIGHTER.setFlameCol("classic")');
-  await waitL('LIGHTER.state === "LIT"', 8000).catch(() => {});
+  await lightIt();
+  await waitL('LIGHTER.volActive === true', 10000);
   await page.waitForTimeout(400);
   check('a plain flame leaves every effect uniform at zero',
+    (await readFx()).every(v => v === 0), JSON.stringify(await readFx()));
+  // mats.flameVol used to be a boot snapshot of the plain program while the
+  // render loop swapped the mesh between two materials, so this read a material
+  // nothing ever writes -- the zero-check above could not have failed.
+  await L('LIGHTER.setFlameCol("cinder")');
+  await page.waitForTimeout(600);
+  check('the debug flame handle follows the program swap',
+    (await readFx()).some(v => v > 0), JSON.stringify(await readFx()));
+  await L('LIGHTER.setFlameCol("classic")');
+  await page.waitForTimeout(600);
+  check('and swaps back to a plain program with the effects off',
     (await readFx()).every(v => v === 0), JSON.stringify(await readFx()));
   for (const [name, key] of [['cinder', 'spark'], ['vortex', 'swirl'], ['strata', 'toon'],
                              ['torch', 'core'], ['sodium', 'shell'], ['wisp', 'pulse'],
@@ -738,6 +758,34 @@ await settleLid(false);
     const fx = await L(`JSON.stringify(LIGHTER.flameFx(${JSON.stringify(name)}))`);
     check(`${name} carries its effect`, fx && JSON.parse(fx) && JSON.parse(fx)[key] !== undefined, fx);
   }
+  // The volume renders along its proxy box's local +Y, so that axis has to track
+  // the flame's direction. The basis was built left-handed -- determinant -1 --
+  // and setFromRotationMatrix silently returns a non-unit quaternion for a
+  // reflection, so the box stayed upright while the flame leaned: measured up to
+  // 180 deg out, and compose() shrank the box on top of that. It looked correct
+  // at rest, which is exactly why it survived. Check it BENT, not upright.
+  await L('LIGHTER.setFlameCol("classic")');
+  await waitL('LIGHTER.volActive === true', 10000);
+  check('the flame box tracks the flame at rest',
+    await L('LIGHTER.flameBoxErrDeg') < 1,
+    `${(await L('LIGHTER.flameBoxErrDeg')).toFixed(1)} deg`);
+  let worstBox = 0;
+  for (const [bx, bz] of [[0.9, 0], [-0.9, 0], [0, 0.9], [0.6, -0.7], [0, -1.2]]) {
+    await L(`(LIGHTER.sim.flame.bend.set(${bx}, 0, ${bz}), 0)`);
+    await page.waitForTimeout(160);
+    worstBox = Math.max(worstBox, await L('LIGHTER.flameBoxErrDeg'));
+  }
+  await L('(LIGHTER.sim.flame.bend.set(0, 0, 0), 0)');
+  await page.waitForTimeout(200);
+  check('and keeps tracking it once it leans', worstBox < 1,
+    `worst ${worstBox.toFixed(1)} deg off across five lean directions`);
+
+  // put the flame out and hand the sheet back open, which is how this section
+  // found things -- the uniform checks above had to close it and light up
+  await settleLid(false);
+  await waitL('LIGHTER.state === "OUT"', 10000);
+  await page.click('#styleBtn');
+  await page.waitForTimeout(400);
 
   await L('(LIGHTER.setFinish("chrome"), LIGHTER.setFlameCol("classic"), LIGHTER.setBackdrop("midnight"), 0)');
   check('a plain metal drops the normal map again',
@@ -782,6 +830,38 @@ await settleLid(false);
   await reopen();
   await dragSheet(38);                      // not far enough to mean it
   check('a small drag springs back instead', await L('LIGHTER.styleOpen') === true);
+
+  // A press that slides sideways off the sheet and releases over the scrim used
+  // to leave dragId set forever: capture is only taken once the drag goes live,
+  // so the release never reached a panel-bound listener, and every later
+  // pointerdown bailed out. The handle died for the rest of the session --
+  // reopening did not clear it either.
+  await page.evaluate(() => {
+    const panel = document.getElementById('stylePanel'), grab = document.getElementById('styleGrab');
+    const b = grab.getBoundingClientRect();
+    const mk = (t, x, y, el) => (el || window).dispatchEvent(new PointerEvent(t, {
+      pointerId: 91, clientX: x, clientY: y, pointerType: 'touch',
+      bubbles: true, cancelable: true, isPrimary: true }));
+    mk('pointerdown', b.x + b.width / 2, b.y + b.height / 2, grab);
+    mk('pointermove', 4, b.y + b.height / 2 + 2, panel);   // sideways, under the 6px threshold
+    mk('pointerup', 4, b.y + b.height / 2 + 2);            // released off the panel
+  });
+  await page.waitForTimeout(120);
+  await dragSheet(210);
+  check('a drag released off the sheet does not jam the handle',
+    await L('LIGHTER.styleOpen') === false, 'handle stopped responding');
+
+  // The wheel handler exempted the guide but not this sheet, which came later:
+  // the wheel both zoomed the camera behind an open modal and, because the same
+  // preventDefault cancelled the native scroll, made the swatch list unreachable
+  // with a mouse.
+  await reopen();
+  const z0 = await L('LIGHTER.cam.zoom');
+  await page.mouse.move(170, 500);
+  await page.mouse.wheel(0, 120);
+  await page.waitForTimeout(200);
+  check('the appearance sheet blocks wheel zoom the way the guide does',
+    await L('LIGHTER.cam.zoom') === z0, `zoom ${z0} -> ${await L('LIGHTER.cam.zoom')}`);
   await page.click('#styleClose');
   await page.waitForTimeout(300);
 
@@ -804,7 +884,35 @@ await settleLid(false);
       `${a.ins} / ${b.ins} / ${c.ins}`);
     check('no design map ever reaches the insert',
       a.insMap === false && b.insMap === false && c.insMap === false);
-    check('no design map reaches the hinge and cam either',
+    // Eight finishes carry their colour in an albedo MAP and set dark.color
+  // near-white as that map's multiplier. The fittings cannot wear the map, so
+  // using that white as a flat colour turned the hinge knuckles into bright
+  // white nubs down the seam of a verdigris or a tortoiseshell case.
+  {
+    const bad = [];
+    for (const n of ['patina', 'rust', 'tortoise', 'marble', 'camo', 'fireblue', 'meteorite', 'livery']) {
+      await L(`LIGHTER.setFinish(${JSON.stringify(n)})`);
+      const hex = await L('LIGHTER.mats.chromeDark.color.getHexString()');
+      const [r, g, bl] = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
+      if (Math.min(r, g, bl) > 0xc8) bad.push(`${n}:${hex}`);
+    }
+    check('map-driven finishes give the fittings a real colour, not a white multiplier',
+      bad.length === 0, bad.join(' '));
+  }
+  // matChromeDark had roughnessMap pinned on at construction and applyFinish
+  // never reassigned it, so every finish's dark.map was dead data and the
+  // fittings wore brushed grain on all 24 -- including matte, which asks for none.
+  {
+    await L('LIGHTER.setFinish("matte")');
+    const off = await L('!!LIGHTER.mats.chromeDark.roughnessMap');
+    await L('LIGHTER.setFinish("chrome")');
+    const on = await L('!!LIGHTER.mats.chromeDark.roughnessMap');
+    check('the fittings honour each finish\'s grain flag', off === false && on === true,
+      `matte=${off} chrome=${on}`);
+  }
+  await L('LIGHTER.setFinish("chrome")');
+
+  check('no design map reaches the hinge and cam either',
       a.hwMap === false && b.hwMap === false && c.hwMap === false);
     await L('LIGHTER.setFinish("chrome")');
   }
@@ -833,28 +941,49 @@ await settleLid(false);
     check('every case surface uses the same 0..1 UV convention', uv.length === 0, uv.join(', '));
   }
 
-  // The case swaps between a solid body and an open shell when the insert comes
-  // out, and they are different geometry classes: RoundedBoxGeometry maps 0..1
-  // per face, ExtrudeGeometry maps straight off world position. That left the
-  // shell spanning -1.90..1.90 by -2.85..1.00, so the design visibly resized the
-  // instant the insert lifted. Every surface that can wear a design has to agree.
+  // Range is not scale. This check used to be a byte-for-byte copy of the one
+  // above -- it asserted 0..1 again under a name that promised something else,
+  // and so it passed happily while the 0.40-tall plinth crushed a whole tile
+  // into the bottom of the case at 13.7x the frequency of the piece beside it,
+  // and the lid's cap did the same at 2.7x. A short piece with a legitimate
+  // 0..1 v is exactly the bug. Measure the SCALE: world units of height per
+  // unit of v, on the broad faces where the design actually reads. Every piece
+  // of the case must agree on BASE_H and every piece of the lid on LID_H.
   {
-    const uv = await L(`(() => {
-      const bad = [];
+    const scale = await L(`(() => {
+      const rows = [];
+      LIGHTER.scene.updateMatrixWorld(true);
       LIGHTER.scene.traverse(o => {
         if (!o.isMesh || o.material !== LIGHTER.mats.chrome) return;
-        const a = o.geometry.attributes.uv;
-        if (!a) { bad.push(o.geometry.type + ':no-uv'); return; }
-        let lo = 1e9, hi = -1e9;
-        for (let i = 0; i < a.count; i++) {
-          lo = Math.min(lo, a.getX(i), a.getY(i));
-          hi = Math.max(hi, a.getX(i), a.getY(i));
+        const g = o.geometry, pos = g.attributes.position, uv = g.attributes.uv;
+        if (!uv) { rows.push({ t: g.type, err: 'no-uv' }); return; }
+        if (!g.attributes.normal) g.computeVertexNormals();
+        const nor = g.attributes.normal, e = o.matrixWorld.elements;
+        let yLo = 1e9, yHi = -1e9, vLo = 1e9, vHi = -1e9, n = 0;
+        for (let i = 0; i < pos.count; i++) {
+          const nx = Math.abs(nor.getX(i)), ny = Math.abs(nor.getY(i)), nz = Math.abs(nor.getZ(i));
+          if (!(nz > nx && nz > ny)) continue;                  // broad faces only
+          const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+          const wy = e[1] * x + e[5] * y + e[9] * z + e[13];
+          const vv = uv.getY(i);
+          if (wy < yLo) yLo = wy; if (wy > yHi) yHi = wy;
+          if (vv < vLo) vLo = vv; if (vv > vHi) vHi = vv;
+          n++;
         }
-        if (lo < -0.01 || hi > 1.01) bad.push(o.geometry.type + ':' + lo.toFixed(2) + '..' + hi.toFixed(2));
+        if (!n || vHi - vLo < 1e-4) return;
+        rows.push({ t: g.type, y: yLo, upv: (yHi - yLo) / (vHi - vLo) });
       });
-      return bad;
+      return rows;
     })()`);
-    check('every case surface maps the design at the same scale', uv.length === 0, uv.join(' '));
+    const BASE_H = await L('LIGHTER.CFG.BASE_H'), LID_H = await L('LIGHTER.CFG.LID_H');
+    // the lid sits above the case, so its pieces are the ones starting high up
+    const bad = scale.filter(r => {
+      if (r.err) return true;
+      const want = r.y > BASE_H - 0.5 ? LID_H : BASE_H;
+      return Math.abs(r.upv - want) > 0.02 * want;
+    }).map(r => `${r.t}@${(r.y || 0).toFixed(2)}:${r.err || r.upv.toFixed(2)}`);
+    check('every case surface maps the design at the same scale',
+      scale.length >= 6 && bad.length === 0, `${bad.join(' ')} (of ${scale.length})`);
   }
 
   // the retired press-and-hold gesture must no longer swap anything
@@ -888,6 +1017,22 @@ check('no brand names anywhere user-visible', await L(
   `!document.body.innerText.includes("Zippo") && !document.title.includes("Zippo")
    && !document.getElementById("infoBtn").getAttribute("aria-label").includes("Zippo")
    && !document.getElementById("guide").getAttribute("aria-label").includes("Zippo")`));
+// The copy claimed four finishes and four flames, and a second button "below"
+// the swatch, long after both were collapsed into one sheet holding 24 and 17.
+// Counts come from the live lists now, so the paragraph cannot drift again.
+{
+  const nFin = await L('LIGHTER.finishCount'), nFlame = await L('LIGHTER.flameCount');
+  const nBack = await L('LIGHTER.backdropCount');
+  const shown = await L(`[document.getElementById('guideNFin').textContent,
+    document.getElementById('guideNFlame').textContent,
+    document.getElementById('guideNBack').textContent].join(',')`);
+  check('the guide quotes the real number of finishes, flames and backdrops',
+    shown === `${nFin},${nFlame},${nBack}` && nFin > 4 && nFlame > 4,
+    `shows ${shown}, actually ${nFin},${nFlame},${nBack}`);
+  const how = await L(`document.querySelector('#guide .how').textContent`);
+  check('and no longer describes a second button below the swatch',
+    !/below it/i.test(how) && !/those four/i.test(how), how.slice(0, 120));
+}
 check('affiliation disclaimer present', await L(
   'document.getElementById("guideLegal").textContent.includes("Not affiliated")'));
 check('fuel gauge tracks the tank', await L('document.getElementById("gFuel").style.width') === '37%');

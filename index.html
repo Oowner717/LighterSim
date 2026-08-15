@@ -243,7 +243,7 @@
     letter-spacing: 0.13em; text-transform: uppercase;
     color: rgba(206, 216, 226, 0.55);
   }
-  /* auto-fill, so fourteen swatches reflow instead of overflowing a narrow phone */
+  /* auto-fill, so the swatches reflow instead of overflowing a narrow phone */
   .swgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 9px; }
   .sw {
     position: relative;
@@ -464,9 +464,12 @@
         <p>The same windproof works has been dressed in hundreds of finishes over the
           decades &mdash; polished chrome, matte lacquer, solid brass, blackened gunmetal
           &mdash; built to be serviced for a lifetime rather than thrown away.</p>
-        <p class="how">Here: tap the round metal swatch (top left) to swap between those four
-          finishes. Below it, the flame-drop button tints the flame itself &mdash; classic,
-          blue, emerald or violet. That one is pure fiction: a real one burns as it burns.</p>
+        <p class="how">Here: tap the split disc (top left) &mdash; case on its left half,
+          flame on its right &mdash; to open the appearance sheet. It holds
+          <b><span id="guideNFin">?</span> case finishes</b>, <b><span id="guideNFlame">?</span> flame
+          colours and effects</b> and <b><span id="guideNBack">?</span> backdrops</b>. Close it with
+          the &times;, a tap outside, or by sliding it back down. The flame colours are pure
+          fiction: a real one burns as it burns.</p>
       </section>
       <p id="guideLegal">An original simulation of a classic windproof lighter.
         Not affiliated with or endorsed by any lighter manufacturer.</p>
@@ -976,7 +979,6 @@ const bloomPass = new UnrealBloomPass(new THREE.Vector2(CFG.BLOOM_RES, CFG.BLOOM
     const s = Math.min(1, CFG.BLOOM_RES / Math.max(1, Math.max(w, h)));
     orig(Math.max(8, Math.round(w * s)), Math.max(8, Math.round(h * s)));
   };
-  bloomPass.setSize(CFG.BLOOM_RES, CFG.BLOOM_RES);
 }
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
@@ -1024,9 +1026,20 @@ const matChrome = new THREE.MeshStandardMaterial({
 const matInsertMetal = new THREE.MeshStandardMaterial({
   color: 0x9aa1a9, metalness: 1.0, roughness: 0.42, envMapIntensity: 1.0,
 });
+// No roughnessMap here any more. It used to be pinned on at construction and
+// applyFinish never reassigned it, so every finish's `dark.map` was dead data
+// and the fittings wore brushed grain on all 24 -- including matte, the one
+// finish that explicitly asks for none. applyFinish sets it per finish now.
 const matChromeDark = new THREE.MeshStandardMaterial({
-  color: 0xb8c0c7, metalness: 1.0, roughness: 0.36, roughnessMap: brushed, envMapIntensity: 1.0,
+  color: 0xb8c0c7, metalness: 1.0, roughness: 0.36, envMapIntensity: 1.0,
 });
+// Hinge knuckles and the lid cam when the finish's colour lives in a MAP the
+// fittings cannot wear. Those finishes set dark.color near-white on purpose --
+// it is a multiplier for the map -- so using it as a flat colour turned the
+// knuckles into bright white nubs down the seam of, say, a verdigris case.
+// Plain hardware on a painted or patinated body is also what the real thing
+// has. Matches the insert's metal, which is the same "unfinished part" read.
+const HW_STEEL = 0x9aa1a9;
 const matSteel = new THREE.MeshStandardMaterial({
   color: 0xc8ccd2, metalness: 1.0, roughness: 0.55, bumpMap: knurlTex(), bumpScale: 1.3, envMapIntensity: 1.1,
 });
@@ -1180,15 +1193,25 @@ function cottonWadGeo(w, h, d) {
   g.userData.cotton = true;   // lets probes find the wad without a global handle
   return g;
 }
-// the same profile as a wall ring: an open-topped shell you can see down into
-// ExtrudeGeometry maps its side walls straight off world position, so this
-// geometry came out with UVs spanning -1.90..1.90 by -2.85..1.00 while the solid
-// RoundedBoxGeometry it swaps with spans 0..1. Same texture, ~4x the scale and
-// offset: the case design visibly resized the instant the insert lifted out, and
-// the lid's did the same on opening. Reproject onto the box's convention -- 0..1
-// across whichever face a vertex looks at, 0..1 up the height -- so the two
-// halves of the swap agree.
-function boxProjectUV(g, w, d, h) {
+// ONE mapping for every piece of the case, so the design cannot change scale
+// when a piece is swapped for another. Two separate bugs fed this:
+//
+//   ExtrudeGeometry maps side walls straight off world position, so the shell
+//   rings came out spanning -1.90..1.90 by -2.85..1.00 against the solid box's
+//   0..1 -- roughly 4x the scale, and offset.
+//
+//   RoundedBoxGeometry arc-length-parameterises v across its OWN height, so a
+//   short piece crushes the whole tile into its own thickness. Reprojecting only
+//   the rings left that half unfixed and it was the worse half: measured, the
+//   0.40-tall plinth ran 0.29 world units per v against the solid case's 4.02 --
+//   a 13.7x jump on the bottom of the case the moment the insert lifted -- and
+//   the lid's 0.72 cap ran 0.54 against the lid body's 1.44.
+//
+// So v is not "0..1 up this piece". It is height within the PART -- case or lid
+// -- over that part's full height, which every piece of it agrees on regardless
+// of how tall the piece itself happens to be. yOff lifts a piece's local origin
+// to where it sits in the part; hTotal is the part's height.
+function boxProjectUV(g, w, d, h, yOff = 0, hTotal = h) {
   g.computeVertexNormals();
   const pos = g.attributes.position, nor = g.attributes.normal;
   const uv = new Float32Array(pos.count * 2);
@@ -1196,27 +1219,33 @@ function boxProjectUV(g, w, d, h) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
     const nx = Math.abs(nor.getX(i)), ny = Math.abs(nor.getY(i)), nz = Math.abs(nor.getZ(i));
     let u, v;
+    const vy = (y + yOff) / hTotal;                                // height within the PART
     if (ny > nx && ny > nz) { u = x / w + 0.5; v = z / d + 0.5; }   // the thin rims
-    else if (nx >= nz) { u = z / d + 0.5; v = y / h; }              // the narrow ends
-    else { u = x / w + 0.5; v = y / h; }                            // the broad faces
+    else if (nx >= nz) { u = z / d + 0.5; v = vy; }                 // the narrow ends
+    else { u = x / w + 0.5; v = vy; }                               // the broad faces
     uv[i * 2] = u; uv[i * 2 + 1] = v;
   }
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   return g;
 }
-function roundedWallGeo(w, d, r, wall, h) {
+function roundedWallGeo(w, d, r, wall, h, yOff = 0, hTotal = h) {
   const s = roundedOutline(new THREE.Shape(), w, d, r);
   s.holes.push(roundedOutline(new THREE.Path(), w - wall * 2, d - wall * 2, Math.max(0.04, r - wall)));
   const g = new THREE.ExtrudeGeometry(s, { depth: h, bevelEnabled: false, curveSegments: 12 });
   g.rotateX(-Math.PI / 2);
-  return boxProjectUV(g, w, d, h);
+  return boxProjectUV(g, w, d, h, yOff, hTotal);
+}
+// A RoundedBoxGeometry needs the same treatment: on its own it spreads the tile
+// over its own height, which is only right for the piece that IS the whole part.
+function boxGeo(w, h, d, r, yOff, hTotal) {
+  return boxProjectUV(new RoundedBoxGeometry(w, h, d, 4, r), w, d, h, yOff, hTotal);
 }
 // The seated lighter keeps the solid, perfectly-shaded body. The moment the
 // insert lifts out we swap in an open-topped shell of the same silhouette, so
 // you can see down into a real cavity instead of at a blank face.
 const CAVITY_FLOOR = 0.40, CASE_WALL = 0.07;
 const caseSolid = new THREE.Mesh(
-  new RoundedBoxGeometry(CFG.BODY_W, CFG.BASE_H, CFG.BODY_D, 4, CFG.EDGE_R), matChrome);
+  boxGeo(CFG.BODY_W, CFG.BASE_H, CFG.BODY_D, CFG.EDGE_R, CFG.BASE_H / 2, CFG.BASE_H), matChrome);
 caseSolid.position.y = CFG.BASE_H / 2;
 caseG.add(caseSolid);
 const caseShellG = new THREE.Group();
@@ -1224,11 +1253,12 @@ caseShellG.visible = false;
 caseG.add(caseShellG);
 {
   const plinth = new THREE.Mesh(
-    new RoundedBoxGeometry(CFG.BODY_W, CAVITY_FLOOR, CFG.BODY_D, 4, 0.2), matChrome);
+    boxGeo(CFG.BODY_W, CAVITY_FLOOR, CFG.BODY_D, 0.2, CAVITY_FLOOR / 2, CFG.BASE_H), matChrome);
   plinth.position.y = CAVITY_FLOOR / 2;
   caseShellG.add(plinth);
   const walls = new THREE.Mesh(
-    roundedWallGeo(CFG.BODY_W, CFG.BODY_D, CFG.EDGE_R, CASE_WALL, CFG.BASE_H - 0.35), matChrome);
+    roundedWallGeo(CFG.BODY_W, CFG.BODY_D, CFG.EDGE_R, CASE_WALL, CFG.BASE_H - 0.35,
+      0.35, CFG.BASE_H), matChrome);
   walls.position.y = 0.35;
   caseShellG.add(walls);
   // inner faces + floor: lighter steel so the cavity catches light and reads
@@ -1247,7 +1277,7 @@ caseG.add(caseShellG);
 // rounded body; once it cracks open we show a hollow shell so you look up
 // into a real stamped-metal cavity instead of a flat black plate.
 const lidMesh = new THREE.Mesh(
-  new RoundedBoxGeometry(CFG.BODY_W, CFG.LID_H, CFG.BODY_D, 4, CFG.EDGE_R), matChrome);
+  boxGeo(CFG.BODY_W, CFG.LID_H, CFG.BODY_D, CFG.EDGE_R, CFG.LID_H / 2, CFG.LID_H), matChrome);
 lidMesh.position.set(-HINGE_X, CFG.LID_H / 2, 0);
 lidG.add(lidMesh);   // stays the raycast target for lid taps even while hidden
 const lidShellG = new THREE.Group();
@@ -1257,11 +1287,12 @@ lidG.add(lidShellG);
 {
   const capH = 0.72;   // tall enough that the walls meet its flat mid-band,
   const cap = new THREE.Mesh(                       // not its rounded bottom edge
-    new RoundedBoxGeometry(CFG.BODY_W, capH, CFG.BODY_D, 4, CFG.EDGE_R), matChrome);
+    boxGeo(CFG.BODY_W, capH, CFG.BODY_D, CFG.EDGE_R, CFG.LID_H - capH / 2, CFG.LID_H), matChrome);
   cap.position.y = CFG.LID_H - capH / 2;
   lidShellG.add(cap);
   const walls = new THREE.Mesh(
-    roundedWallGeo(CFG.BODY_W, CFG.BODY_D, CFG.EDGE_R, CASE_WALL, CFG.LID_H - capH / 2), matChrome);
+    roundedWallGeo(CFG.BODY_W, CFG.BODY_D, CFG.EDGE_R, CASE_WALL, CFG.LID_H - capH / 2,
+      0, CFG.LID_H), matChrome);
   lidShellG.add(walls);
   const liner = new THREE.Mesh(
     roundedWallGeo(CFG.BODY_W - CASE_WALL * 2 + 0.006, CFG.BODY_D - CASE_WALL * 2 + 0.006,
@@ -1447,6 +1478,13 @@ let bendHandleK = 0;              // 0..1 fade, so it never pops in or out
 // the "this is what I do" sway. bendDemoK remembers the last value the demo
 // itself wrote, so the demo can tell its own pose from one the player set.
 let bendDemoT = 0, bendDemoOn = false, bendDemoK = 0;
+// The ring's breathing is bounded for the same reason the sway is: simIsIdle
+// drops the loop to a 500ms heartbeat, and a 0.38Hz pulse under that renders as
+// about five discrete jumps per cycle -- a judder, not a breath. So it breathes
+// while the handle is new, fades out, and then holds still, which lets the
+// scene idle honestly instead of animating something nobody is presenting.
+let bendPulseT = 0;
+const BEND_PULSE_S = 14, BEND_PULSE_FADE = 2;
 function wickTangent(out) {
   wickTipWorld(out);
   const j = wick.joints[wick.joints.length - 1].getWorldPosition(_v6);
@@ -1508,10 +1546,14 @@ const svcParts = {};
   const underG = new THREE.Group();
   underG.position.y = 0.56;
   insertG.add(underG);
+  // the packing well's X, named for the same reason BORE_X is: three meshes and
+  // two anchors sat on the same repeated literal. Declared up here with underG
+  // because the meshes that use it come before the bore's own constants.
+  const PACK_X = -0.62;
   // sized to stay inside the case cavity so nothing pokes out when seated
   const wellRim = new THREE.Mesh(
     roundedWallGeo(2.34, CFG.BODY_D - 0.38, 0.12, 0.09, 0.16), matInsertMetal);
-  wellRim.position.set(-0.62, 0.06, 0);
+  wellRim.position.set(PACK_X, 0.06, 0);
   underG.add(wellRim);
   // Packing cotton: sits down in the well, so peeling the pad reveals it.
   // A flat slab reads as sheet metal no matter how it's textured, so the
@@ -1520,13 +1562,13 @@ const svcParts = {};
   // 0.19 thick + up to 0.0975 of tufting; position.y is re-derived per frame so
   // the wad relaxes as the pad peels back and packs down when it folds shut
   const packing = new THREE.Mesh(cottonWadGeo(2.16, 0.19, CFG.BODY_D - 0.54), matCotton);
-  packing.position.set(-0.62, 0.245, 0);
+  packing.position.set(PACK_X, 0.245, 0);
   underG.add(packing);
   // Felt pad: hinged along its LONG edge, so it flips back across the narrow
   // side of the insert and lies over the body instead of swinging out like a
   // plank. That's how you'd actually flick it up with a nail.
   const padG = new THREE.Group();
-  padG.position.set(-0.62, 0, 0.5);
+  padG.position.set(PACK_X, 0, 0.5);
   const flap = new THREE.Mesh(new THREE.BoxGeometry(2.30, 0.085, 0.95), matFelt);
   flap.position.set(0, 0, -0.475);
   const tab = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.075, 0.13), matFelt);
@@ -1586,7 +1628,6 @@ const svcParts = {};
   flintNew.visible = false;
   underG.add(flintNew);
   // the case cavity is real geometry now — nothing to fake when it empties
-  const opening = new THREE.Object3D();
   // Fluid tin: tall rectangular can with a shouldered neck and nozzle, built
   // nose-up along local +Y so aiming it is just "point +Y at the cotton".
   const canG = new THREE.Group();
@@ -1608,8 +1649,8 @@ const svcParts = {};
   stream.visible = false;
   squash.add(stream);
   Object.assign(svcParts, {
-    underG, padG, packing, screwG, coils, stub, flintNew, opening,
-    canG, stream, boreTarget, BORE_X, BORE_Y, CAN_TIP, caseSolid, caseShellG,
+    underG, padG, packing, screwG, coils, stub, flintNew,
+    canG, stream, boreTarget, BORE_X, BORE_Y, PACK_X, CAN_TIP, caseSolid, caseShellG,
   });
 }
 
@@ -1654,7 +1695,9 @@ const sim = {
     bendVel: new THREE.Vector3(),
     whip: new THREE.Vector3(),      // the same lean, lagged — what the TIP carries
     whipVel: new THREE.Vector3(),
-    turb: 0, flare: 0, ignite: 0, cover: 0, out: 1, maxBend: 0,
+    turb: 0, flare: 0, ignite: 0, cover: 0,
+    // not read by the sim: the peak the bend test measures against
+    maxBend: 0,
     sputter: 0, lastCause: '',
   },
   ember: { t: 0 },
@@ -1674,7 +1717,6 @@ const sim = {
     flintDrop: 0,               // 0..1 as the fresh flint slides down the bore
     can: 0, squirt: 0,          // fluid can slide-in + squirting envelope
     overHold: 0, squirtT: 0,    // overfill dwell + squirt audio cadence
-    seatK: 0,                   // one-shot clunk latch while seating
   },
   upDir: new THREE.Vector3(0, 1, 0), // real-world "up" for the flame
   gWorld: new THREE.Vector3(0, -1, 0),
@@ -2212,11 +2254,21 @@ function applyFinish(name) {
   // a quilt figure is nonsense -- so they take the finish's colour and polish
   // and none of its maps.
   for (const [m, p, withMaps] of [[matChrome, fp.chrome, true], [matChromeDark, fp.dark, false]]) {
-    m.color.setHex(p.color);
     m.roughness = p.rough;
     m.metalness = p.metal;
     m.envMapIntensity = p.env;
-    if (!withMaps) continue;
+    if (!withMaps) {
+      // A finish whose colour comes from a map declares a near-white `color`
+      // as that map's multiplier, not as a colour -- so the fittings take plain
+      // hardware steel instead of that white. They still honour the plain
+      // brushed grain when the finish asks for it; a named design never
+      // reaches them, which is the whole point of the split.
+      m.color.setHex(p.tint || p.corrode ? (p.hw ?? HW_STEEL) : p.color);
+      const grain = p.map === true ? brushed : null;
+      if (m.roughnessMap !== grain) { m.roughnessMap = grain; m.needsUpdate = true; }
+      continue;
+    }
+    m.color.setHex(p.color);
     // `map` is true for the plain brushed grain, or names a design pattern
     // `corrode` supplies albedo, roughness AND normal from a single height field,
     // so the oxide sits in the dents instead of floating over them
@@ -2574,10 +2626,15 @@ function tryIgniteFromSparks() {
     if (!lidIsOpen() || sim.flame.state === LIT) return;
     // the insert may have started moving in the sparks' short flight time
     if (sim.svc.state !== 'seated' || svcPullHold || sim.svc.y > 0.01) return;
-    // sparks land at the chimney: a wick dragged far away doesn't catch
-    wickTipWorld(_v1);
-    const lp = insertG.worldToLocal(_v1);
-    if (lp.y < RIM_Y || Math.abs(lp.x - CFG.CHIM_X) < 0.95) setFlame(LIT, 'strike');
+    // There used to be a "sparks land at the chimney, a wick dragged far away
+    // doesn't catch" test here. It could not reject: swept over the wick's whole
+    // range the tip reaches 0.837 from the chimney against a 0.95 threshold, and
+    // every bend big enough to move it sideways also drops it below RIM_Y, which
+    // short-circuited the same condition true anyway. The threshold was tuned
+    // against a longer wick; trimming to 4 segments of 0.295 put the tip
+    // permanently inside the zone. Tightening it is not an option either -- the
+    // ember trick is lighting a folded wick on purpose.
+    setFlame(LIT, 'strike');
   });
 }
 // seating the flint screw finishes whatever the tube now holds: a fresh flint
@@ -2690,7 +2747,6 @@ const Actions = {
     S.stub = !sim.flintMissing;   // an emptied tube stays visibly empty
     S.stubHop = 0; S.flintNew = false; S.flintDrop = 0; S.aside = 0;
     S.pad = 0; S.padT = 0; S.can = 0; S.squirt = 0; S.overHold = 0;
-    S.seatK = 0;
     sim.disc.service = true;
     sim.counts.services++;
     Audio.shear(true);
@@ -3340,7 +3396,7 @@ function makeFlameMaterial(withFx) { return new THREE.ShaderMaterial({
     uToon: { value: new THREE.Vector3() },
     uCore: { value: new THREE.Vector3() },
     uPrism: { value: new THREE.Vector3() },
-    uSpineOff: { value: new THREE.Vector2() }, uRad: { value: 1 / 1.35 },
+    uSpineOff: { value: new THREE.Vector2() }, uRad: { value: 1 / VOL_MARGIN },
   },
   side: THREE.BackSide,          // the far faces: the ray's exit, always drawn
   transparent: true, depthWrite: false,
@@ -3575,12 +3631,17 @@ function anchorWorld(name, out) {
     case 'mouthX': return insertG.localToWorld(out.set(CFG.CHIM_X + 1, RIM_Y, 0));
     case 'wheel': return insertG.localToWorld(out.set(CFG.WHEEL_X, CFG.WHEEL_Y + 0.2, 0));
     case 'lidTop': return lidG.localToWorld(out.set(-HINGE_X, CFG.LID_H, 0));
-    case 'lidCenter': return lidG.localToWorld(out.set(-HINGE_X, CFG.LID_H / 2, 0));
     case 'baseBottom': return caseG.localToWorld(out.set(0, 0.08, 0));
     case 'baseCenter': return caseG.localToWorld(out.set(0, CFG.BASE_H / 2, 0));
     case 'svcScrew': return svcParts.underG.localToWorld(out.copy(svcParts.screwG.position));
-    case 'svcTube': return svcParts.underG.localToWorld(out.set(1.3, 0.1, 0));
-    case 'svcPacking': return svcParts.underG.localToWorld(out.set(-0.62, -0.06, 0));
+    // from the exported constants, not repeated literals: this anchor is the
+    // collider for tipping the worn flint out, dropping the fresh one home and
+    // tapping the screw back down, so a bore that moved would leave all three
+    // tap targets behind with nothing to flag it
+    case 'svcTube': return svcParts.underG.localToWorld(
+      out.set(svcParts.BORE_X, svcParts.BORE_Y, 0));
+    case 'svcPacking': return svcParts.underG.localToWorld(
+      out.set(svcParts.PACK_X, -0.06, 0));
     case 'svcPadEdge': {
       svcParts.padG.updateWorldMatrix(true, false);
       return svcParts.padG.localToWorld(out.set(0, -0.04, -0.94));
@@ -3645,7 +3706,7 @@ function stepPhysics(h) {
         sim.camShake = Math.max(sim.camShake, Math.min(0.45, lid.omega / 70));
         lid.omega = lid.omega < CFG.LID_BOUNCE_MIN ? 0 : -lid.omega * CFG.LID_BOUNCE;
       }
-      if (!lid.everOpened) { lid.everOpened = true; sim.disc.open = true; updateHints(); }
+      if (!lid.everOpened) { lid.everOpened = true; updateHints(); }
     }
   }
   // a lid sweeping shut disturbs the flame, then caps it before fully seating
@@ -3728,8 +3789,12 @@ function stepPhysics(h) {
   F.ignite = Math.max(0, F.ignite - h / 0.16);
   // capping the chimney with a held finger slowly smothers the flame
   if (chimneyHold && !chimneyHold.crossed && F.state === LIT
+    // Same zone that ACCEPTED the touch, so a finger that started a chimney hold
+    // can always finish it. This was a bare 40px while classify's collider is an
+    // ellipse of mouthHalf + R_MOUTH * uiScale() -- up to 76.8px on a tablet --
+    // so there was a ring where the hold began and then silently never smothered.
     && Math.hypot(chimneyHold.x - chimneyHold.mouthPt.x, chimneyHold.y - chimneyHold.mouthPt.y)
-      < chimneyHold.mouthHalf + 40) {
+      < chimneyHold.mouthHalf + CFG.R_MOUTH * uiScale()) {
     F.cover = clamp01((perfNow - chimneyHold.holdStart - 0.15) / 0.5);
     if (F.cover >= 1) { F.cover = 0; chimneyHold = null; setFlame(OUT, 'smother'); }
   } else {
@@ -3893,7 +3958,7 @@ function updateFrame(dt, tSec) {
       // tidy away our own leftover sway, but never a bend the player made
       if (mine && Math.abs(wick.k) > 0.001) wick.straightening = true;
     }
-    if (!bendHandle.visible) bendDemoT = 0;   // rearm next time it appears
+    if (!bendHandle.visible) bendDemoT = bendPulseT = 0;   // rearm next time it appears
     if (bendHandle.visible) {
       wickHandleWorld(_v1);
       bendHandle.position.copy(_v1);
@@ -3905,8 +3970,11 @@ function updateFrame(dt, tSec) {
       stem.position.copy(d).multiplyScalar(0.5);
       stem.scale.set(1, len, 1);
       stem.quaternion.setFromUnitVectors(_v4.set(0, 1, 0), d.divideScalar(len));
-      // idle breathing draws the eye; it settles the moment you grab it
-      const idle = pointers.size ? 0 : 0.5 + 0.5 * Math.sin(perfNow * 2.4);
+      // idle breathing draws the eye; it settles the moment you grab it, and
+      // fades out after BEND_PULSE_S so the scene can go properly idle
+      bendPulseT += dt;
+      const env = 1 - clamp01((bendPulseT - BEND_PULSE_S) / BEND_PULSE_FADE);
+      const idle = pointers.size ? 0 : (0.5 + 0.5 * Math.sin(perfNow * 2.4)) * env;
       const a = bendHandleK * bendHandleK;
       bendHandle.children[0].material.opacity = 0.85 * a;
       bendHandle.children[1].material.opacity = (0.34 + 0.3 * idle) * a;
@@ -4050,7 +4118,7 @@ function updateFrame(dt, tSec) {
       insertG.updateMatrix();
       insertG.updateWorldMatrix(true, false);
       // where the fluid should land, in the can's parent space
-      const packW = svcParts.underG.localToWorld(_v4.set(-0.62, -0.06, 0));
+      const packW = svcParts.underG.localToWorld(_v4.set(svcParts.PACK_X, -0.06, 0));
       const target = squash.worldToLocal(_v5.copy(packW));
       // Stand the tin off the packing along the insert's OWN outward normal —
       // the insert is flipped, so "up" in world would just park it on the
@@ -4163,7 +4231,14 @@ function updateFrame(dt, tSec) {
     _fa.set(0, 0, 1);
     if (Math.abs(flameDir.z) > 0.9) _fa.set(1, 0, 0);
     _bx.crossVectors(_fa, flameDir).normalize();
-    _by.crossVectors(flameDir, _bx);
+    // (_bx, flameDir, _by) has to be RIGHT-handed. This was flameDir x _bx,
+    // which is -(_bx x flameDir), so makeBasis got a reflection: determinant -1.
+    // setFromRotationMatrix assumes a proper rotation and silently returns a
+    // non-unit quaternion for one -- |q| fell to 0.707 -- leaving the proxy box
+    // pointing up to 180 deg away from the flame and squashed by compose()'s
+    // implicit renormalisation. Upright it happened to come out right, which is
+    // why it survived: the error only appears once the flame actually leans.
+    _by.crossVectors(_bx, flameDir);
     // The bias only makes sense for a flame sitting ON TOP of the chimney. Fold
     // the wick and the flame drops INSIDE, where being hidden by the metal and
     // glowing through the holes is the entire point of the trick — so the bias
@@ -4210,8 +4285,14 @@ function updateFrame(dt, tSec) {
       camera.getWorldDirection(u.uCamDir.value);
       // how far the tip has drifted off the axis, in the box's own units
       _v5.subVectors(spineC, spineA).addScaledVector(flameDir, -len);
-      const boxHalf = halfW * VOL_MARGIN;
-      u.uSpineOff.value.set(_v5.dot(_bx) / boxHalf, _v5.dot(_by) / boxHalf);
+      // Divide by the box's FULL extent, not its half-width: the proxy is a
+      // unit BoxGeometry, so object space runs -0.5..0.5 and one object unit is
+      // the whole edge. Halving the divisor doubled the tip lean the shader drew
+      // relative to the whip the physics computed, and pushed the core through
+      // the slab wall on a hard flick (the flame's own object half-width is only
+      // 0.5/VOL_MARGIN = 0.37, against a wall at 0.5).
+      const boxExtent = halfW * 2 * VOL_MARGIN;
+      u.uSpineOff.value.set(_v5.dot(_bx) / boxExtent, _v5.dot(_by) / boxExtent);
       u.uTint.value.setRGB(fc.vol[0], fc.vol[1], fc.vol[2]);
       const v2 = fc.vol2 || fc.vol;
       u.uTint2.value.setRGB(v2[0], v2[1], v2[2]);
@@ -4386,9 +4467,6 @@ let fillHold = null;         // tracker holding the fluid onto the cotton
 let flintDragging = false;   // the fresh flint is being carried by a finger
 const squeezeState = { popped: false };
 
-function pxSpeedOf(tr) {  // smoothed speed px/s
-  return tr.speed || 0;
-}
 function classify(px, py) {
   const S = uiScale();
   const V = sim.svc;
@@ -4447,7 +4525,10 @@ function classify(px, py) {
   if (V.state === 'seated') {
     const hitsLid = rayHit(px, py, [lidMesh]);
     if (hitsLid.length) return 'lid';
-    const lc = anchorScreen(lidIsOpen() ? 'lidCenter' : 'lidTop');
+    // only consulted while the lid is SHUT, so do not project an anchor for the
+    // open case: the ternary used to ask for 'lidCenter' in exactly the branch
+    // whose result is then thrown away, leaving that anchor's arm unreachable
+    const lc = lidIsOpen() ? null : anchorScreen('lidTop');
     if (!lidIsOpen() && Math.hypot(px - lc.x, py - lc.y) < CFG.R_LID_PAD * S) return 'lid';
   }
   const bb = anchorScreen('baseBottom');
@@ -4832,7 +4913,7 @@ function onPointerMove(e) {
       // whichever estimate won, re-anchor the arc to the lid's actual pose
       if (tr.lidArc) tr.lidOff = tr.lidPrevA - lidAngleAt(tr.lidArc, sim.lid.theta);
       if (sim.lid.theta >= CFG.LID_OPEN && !sim.lid.everOpened) {
-        sim.lid.everOpened = true; sim.disc.open = true; updateHints();
+        sim.lid.everOpened = true; updateHints();
       }
       tr.omegaEst = lerp(tr.omegaEst, (sim.lid.theta - prev) / dt, 0.4);
       break;
@@ -5081,7 +5162,11 @@ for (const ev of ['contextmenu', 'dblclick', 'gesturestart', 'gesturechange']) {
   window.addEventListener(ev, e => e.preventDefault(), { passive: false });
 }
 window.addEventListener('wheel', e => {
-  if (guideIsOpen()) return;   // let native wheel scrolling drive the guide body
+  // Both sheets, not just the guide: the appearance sheet came later and was
+  // missed here, though the keydown handler below was updated for it. Falling
+  // through preventDefault()'d the wheel AND zoomed the camera behind an open
+  // modal, so the 60-odd swatches could not be scrolled with a mouse at all.
+  if (guideIsOpen() || styleIsOpen()) return;   // native wheel scrolls the sheet body
   e.preventDefault();
   cam.zoom = clamp(cam.zoom * (1 + Math.sign(e.deltaY) * 0.08), CFG.ZOOM_MIN, CFG.ZOOM_MAX);
 }, { passive: false });
@@ -5273,6 +5358,13 @@ function guideBackground() {
 }
 function openGuide() {
   guideEl.classList.add('show');
+  // counted from the live lists, not written into the copy: the paragraph used
+  // to claim four finishes and four flames long after there were 24 and 17
+  for (const [id, n] of [['guideNFin', FINISH_ORDER.length],
+    ['guideNFlame', FLAME_ORDER.length], ['guideNBack', BACKDROP_ORDER.length]]) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = n;
+  }
   updateGauges();    // after 'show' so the stats line refreshes too
   resetPointers();   // any finger already on the canvas is void once the sheet is up
   for (const el of guideBackground()) el.setAttribute('inert', '');
@@ -5285,8 +5377,8 @@ function closeGuide() {
   try { infoBtn.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
 }
 /* ============================== APPEARANCE SHEET ============================== */
-// One sheet for all three: case, flame, backdrop. With fourteen finishes and
-// fourteen flames, tap-to-cycle stopped being a usable way to reach anything.
+// One sheet for all three: case, flame, backdrop. Past a dozen or so of each,
+// tap-to-cycle stopped being a usable way to reach anything.
 const styleEl = document.getElementById('style');
 const styleCloseBtn = document.getElementById('styleClose');
 const styleIsOpen = () => styleEl.classList.contains('show');
@@ -5342,11 +5434,11 @@ buildSwatches('swFlame', 'flame', FLAME_ORDER,
 buildSwatches('swBack', 'back', BACKDROP_ORDER,
   k => BACKDROPS[k].swatch, k => BACKDROPS[k].swatch, k => k, k => {
     applyBackdrop(k);
-    sim.disc.backdrop = true;
     buzz(12);
   });
 function openStyle() {
   stylePanel.classList.remove('drag', 'snap');
+  dragId = null; dragLive = false; dragDy = 0;   // never inherit a stuck gesture
   panelOffset(0);         // or it reopens wherever the last drag left it
   paintStyleSelection();
   styleEl.classList.add('show');
@@ -5357,6 +5449,7 @@ function openStyle() {
 function closeStyle() {
   if (!styleIsOpen()) return;
   panelOffset(0);
+  dragId = null; dragLive = false; dragDy = 0;
   stylePanel.classList.remove('drag', 'snap');
   styleEl.classList.remove('show');
   for (const el of guideBackground()) el.removeAttribute('inert');
@@ -5419,8 +5512,13 @@ function endStyleDrag(e) {
     setTimeout(() => stylePanel.classList.remove('snap'), 260);
   }
 }
-stylePanel.addEventListener('pointerup', endStyleDrag);
-stylePanel.addEventListener('pointercancel', endStyleDrag);
+// on window, not on the panel: before the drag goes live there is no pointer
+// capture, so a press that slides off the sheet and releases over the scrim
+// never reached a panel-bound listener. dragId stayed set and every later
+// pointerdown bailed at the guard above -- the handle died for the session,
+// and reopening the sheet did not clear it.
+window.addEventListener('pointerup', endStyleDrag);
+window.addEventListener('pointercancel', endStyleDrag);
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
 styleBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openStyle(); });
 // debug: fast-forward the wear systems so refills are testable without waiting
@@ -5487,8 +5585,8 @@ const HINTS = [
   { id: 'relight', text: relightHint, done: () => sim.disc.relight },
   { id: 'refuel', text: () => 'tank’s low — close the lid, hold the base to refill', done: () => sim.disc.refuel },
   { id: 'service', text: () => 'or service it properly: flame out, lid open, pull the insert up and out', done: () => sim.disc.service },
-  { id: 'finish', text: () => 'tap the round swatch (top-left) to restyle the case', done: () => sim.disc.finish },
-  { id: 'flame', text: () => 'tap the flame drop (top-left) to tint the flame', done: () => sim.disc.flameCol },
+  { id: 'finish', text: () => 'tap the split disc (top-left) to restyle the case', done: () => sim.disc.finish },
+  { id: 'flame', text: () => 'same sheet, flame tab: colours, effects and backdrops', done: () => sim.disc.flameCol },
 ];
 let hintIdx = 0, hintTimer = 0;
 function currentHints() {
@@ -5606,6 +5704,7 @@ function simIsIdle() {
     && sim.lid.omega === 0 && (sim.lid.theta === 0 || sim.lid.theta === CFG.LID_OPEN)
     && sim.hop.y === 0 && sim.hop.v === 0 && Math.abs(sim.squash.s) < 1e-4 && sim.squash.target === 0
     && sim.camShake === 0 && sim.timers.length === 0 && !wick.straightening && !bendDemoOn
+    && !(bendHandle.visible && bendPulseT < BEND_PULSE_S + BEND_PULSE_FADE)
     && Math.abs(sim.wheel.omega) < 0.01 && sim.wheel.flash === 0
     && cam.yawVel === 0 && cam.pitchVel === 0 && sim.finishFlash === 0
     && sim.svc.state === 'seated' && sim.svc.y === 0 && sim.svc.pose < 1e-4
@@ -5728,7 +5827,25 @@ window.LIGHTER = {
   CFG, sim, Actions, cam, renderer, scene,
   mats: { chrome: matChrome, chromeDark: matChromeDark, steel: matSteel, insert: matInsert,
     insertMetal: matInsertMetal,
-    flameVol: flameVol.material },
+    // a getter, not a snapshot: the render loop swaps flameVol between two
+    // programs, and this used to be captured once at boot on the plain one --
+    // so the test asserting the FX uniforms stay zero was reading a material
+    // nothing ever writes, and could not have seen the leak it guards against
+    get flameVol() { return flameVol.material; },
+    matFlamePlain, matFlameFx },
+  // The raymarch works in the proxy box's own space, so the box's local +Y IS
+  // the direction the column renders along. Any angle between it and flameDir
+  // means the volume is ignoring the lean the physics computed. It read up to
+  // 180 deg once, from a left-handed basis that only looked right upright.
+  get flameBoxErrDeg() {
+    const a = _v1.set(0, 1, 0).applyQuaternion(flameVol.quaternion);
+    return THREE.MathUtils.radToDeg(Math.acos(clamp(a.dot(flameDir), -1, 1)));
+  },
+  get flameDirArr() { return flameDir.toArray(); },
+  // so the guide's copy can be checked against the lists it describes
+  get finishCount() { return FINISH_ORDER.length; },
+  get flameCount() { return FLAME_ORDER.length; },
+  get backdropCount() { return BACKDROP_ORDER.length; },
   get state() { return sim.flame.state; },
   get lidTheta() { return sim.lid.theta; },
   get frames() { return frames; },
