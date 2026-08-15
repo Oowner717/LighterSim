@@ -568,6 +568,7 @@ const CFG = {
   FLAME_DEEP: 0.78,          // chroma deepening before ACES, which otherwise whitens the core
   // just shy of straight up/down: at exactly +/-PI/2 the up vector degenerates
   PITCH_MAX: 1.5,
+  SVC_PITCH: 0.62,           // eye height while the insert is out, so its upturned face reads
   FPS_VOL_OFF: 26,           // sustained fps below this drops back to sprites
   FLAME_LIGHT: 8,            // point light intensity while LIT (11 bloomed orange smears onto the lid)
   KEY_LIGHT: 2.6,            // camera-riding key: what actually makes a dark case readable
@@ -3518,6 +3519,15 @@ function updateCamera(dt, tSec) {
   cam.target.z += (sim.svc.pose * 2.3 - cam.target.z) * (1 - Math.exp(-6 * dt));
   cam.target.y += (CFG.CAM_TARGET_Y + sim.svc.pose * 0.55 - cam.target.y) * (1 - Math.exp(-6 * dt));
   cam.yaw += cam.yawVel * dt;
+  // Held nearly parallel to the case, the insert's service face -- pad, cotton,
+  // bore, screw -- points close to straight up, so at the resting pitch you see
+  // it edge-on. Lift the eye while it is out: it is what you do with a thing in
+  // your hand. Only ever pulls the pitch UP toward the floor, never down, and
+  // stands off entirely while a finger is on the glass so it cannot fight a drag.
+  if (sim.svc.pose > 0.15 && pointers.size === 0 && cam.pitchVel === 0
+      && cam.pitch < CFG.SVC_PITCH) {
+    cam.pitch += (CFG.SVC_PITCH - cam.pitch) * (1 - Math.exp(-3.4 * dt)) * sim.svc.pose;
+  }
   cam.pitch = clamp(cam.pitch + cam.pitchVel * dt, -CFG.PITCH_MAX, CFG.PITCH_MAX);
   const dk = Math.exp(-3.2 * dt);
   cam.yawVel *= dk; cam.pitchVel *= dk;
@@ -3919,15 +3929,23 @@ function updateFrame(dt, tSec) {
     const lift = liftK * liftK * (3 - 2 * liftK);
     const flipK = clamp01((S.pose - 0.34) / 0.66);
     const e = flipK * flipK * (3 - 2 * flipK);
-    // ~112 deg, not 137: past horizontal far enough to read as "turned over",
-    // but leaving the underside pointing at the camera instead of at the
-    // ceiling. At 137 the whole service face — cotton, bore, screw — was
-    // foreshortened into a sliver above a big slab of tank.
-    insertG.rotation.set(-1.95 * e, 0, 0);
+    // 169 deg -- turned right over and held all but PARALLEL to the case, which
+    // is how you actually hold an insert to fuel one. It used to stop at 112, a
+    // 68-degree cant, on the belief that flipping further foreshortened the
+    // service face into a sliver. Sweeping it says the opposite: past ~140 the
+    // underside comes round to face the camera squarely instead of being seen
+    // from above, so pad, bore and screw all read BETTER here. Stopping ~11 deg
+    // short of dead parallel is deliberate -- at 3 deg the top face goes edge-on
+    // and the felt and screw bore flatten out of sight.
+    insertG.rotation.set(-2.95 * e, 0, 0);
     // rotate about the insert's middle, then carry it to the service spot
     _v1.set(0, 2.1, 0);
     _v2.copy(_v1).applyEuler(insertG.rotation);
-    insertG.position.set(0, S.y + lift * 3.9 - e * 2.3, e * 2.7).add(_v1).sub(_v2);
+    // Held this near to parallel it needs BOTH the standoff and the extra height:
+    // sagging it even slightly parks it over the case front, and then the two
+    // parts read as one lump. Riding a little proud keeps the case mouth and the
+    // windscreen visible under it, so it is obvious which piece is in your hand.
+    insertG.position.set(0, S.y + lift * 3.9 + e * 0.3, e * 3.05).add(_v1).sub(_v2);
     // solid body while seated (best shading); open shell the moment it lifts
     const bodyOpen = S.state !== 'seated' || S.y > 0.02 || S.pose > 0.005;
     svcParts.caseSolid.visible = !bodyOpen;
@@ -5726,6 +5744,18 @@ window.LIGHTER = {
   get motionAttached() { return Motion.attached; },
   refill: doRefill,
   get svcState() { return sim.svc.state; },
+  // How far off parallel the pulled insert is held, in degrees. Folded to
+  // [0, 90] because "upside down but alongside the case" IS parallel -- that is
+  // the grip you fuel one in. Guards the pose against drifting back out to the
+  // wide cant it used to sit at. Fresh vectors on purpose: the render loop's
+  // scratch is in use whenever this could be called.
+  get svcTiltDeg() {
+    insertG.updateWorldMatrix(true, false);
+    caseG.updateWorldMatrix(true, false);
+    const a = new THREE.Vector3(0, 1, 0).transformDirection(insertG.matrixWorld);
+    const b = new THREE.Vector3(0, 1, 0).transformDirection(caseG.matrixWorld);
+    return THREE.MathUtils.radToDeg(Math.acos(Math.min(1, Math.abs(a.dot(b)))));
+  },
   svcOut: () => Actions.svcOut(),
   svcSeat: () => Actions.svcSeat(),
   openGuide, closeGuide,

@@ -1090,6 +1090,12 @@ await L('(LIGHTER.sim.fuel = 0.2, LIGHTER.sim.flint = 70, 0)');
   await L('LIGHTER.svcOut()');
   await waitL('LIGHTER.sim.svc.pose > 0.9', 15000);
   check('an emptied tube pulls out visibly empty', await L('LIGHTER.sim.svc.stub') === false);
+  // You hold an insert alongside its case to fuel it, not cocked out at an
+  // angle to it. This pinned a real regression: the pose used to settle 68 deg
+  // off parallel, which read as the insert being wrenched sideways.
+  await waitL('LIGHTER.sim.svc.pose > 0.999', 15000);   // the flip is still easing at 0.9
+  const tilt = await L('LIGHTER.svcTiltDeg');
+  check(`the pulled insert is held near parallel to the case (${tilt.toFixed(1)} deg)`, tilt < 15);
   await L('LIGHTER.closeLid()');
   await page.waitForTimeout(600);
   check('the lid waits while the insert is out', await L('LIGHTER.lidTheta') > 1.0);
