@@ -1287,6 +1287,41 @@ await L('(LIGHTER.sim.fuel = 0.2, LIGHTER.sim.flint = 70, 0)');
   await waitL('LIGHTER.fuel >= 1', 30000);
   await page.evaluate(() => { const p = LIGHTER.anchor('svcPacking'); window.__pt('pointerup', 73, p.x, p.y); });
   check('holding on the cotton fills the tank', true);
+  // The wad has to visibly take the fluid up. Sampling the live cotton material
+  // rather than the canvas, because half the effect is there: wetting closes the
+  // fibre-air boundaries that make dry cotton look white, so it loses the
+  // emissive lift and gains a sheen as well as going darker. Before this, the
+  // only response was a canvas wash reached through a half-second gauge tick --
+  // 13% darker between empty and full, in about five visible steps.
+  {
+    // Set the level, then wait for FRAMES, not milliseconds: the material is
+    // updated by the render loop, and on a contended software rasteriser a
+    // hundred milliseconds can be a fraction of one frame. Every wall-clock
+    // wait here read the previous level.
+    const atFuel = f => L(`(async () => {
+      LIGHTER.sim.fuel = ${f};
+      const f0 = LIGHTER.frames;
+      await new Promise(r => { const t = () =>
+        (LIGHTER.frames - f0 >= 2) ? r() : requestAnimationFrame(t); t(); });
+      const m = LIGHTER.mats.cotton;
+      return { lum: 0.2126 * m.color.r + 0.7152 * m.color.g + 0.0722 * m.color.b,
+        rough: m.roughness, emis: m.emissiveIntensity };
+    })()`);
+    const dry = await atFuel(0);
+    const wet = await atFuel(1);
+    check(`soaked cotton is visibly darker than dry (${((1 - wet.lum / dry.lum) * 100).toFixed(0)}% down)`,
+      wet.lum < dry.lum * 0.75, `dry ${dry.lum.toFixed(3)} wet ${wet.lum.toFixed(3)}`);
+    check('and it gains a sheen and loses its dry glow',
+      wet.rough < dry.rough - 0.15 && wet.emis < dry.emis * 0.5,
+      `rough ${dry.rough.toFixed(2)}->${wet.rough.toFixed(2)}, emissive ${dry.emis.toFixed(3)}->${wet.emis.toFixed(3)}`);
+    // and it must track the pour continuously, not in gauge-tick steps
+    const steps = [];
+    for (const f of [0, 0.2, 0.4, 0.6, 0.8, 1]) steps.push((await atFuel(f)).lum);
+    const monotonic = steps.every((v, i) => i === 0 || v < steps[i - 1] - 1e-4);
+    check('the cotton darkens steadily as it fills, not in jumps', monotonic,
+      steps.map(v => v.toFixed(3)).join(' > '));
+    await L('LIGHTER.refill()');
+  }
   // fold the pad shut again
   const p = await L('LIGHTER.anchor("svcPadEdge")');
   await page.evaluate(async ([p]) => {

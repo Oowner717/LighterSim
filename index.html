@@ -1291,7 +1291,9 @@ function paintFibres(g, n, seed, alpha) {
     g.stroke();
   }
 }
+let soakPainted = -1;
 function paintSoak(level) {
+  soakPainted = level;
   const g = soakCv.getContext('2d');
   g.fillStyle = '#f4efe3';                 // bright raw cotton
   g.fillRect(0, 0, 512, 256);
@@ -1304,14 +1306,24 @@ function paintSoak(level) {
   paintFibres(g, 340, 0, 1);
   if (level > 0.01) {                      // the damp patch spreads with the fill
     const k = clamp01(level);
-    const r = Math.sqrt(k) * 340;
-    const gr = g.createRadialGradient(280, 132, 0, 280, 132, r);
-    gr.addColorStop(0, `rgba(150,124,80,${0.44 * k})`);
-    gr.addColorStop(0.7, `rgba(163,138,96,${0.26 * k})`);
-    gr.addColorStop(1, 'rgba(170,146,104,0)');
+    // Naphtha wets cotton the way water wets paper: it fills the air gaps
+    // between the fibres, and with the air gone there is far less to scatter
+    // light back out, so the wad goes deeply darker rather than slightly beige.
+    // The old wash topped out at 0.44 of a mid tan and then re-laid opaque pale
+    // strands over it, which put most of the brightness straight back -- a full
+    // tank read 13% darker than an empty one, which is nothing.
+    const r = (0.42 + 0.58 * Math.sqrt(k)) * 360;
+    const gr = g.createRadialGradient(268, 128, 0, 268, 128, r);
+    gr.addColorStop(0, `rgba(84,64,34,${0.80 * k})`);
+    gr.addColorStop(0.55, `rgba(104,82,48,${0.62 * k})`);
+    gr.addColorStop(1, `rgba(126,104,70,${0.10 * k})`);
     g.fillStyle = gr;
     g.fillRect(0, 0, 512, 256);
-    paintFibres(g, 150, 41, 0.75);         // fibres still show through the damp
+    // The strands are still there when it is wet -- you can see them -- but they
+    // are wet too, so they go on darker and fainter the further the soak gets.
+    g.globalAlpha = 1 - 0.55 * k;
+    paintFibres(g, 150, 41, 0.75 * (1 - 0.45 * k));
+    g.globalAlpha = 1;
   }
   soakTex.needsUpdate = true;
 }
@@ -1328,6 +1340,25 @@ const matCotton = new THREE.MeshStandardMaterial({
   map: soakTex, bumpMap: soakTex, bumpScale: 0.9, metalness: 0, roughness: 1,
   emissive: 0xffffff, emissiveMap: soakTex, emissiveIntensity: 0.34,
 });
+// The rest of what wet looks like, and it is not just a darker picture. Losing
+// the fibre-air boundaries costs the wad the diffuse bounce that makes dry
+// cotton read as luminous, so the emissive lift has to come off with it; the
+// film of fluid on top gives it a low sheen it never has dry; and the strands
+// lie down and stop catching their own shadows, so the bump flattens. These are
+// plain material fields, so unlike the canvas they can follow the pour every
+// frame at no cost -- which is the half of "darkens as you pour" that the
+// half-second gauge tick could never deliver.
+let cottonWet = -1;
+function setCottonWet(w) {
+  const k = clamp01(w);
+  if (Math.abs(k - cottonWet) < 0.004) return;
+  cottonWet = k;
+  matCotton.color.setRGB(1 - 0.30 * k, 1 - 0.34 * k, 1 - 0.42 * k);
+  matCotton.roughness = 1 - 0.30 * k;
+  matCotton.emissiveIntensity = 0.34 * (1 - 0.72 * k);
+  matCotton.bumpScale = 0.9 * (1 - 0.45 * k);
+}
+setCottonWet(1);
 // a fluid tin reads instantly if it's warm and bright against the dark scene
 const matCan = new THREE.MeshStandardMaterial({ color: 0xd8a12a, metalness: 0.45, roughness: 0.42 });
 const matCanBand = new THREE.MeshStandardMaterial({ color: 0xf2e7cf, metalness: 0.2, roughness: 0.6 });
@@ -4373,6 +4404,14 @@ function updateFrame(dt, tSec) {
     const puff = 1 + 0.24 * S.pad;
     svcParts.packing.scale.y = puff;
     svcParts.packing.position.y = 0.34 - puff * 0.095;
+    // Follow the tank every frame. paintSoak used to be reached only through
+    // updateGauges, which runs on a half-second tick -- so a 2.6s pour restained
+    // the cotton about five times and you watched it step. The material half
+    // follows continuously; the canvas half redraws once per 2% of tank, which
+    // is 50 steps across a fill and costs nothing at rest because the guard
+    // only fires when the level has actually moved.
+    setCottonWet(sim.fuel);
+    if (Math.abs(sim.fuel - soakPainted) > 0.02) paintSoak(sim.fuel);
 
     /* ---- flint assembly: one connected story, mouth -> spring -> screw ---- */
     const BX = svcParts.BORE_X, BY = svcParts.BORE_Y;
@@ -5681,7 +5720,6 @@ function updateGauges() {
     gFuelT.textContent = w;
     hFuelEl.style.width = w;
     hudEl.classList.toggle('low', sim.fuel < CFG.FUEL_LOW);
-    paintSoak(sim.fuel);   // the service cotton always matches the tank
   }
   if (c !== lastG.c) {
     lastG.c = c;
@@ -6174,6 +6212,7 @@ applyFlameCol(sim.flameCol);
 window.LIGHTER = {
   CFG, sim, Actions, cam, renderer, scene,
   mats: { chrome: matChrome, chromeDark: matChromeDark, steel: matSteel, insert: matInsert,
+    cotton: matCotton,
     insertMetal: matInsertMetal,
     // a getter, not a snapshot: the render loop swaps flameVol between two
     // programs, and this used to be captured once at boot on the plain one --
