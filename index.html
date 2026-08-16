@@ -1457,6 +1457,29 @@ function roundedWallGeo(w, d, r, wall, h, yOff = 0, hTotal = h) {
 function boxGeo(w, h, d, r, yOff, hTotal) {
   return boxProjectUV(new RoundedBoxGeometry(w, h, d, 4, r), w, d, h, yOff, hTotal);
 }
+// Drop the flat bottom face, keeping every other triangle -- including the whole
+// bottom fillet, which is what the silhouette is made of. The result is the same
+// solid box seen from outside and a hollow you can see up into from below, so a
+// lid built this way can be shown open or shut without its outline changing.
+function openBottom(g, h) {
+  const yMin = -h / 2 + 1e-3;
+  const src = g.attributes, keep = [];
+  for (let t = 0; t < src.position.count; t += 3) {
+    let flat = true;
+    for (let k = 0; k < 3; k++) if (src.position.getY(t + k) > yMin) { flat = false; break; }
+    if (!flat) keep.push(t, t + 1, t + 2);
+  }
+  const out = new THREE.BufferGeometry();
+  for (const name of ['position', 'normal', 'uv']) {
+    const a = src[name]; if (!a) continue;
+    const n = a.itemSize, arr = new Float32Array(keep.length * n);
+    keep.forEach((src_i, i) => {
+      for (let c = 0; c < n; c++) arr[i * n + c] = a.array[src_i * n + c];
+    });
+    out.setAttribute(name, new THREE.BufferAttribute(arr, n));
+  }
+  return out;
+}
 // The seated lighter keeps the solid, perfectly-shaded body. The moment the
 // insert lifts out we swap in an open-topped shell of the same silhouette, so
 // you can see down into a real cavity instead of at a blank face.
@@ -1493,24 +1516,25 @@ caseG.add(caseShellG);
 // Same solid/shell trick as the case: the closed lid keeps the seamless
 // rounded body; once it cracks open we show a hollow shell so you look up
 // into a real stamped-metal cavity instead of a flat black plate.
+// ONE outer surface, always. The lid used to swap a solid rounded box for a
+// shell built from a cap plus an extruded wall ring, and the ring's bottom was a
+// SQUARE cut where the solid's was a 0.34-radius roll. So the moment the lid
+// cracked open its outline changed -- measured, 601 pixels of silhouette moved --
+// and the new square edge caught the light as a hard white line across the
+// bottom of the lid. Both complaints, one cause. Now the same rounded box serves
+// open and shut with only its flat underside removed: the outline cannot change
+// because it is the same triangles, and there is no square edge to catch.
 const lidMesh = new THREE.Mesh(
-  boxGeo(CFG.BODY_W, CFG.LID_H, CFG.BODY_D, CFG.EDGE_R, CFG.LID_H / 2, CFG.LID_H), matChrome);
+  openBottom(boxGeo(CFG.BODY_W, CFG.LID_H, CFG.BODY_D, CFG.EDGE_R, CFG.LID_H / 2, CFG.LID_H),
+    CFG.LID_H), matChrome);
 lidMesh.position.set(-HINGE_X, CFG.LID_H / 2, 0);
-lidG.add(lidMesh);   // stays the raycast target for lid taps even while hidden
+lidG.add(lidMesh);   // also the raycast target for lid taps
 const lidShellG = new THREE.Group();
 lidShellG.position.set(-HINGE_X, 0, 0);
 lidShellG.visible = false;
 lidG.add(lidShellG);
 {
-  const capH = 0.72;   // tall enough that the walls meet its flat mid-band,
-  const cap = new THREE.Mesh(                       // not its rounded bottom edge
-    boxGeo(CFG.BODY_W, capH, CFG.BODY_D, CFG.EDGE_R, CFG.LID_H - capH / 2, CFG.LID_H), matChrome);
-  cap.position.y = CFG.LID_H - capH / 2;
-  lidShellG.add(cap);
-  const walls = new THREE.Mesh(
-    roundedWallGeo(CFG.BODY_W, CFG.BODY_D, CFG.EDGE_R, CASE_WALL, CFG.LID_H - capH / 2,
-      0, CFG.LID_H), matChrome);
-  lidShellG.add(walls);
+  const capH = 0.72;
   const liner = new THREE.Mesh(
     roundedWallGeo(CFG.BODY_W - CASE_WALL * 2 + 0.006, CFG.BODY_D - CASE_WALL * 2 + 0.006,
       Math.max(0.05, CFG.EDGE_R - CASE_WALL), 0.02, CFG.LID_H - capH - 0.02), matCaseInner);
@@ -4219,9 +4243,10 @@ function updateFrame(dt, tSec) {
     }
   }
   // solid lid while shut (seamless shading); hollow shell once it cracks open
-  const lidAjar = sim.lid.theta > 0.06;
-  lidShellG.visible = lidAjar;
-  lidMesh.visible = !lidAjar;
+  // lidMesh is the lid's only outer surface and is never hidden -- swapping it
+  // was what made the outline jump. lidShellG is now just the interior, which
+  // nothing can see until the lid is off the case.
+  lidShellG.visible = sim.lid.theta > 0.06;
   // ---- service pose: lift while pulling, then float out + flip to face you ----
   {
     const S = sim.svc;

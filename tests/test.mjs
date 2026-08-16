@@ -975,12 +975,15 @@ await settleLid(false);
       });
       return out;
     })()`);
-    // the rings keep genuinely flat rim and wall faces, so they sit near 50;
+    // Four design-bearing surfaces: the case body, its plinth, its wall ring and
+    // the lid. The lid used to add a cap and a ring of its own; it is one
+    // open-bottomed box now, which is what stopped its outline jumping on open.
+    // The rings keep genuinely flat rim and wall faces, so they sit near 50;
     // a fully faceted piece is 100, which is the regression
     const bad = shading.filter(r => r.flatPct > 75)
       .map(r => `${r.t}:${r.flatPct.toFixed(0)}%`);
     check('the case keeps its smooth fillet normals, so edges are not faceted',
-      shading.length >= 6 && bad.length === 0, `${bad.join(' ')} (of ${shading.length})`);
+      shading.length >= 4 && bad.length === 0, `${bad.join(' ')} (of ${shading.length})`);
   }
 
   // Range is not scale. This check used to be a byte-for-byte copy of the one
@@ -1025,7 +1028,7 @@ await settleLid(false);
       return Math.abs(r.upv - want) > 0.02 * want;
     }).map(r => `${r.t}@${(r.y || 0).toFixed(2)}:${r.err || r.upv.toFixed(2)}`);
     check('every case surface maps the design at the same scale',
-      scale.length >= 6 && bad.length === 0, `${bad.join(' ')} (of ${scale.length})`);
+      scale.length >= 4 && bad.length === 0, `${bad.join(' ')} (of ${scale.length})`);
   }
 
   // the retired press-and-hold gesture must no longer swap anything
@@ -1082,6 +1085,54 @@ check('no brand names anywhere user-visible', await L(
     /split disc/i.test(how) && !/below it/i.test(how) && !/those four/i.test(how),
     how.slice(0, 120));
 }
+// The lid's OUTLINE must not change as it opens. It used to swap a solid rounded
+// box for a shell whose wall ring had a SQUARE bottom where the solid had a
+// 0.34-radius roll, so cracking the lid changed its shape and put a hard white
+// line across its underside -- reported three times. Measured against a control
+// of the same rotation with no swap in it, so the lid genuinely turning does not
+// count against the budget.
+{
+  await L('(LIGHTER.closeLid(), LIGHTER.sim.lid.dragging = true, 0)');
+  await L(`(() => {
+    window.__frames = n => new Promise(res => {
+      const f0 = LIGHTER.frames;
+      const t = () => (LIGHTER.frames - f0 >= n) ? res() : requestAnimationFrame(t); t(); });
+    window.__sil = async th => {
+      LIGHTER.sim.lid.theta = th; LIGHTER.sim.lid.omega = 0;
+      await window.__frames(3);
+      const s = LIGHTER.scene, bg = s.background;
+      s.background = null;
+      const Mat = LIGHTER.mats.chrome.constructor;
+      s.overrideMaterial = new Mat({ color: 0, emissive: 0xffffff, roughness: 1, metalness: 0 });
+      LIGHTER.setBloom(false);
+      await window.__frames(3);
+      const c = document.querySelector('canvas');
+      const g = document.createElement('canvas'); g.width = c.width; g.height = c.height;
+      g.getContext('2d').drawImage(c, 0, 0);
+      const d = g.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      const m = new Uint8Array(c.width * c.height);
+      for (let i = 0; i < m.length; i++) m[i] = d[i * 4] > 40 ? 1 : 0;
+      s.overrideMaterial = null; s.background = bg; LIGHTER.setBloom(true);
+      await window.__frames(2);
+      return m;
+    };
+    window.__dis = (a, b) => { let o = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) o++; return o; };
+    return 0; })()`);
+  const swap = await L(`(async () => {
+    const a = await window.__sil(0.055), b = await window.__sil(0.065);
+    return window.__dis(a, b); })()`);
+  const spin = await L(`(async () => {
+    const a = await window.__sil(0.065), b = await window.__sil(0.075);
+    return window.__dis(a, b); })()`);
+  await L('(LIGHTER.sim.lid.dragging = false, 0)');
+  // Relative to the control, because the lighter's size on screen depends on
+  // where the camera happens to be by this point in the suite. Measured: 30% of
+  // the control before the fix, 5-7% after.
+  const excess = (swap - spin) / spin;
+  check(`the lid keeps its shape as it opens (${(100 * excess).toFixed(1)}% beyond the turn itself)`,
+    excess < 0.15, `swap ${swap} vs rotation-only control ${spin}`);
+}
+
 check('affiliation disclaimer present', await L(
   'document.getElementById("guideLegal").textContent.includes("Not affiliated")'));
 check('fuel gauge tracks the tank', await L('document.getElementById("gFuel").style.width') === '37%');
