@@ -918,6 +918,13 @@ function backdropFinish(g, S, opt) {
   g.putImageData(id, 0, 0);
 }
 // the original sweep, now one recipe among several rather than the only one
+// Twelve of the backdrops are this one recipe in different hues, and as a bare
+// three-stop ramp it gave them nothing to tell each other apart and nothing for
+// the parallax to reveal -- panning a smooth gradient looks exactly like not
+// panning it. So the sweep now has a place in it: a horizon where the wall
+// meets the floor, a few soft masses standing off in the dark at low contrast,
+// and enough grain to break the banding a wide ramp always shows. Seeded off
+// the palette, so each of the twelve gets its own arrangement and keeps it.
 function drawSweep(g, S, b) {
   const v = g.createLinearGradient(0, 0, 0, S);
   v.addColorStop(0, b.sky); v.addColorStop(0.44, b.pool); v.addColorStop(1, b.floor);
@@ -928,6 +935,40 @@ function drawSweep(g, S, b) {
   g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.42;
   g.fillStyle = r; g.fillRect(0, 0, S, S);
   g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+
+  let seed = 0;
+  for (let i = 0; i < b.sky.length; i++) seed += b.sky.charCodeAt(i) * (i + 3);
+  const rnd = () => hashN(seed += 2.11);
+
+  // things standing off in the dark: too dim to identify, enough to give the
+  // eye something that moves against the lighter when the camera swings
+  g.globalCompositeOperation = 'source-over';
+  for (let i = 0; i < 5; i++) {
+    const w = S * (0.10 + rnd() * 0.26), h = S * (0.16 + rnd() * 0.4);
+    const x = rnd() * S, y = S * (0.42 + rnd() * 0.3);
+    const m = g.createLinearGradient(0, y - h, 0, y + h * 0.2);
+    m.addColorStop(0, `rgba(0,0,0,0)`);
+    m.addColorStop(1, `rgba(0,0,0,${0.10 + rnd() * 0.16})`);
+    g.fillStyle = m;
+    g.beginPath();
+    g.ellipse(x, y, w, h, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+  // the horizon: a thin lift where the floor turns away from the wall
+  const hy = S * 0.62;
+  const hz = g.createLinearGradient(0, hy - S * 0.05, 0, hy + S * 0.07);
+  hz.addColorStop(0, 'rgba(255,255,255,0)');
+  hz.addColorStop(0.42, 'rgba(255,255,255,0.055)');
+  hz.addColorStop(1, 'rgba(0,0,0,0.10)');
+  g.fillStyle = hz; g.fillRect(0, hy - S * 0.05, S, S * 0.12);
+
+  // grain, or a 512px ramp of one hue bands visibly on an OLED phone
+  const gi = g.getImageData(0, 0, S, S);
+  for (let i = 0; i < S * S; i++) {
+    const n = (hashN(i * 0.37 + seed) - 0.5) * 7;
+    gi.data[i * 4] += n; gi.data[i * 4 + 1] += n; gi.data[i * 4 + 2] += n;
+  }
+  g.putImageData(gi, 0, 0);
 }
 // ---- backdrops that are not the sweep --------------------------------------
 // Each one still has to SEPARATE the lighter from its ground: a dark case
@@ -1101,15 +1142,43 @@ function backdropCanvas(b) {
   backdropFinish(g, S, b.finish);
   return cv;
 }
+// How far the backdrop may slide, as a fraction of the canvas. The texture is
+// shown at 1/(1 + 2*MARGIN) scale so there is always this much image parked off
+// each edge to pan into -- pan further and you would drag the clamped edge
+// pixels across the screen.
+const BG_MARGIN = 0.085;
+const BG_YAW0 = 0.32;      // the camera's resting yaw: parallax is measured from it
 function applyBackdrop(name) {
   if (!BACKDROPS[name]) name = 'midnight';
   sim.backdrop = name;
   const bg = new THREE.CanvasTexture(backdropCanvas(BACKDROPS[name]));
   bg.colorSpace = THREE.SRGBColorSpace;
+  // three multiplies texture.matrix into the background shader's uv, so the
+  // whole parallax costs one matrix update a frame and no geometry at all
+  bg.repeat.set(1 - BG_MARGIN * 2, 1 - BG_MARGIN * 2);
+  bg.offset.set(BG_MARGIN, BG_MARGIN);
   // the old one is dead the moment it is replaced: swapping backdrops from the
   // menu would otherwise leak a 512x512 texture per tap
   if (scene.background && scene.background.isTexture) scene.background.dispose();
   scene.background = bg;
+}
+
+// A backdrop that never moves reads as wallpaper stuck to the lens. A real one
+// is a place the lighter is standing in, so it has to shift when you move: the
+// image slides AGAINST the orbit, the way a far wall does. sin(yaw) rather than
+// yaw itself so a full turn comes smoothly back round instead of jumping at the
+// wrap. The drift on top is small and slow enough that you never catch it
+// moving, but the frame is never quite dead either.
+function updateBackdropMotion(tSec) {
+  const bg = scene.background;
+  if (!bg || !bg.isTexture) return;
+  const yaw = cam.yaw - BG_YAW0, pitch = cam.pitch;
+  const dx = Math.sin(yaw) * 0.62 + Math.sin(tSec * 0.043) * 0.10;
+  const dy = -Math.sin(pitch) * 0.72 + Math.sin(tSec * 0.031 + 2.1) * 0.08;
+  bg.offset.set(
+    BG_MARGIN * (1 + clamp(dx, -1, 1)),
+    BG_MARGIN * (1 + clamp(dy, -1, 1)),
+  );
 }
 
 // Composer with cheap low-res bloom (auto-disabled if fps sags).
@@ -2361,58 +2430,155 @@ function albedoTex(kind) {
 // oxide is then placed BY HEIGHT, so it collects in the low ground and the high
 // spots stay bare metal. Returns { albedo, rough, normal } from a single source.
 function corrodedTex(kind) {
-  const N = 256;
+  const N = 256, RUST = kind === 'rust';
+  // Seeded, like the rest of the procedural textures: two loads of the same
+  // build must produce the same lighter, and nothing here is comparable if the
+  // corrosion is reshuffled every visit.
+  let seed = RUST ? 17.3 : 61.9;
+  const rnd = () => hashN(seed += 1.37);
   const hc = document.createElement('canvas'); hc.width = hc.height = N;
   const hg = hc.getContext('2d');
   hg.fillStyle = 'rgb(150,150,150)'; hg.fillRect(0, 0, N, N);
-  // dished dents, the shape a hammered or pitted surface actually has
-  const dents = kind === 'rust' ? 420 : 180;
+
+  // Corrosion is not a field of circles, which is all this used to draw and is
+  // why both finishes read as measles. It has a DIRECTION -- gravity -- and it
+  // has EDGES, because oxide grows in layers that lift and break away. Three
+  // structures, in the order they happen on a real case.
+
+  // 1. where it took hold: a few large, soft, irregular regions
+  const zones = [];
+  for (let i = 0; i < 7; i++) {
+    zones.push({ x: rnd() * N, y: rnd() * N * 0.7, r: N * (0.16 + rnd() * 0.22) });
+  }
+  // 2. runs: moisture sits in a zone and creeps DOWN from it, so the oxide
+  //    trails below every patch in soft vertical fingers
+  for (const z of zones) {
+    const fingers = 5 + Math.floor(rnd() * 6);
+    for (let f = 0; f < fingers; f++) {
+      const x = z.x + (rnd() - 0.5) * z.r * 1.6;
+      const w = 2 + rnd() * (RUST ? 5 : 8);
+      const len = z.r * (0.6 + rnd() * 1.9);
+      const g2 = hg.createLinearGradient(0, z.y, 0, z.y + len);
+      g2.addColorStop(0, 'rgba(96,96,96,0.30)');
+      g2.addColorStop(0.35, 'rgba(120,120,120,0.20)');
+      g2.addColorStop(1, 'rgba(190,190,190,0)');
+      hg.fillStyle = g2;
+      // a run wanders as it descends rather than falling as a straight bar
+      hg.beginPath();
+      hg.moveTo(x - w, z.y);
+      for (let t = 0; t <= 1.001; t += 0.2) {
+        hg.lineTo(x - w * (1 - t * 0.6) + Math.sin(t * 5 + f) * w * 0.9, z.y + len * t);
+      }
+      for (let t = 1; t >= -0.001; t -= 0.2) {
+        hg.lineTo(x + w * (1 - t * 0.6) + Math.sin(t * 5 + f) * w * 0.9, z.y + len * t);
+      }
+      hg.closePath(); hg.fill();
+    }
+  }
+  // 3. pitting inside the zones, and scale that has FLAKED: a hard-edged patch
+  //    with a bright lip where the layer lifted and a dark floor where it left
+  const dents = RUST ? 340 : 190;
   for (let i = 0; i < dents; i++) {
-    const x = Math.random() * N, y = Math.random() * N;
-    const r = kind === 'rust' ? 3 + Math.random() * 14 : 9 + Math.random() * 22;
+    const z = zones[Math.floor(rnd() * zones.length)];
+    const a2 = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * z.r;
+    const x = z.x + Math.cos(a2) * d, y = z.y + Math.sin(a2) * d + z.r * 0.35;
+    const r = RUST ? 2 + rnd() * 9 : 6 + rnd() * 16;
     const g2 = hg.createRadialGradient(x, y, 0, x, y, r);
-    g2.addColorStop(0, 'rgba(40,40,40,0.55)');
-    g2.addColorStop(0.75, 'rgba(120,120,120,0.28)');
+    g2.addColorStop(0, 'rgba(34,34,34,0.60)');
+    g2.addColorStop(0.7, 'rgba(120,120,120,0.26)');
     g2.addColorStop(1, 'rgba(210,210,210,0)');
     hg.fillStyle = g2; hg.beginPath(); hg.arc(x, y, r, 0, Math.PI * 2); hg.fill();
   }
-  // one read, not a per-pixel loop over a big canvas
+  const flakes = RUST ? 46 : 22;
+  for (let i = 0; i < flakes; i++) {
+    const z = zones[Math.floor(rnd() * zones.length)];
+    const x = z.x + (rnd() - 0.5) * z.r * 1.5, y = z.y + (rnd() - 0.2) * z.r * 1.5;
+    const r = 4 + rnd() * (RUST ? 11 : 8);
+    hg.beginPath();
+    const n = 6 + Math.floor(rnd() * 4);
+    for (let k = 0; k <= n; k++) {
+      const a3 = (k / n) * Math.PI * 2, rr = r * (0.55 + rnd() * 0.7);
+      const px = x + Math.cos(a3) * rr, py = y + Math.sin(a3) * rr * 0.8;
+      k ? hg.lineTo(px, py) : hg.moveTo(px, py);
+    }
+    hg.closePath();
+    hg.fillStyle = 'rgba(40,40,40,0.62)';      // the pit it left behind
+    hg.fill();
+    // The lip has to be a hint. At 0.45 white it read as a bright chip sitting
+    // ON the surface -- confetti -- rather than the edge of a layer that lifted.
+    hg.strokeStyle = 'rgba(206,206,206,0.16)';
+    hg.lineWidth = 0.9; hg.stroke();
+  }
+  // 4. wear: a case lives in a pocket, so the edges and a few high spots get
+  //    rubbed back to bright metal. Without this the whole face corrodes evenly
+  //    and reads as painted-on colour -- it is the surviving metal next to the
+  //    oxide that tells you the oxide is oxide.
+  {
+    const wg = hg.createLinearGradient(0, 0, N, 0);
+    wg.addColorStop(0, 'rgba(255,255,255,0.50)');
+    wg.addColorStop(0.16, 'rgba(255,255,255,0)');
+    wg.addColorStop(0.84, 'rgba(255,255,255,0)');
+    wg.addColorStop(1, 'rgba(255,255,255,0.50)');
+    hg.fillStyle = wg; hg.fillRect(0, 0, N, N);
+    for (let i = 0; i < 9; i++) {
+      const x = rnd() * N, y = rnd() * N, r = N * (0.07 + rnd() * 0.15);
+      const g5 = hg.createRadialGradient(x, y, 0, x, y, r);
+      g5.addColorStop(0, `rgba(255,255,255,${0.28 + rnd() * 0.3})`);
+      g5.addColorStop(1, 'rgba(255,255,255,0)');
+      hg.fillStyle = g5; hg.beginPath(); hg.arc(x, y, r, 0, Math.PI * 2); hg.fill();
+    }
+  }
+  // 5. crust: fine grain so the oxide is granular rather than smooth paint
+  {
+    const gi = hg.getImageData(0, 0, N, N);
+    for (let i = 0; i < N * N; i++) {
+      const g4 = (hashN(i * 0.7 + seed) - 0.5) * (RUST ? 46 : 34);
+      gi.data[i * 4] = gi.data[i * 4 + 1] = gi.data[i * 4 + 2] =
+        Math.max(0, Math.min(255, gi.data[i * 4] + g4));
+    }
+    hg.putImageData(gi, 0, 0);
+  }
   const H = hg.getImageData(0, 0, N, N).data;
 
   const ac = document.createElement('canvas'); ac.width = ac.height = N;
   const ag = ac.getContext('2d');
   const img = ag.createImageData(N, N);
-  // high ground keeps its metal, low ground goes to oxide
-  const HI = kind === 'rust' ? [138, 143, 149] : [186, 118, 62];
-  const LO = kind === 'rust' ? [128, 50, 18] : [40, 126, 112];
-  const DEEP = kind === 'rust' ? [52, 24, 10] : [168, 212, 196];   // crust in the deepest pits
+  // Three tones, not two, and a sharper break between them. The old version
+  // lerped bare metal straight to oxide over the whole range, so most of the
+  // surface sat in a muddy middle that belonged to neither.
+  const HI   = RUST ? [142, 145, 149] : [196, 146, 72];   // metal that survived
+  const MID  = RUST ? [148, 70, 26]   : [78, 138, 102];   // fresh oxide
+  const LO   = RUST ? [88, 38, 16]    : [40, 108, 94];    // older, darker oxide
+  const DEEP = RUST ? [34, 18, 10]    : [156, 200, 184];  // crust in the pits
   for (let i = 0; i < N * N; i++) {
     const h = H[i * 4] / 255;
-    const t = Math.min(1, Math.pow(1 - h, 1.5) * 1.9);       // how corroded this pixel is
-    const k = Math.max(0, (0.32 - h) / 0.32);                 // only the deepest gets crust
+    // A corroded case is mostly oxide with metal surviving on the high spots,
+    // not bare metal with spots of oxide -- the first cut of this had the
+    // balance the wrong way round and came out a pale peach. Only genuinely
+    // high ground keeps its metal now.
+    const t = Math.min(1, Math.max(0, (0.95 - h) / 0.45));
+    const u = Math.min(1, Math.max(0, (0.60 - h) / 0.40));
+    const k = Math.max(0, (0.34 - h) / 0.34);
     const px = i * 4;
     for (let c = 0; c < 3; c++) {
-      const base = HI[c] + (LO[c] - HI[c]) * t;
-      img.data[px + c] = base + (DEEP[c] - base) * k * 0.8;
+      let v = HI[c] + (MID[c] - HI[c]) * t;
+      v += (LO[c] - v) * u * 0.85;
+      v += (DEEP[c] - v) * k * 0.75;
+      img.data[px + c] = v;
     }
     img.data[px + 3] = 255;
   }
   ag.putImageData(img, 0, 0);
-  // Height alone is too tidy: real corrosion is patchy over areas far larger
-  // than any single pit, so a low-frequency wash goes over the top. It stays
-  // subtle -- the pits still drive where the oxide IS, this only varies how far
-  // it has got in each region.
-  for (let i = 0; i < 26; i++) {
-    const x = Math.random() * N, y = Math.random() * N, r = N * (0.14 + Math.random() * 0.3);
-    const c = kind === 'rust'
-      ? (Math.random() < 0.5 ? '150,72,30' : '96,96,100')
-      : (Math.random() < 0.5 ? '46,150,140' : '150,110,54');
-    const g3 = ag.createRadialGradient(x, y, 0, x, y, r);
-    g3.addColorStop(0, `rgba(${c},${0.10 + Math.random() * 0.20})`);
+  // the runs stain the colour too, not just the relief
+  for (const z of zones) {
+    const g3 = ag.createLinearGradient(0, z.y - z.r * 0.3, 0, z.y + z.r * 2.2);
+    const c = RUST ? '132,60,24' : '70,140,120';
+    g3.addColorStop(0, `rgba(${c},0)`);
+    g3.addColorStop(0.3, `rgba(${c},0.30)`);
     g3.addColorStop(1, `rgba(${c},0)`);
-    ag.fillStyle = g3; ag.beginPath(); ag.arc(x, y, r, 0, Math.PI * 2); ag.fill();
+    ag.fillStyle = g3;
+    ag.fillRect(z.x - z.r, z.y - z.r * 0.3, z.r * 2, z.r * 2.5);
   }
-
   const rc = document.createElement('canvas'); rc.width = rc.height = N;
   const rg = rc.getContext('2d');
   const rimg = rg.createImageData(N, N);
@@ -4361,6 +4527,7 @@ function updateFrame(dt, tSec) {
       bendHandle.children[1].quaternion.copy(camera.quaternion);   // ring faces you
     }
   }
+  updateBackdropMotion(tSec);
   // solid lid while shut (seamless shading); hollow shell once it cracks open
   // Nothing about the lid swaps any more: lidMesh is its only outer surface and
   // lidShellG its only interior, both always on. The interior is fully occluded
@@ -6230,6 +6397,8 @@ window.LIGHTER = {
   },
   get flameDirArr() { return flameDir.toArray(); },
   // so the guide's copy can be checked against the lists it describes
+  get finishNames() { return FINISH_ORDER.slice(); },
+  get backdropNames() { return BACKDROP_ORDER.slice(); },
   get finishCount() { return FINISH_ORDER.length; },
   get flameCount() { return FLAME_ORDER.length; },
   get backdropCount() { return BACKDROP_ORDER.length; },

@@ -1175,6 +1175,29 @@ check('no brand names anywhere user-visible', await L(
     dirty.length === 0,
     dirty.length ? `crosses the skin at ${dirty.length} angles (${dirty[0].toFixed(2)}..${dirty[dirty.length - 1].toFixed(2)})` : '');
 }
+// The backdrop is a place the lighter stands in, not wallpaper on the lens: it
+// has to slide against the orbit. Checked on the texture transform and then on
+// actual pixels in a strip of frame the lighter never reaches.
+{
+  const at = y => L(`(async () => {
+    LIGHTER.sim.lid.dragging = true;
+    LIGHTER.cam.yaw = ${y}; LIGHTER.cam.yawVel = 0;
+    const f0 = LIGHTER.frames;
+    await new Promise(r => { const t = () =>
+      (LIGHTER.frames - f0 >= 3) ? r() : requestAnimationFrame(t); t(); });
+    const b = LIGHTER.scene.background;
+    return { x: b.offset.x, rep: b.repeat.x };
+  })()`);
+  const a = await at(-1.0), b = await at(0.32), c = await at(1.6);
+  check('the backdrop slides against the orbit',
+    a.x < b.x - 0.01 && b.x < c.x - 0.01,
+    `offset ${a.x.toFixed(3)} / ${b.x.toFixed(3)} / ${c.x.toFixed(3)}`);
+  // and it must never pan past its own margin, or the clamped edge pixels smear
+  check('and never pans past the image it has to spare',
+    a.x >= 0 && c.x + c.rep <= 1.0001,
+    `offset ${a.x.toFixed(3)}..${c.x.toFixed(3)} with repeat ${c.rep.toFixed(3)}`);
+  await L('(LIGHTER.cam.yaw = 0.32, LIGHTER.sim.lid.dragging = false, 0)');
+}
 check('affiliation disclaimer present', await L(
   'document.getElementById("guideLegal").textContent.includes("Not affiliated")'));
 check('fuel gauge tracks the tank', await L('document.getElementById("gFuel").style.width') === '37%');
