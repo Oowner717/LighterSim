@@ -498,7 +498,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
+import { toCreasedNormals, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* ============================== TUNABLES ============================== */
 const CFG = {
@@ -526,7 +526,14 @@ const CFG = {
   // hinge on the LEFT (lid opens leftward), chimney/wick left of center,
   // flint wheel on the RIGHT — clear of the open lid for the striking thumb
   CHIM_X: -0.35, CHIM_W: 2.3, CHIM_D: 1.02, CHIM_H: 1.22,
-  WHEEL_X: 1.30, WHEEL_Y: 4.68, WHEEL_R: 0.52, WHEEL_T: 0.40,
+  // WHEEL_Y and WHEEL_R moved down together with the lid's lip (LID_LIP): the
+  // three are one system. An analytic sweep of the opening arc requires the
+  // wheel to pass through the lid's MOUTH rather than its solid skin; these
+  // values are clean over the whole arc with 0.02 of margin on each knob.
+  // Raising or fattening either the wheel or the lip re-opens the clip the
+  // suite's clearance check guards.
+  WHEEL_X: 1.30, WHEEL_Y: 4.56, WHEEL_R: 0.46, WHEEL_T: 0.40,
+  LID_LIP: 0.06,             // the rolled edge at the lid's mouth
 
   // lid hinge (over-center cam). Flicks >~16 rad/s carry through the cam;
   // anything weaker falls back to the nearest end. Pop is the hardest snap.
@@ -1334,6 +1341,18 @@ const matBore = new THREE.MeshStandardMaterial({ color: 0x0a0c0e, metalness: 0.5
 const matCaseInner = new THREE.MeshStandardMaterial({
   color: 0x9aa2ab, metalness: 0.75, roughness: 0.62, envMapIntensity: 1.1, side: THREE.DoubleSide,
 });
+// The lid's interior. BackSide because it is the inside face of a shell you
+// only ever see from within, and darker than the case cavity: a cracked lid is
+// a roof over its own contents, so its inside lives in shadow. applyFinish
+// keeps its colour in step with the case's inner tone.
+// DoubleSide, not BackSide: the skin and the interior are two nested surfaces
+// a wall-thickness apart, and the slot between them is open at the rim. Seen
+// up that slot a BackSide interior culls its outward face and the skin culls
+// its inward face, so the slot became a periscope to the sky. Drawing both
+// sides of the interior closes it.
+const matLidInner = new THREE.MeshStandardMaterial({
+  color: 0x565b60, metalness: 0.7, roughness: 0.72, envMapIntensity: 0.55, side: THREE.DoubleSide,
+});
 const matFluid = new THREE.MeshBasicMaterial({
   color: 0xbfd6e8, transparent: true, opacity: 0.75, depthWrite: false,
 });
@@ -1457,17 +1476,15 @@ function roundedWallGeo(w, d, r, wall, h, yOff = 0, hTotal = h) {
 function boxGeo(w, h, d, r, yOff, hTotal) {
   return boxProjectUV(new RoundedBoxGeometry(w, h, d, 4, r), w, d, h, yOff, hTotal);
 }
-// Drop the flat bottom face, keeping every other triangle -- including the whole
-// bottom fillet, which is what the silhouette is made of. The result is the same
-// solid box seen from outside and a hollow you can see up into from below, so a
-// lid built this way can be shown open or shut without its outline changing.
-function openBottom(g, h) {
-  const yMin = -h / 2 + 1e-3;
+// Keep only the triangles whose vertices all sit at or above yMin. Used to cut
+// the top of a rounded box off at the height where its cross-section is the
+// full outline, so a parametric skirt can continue it seamlessly downward.
+function keepAbove(g, yMin) {
   const src = g.attributes, keep = [];
   for (let t = 0; t < src.position.count; t += 3) {
-    let flat = true;
-    for (let k = 0; k < 3; k++) if (src.position.getY(t + k) > yMin) { flat = false; break; }
-    if (!flat) keep.push(t, t + 1, t + 2);
+    let ok = true;
+    for (let k = 0; k < 3; k++) if (src.position.getY(t + k) < yMin - 1e-3) { ok = false; break; }
+    if (ok) keep.push(t, t + 1, t + 2);
   }
   const out = new THREE.BufferGeometry();
   for (const name of ['position', 'normal', 'uv']) {
@@ -1479,6 +1496,77 @@ function openBottom(g, h) {
     out.setAttribute(name, new THREE.BufferAttribute(arr, n));
   }
   return out;
+}
+// The lid's skin: a rounded-box TOP (the 0.34 crown it has always had) carried
+// down by straight walls to a thin rolled LIP at the mouth, open underneath.
+// A real lid is stamped sheet: fat roll over the top, near-full-width skirt,
+// and only a small rolled edge at the rim. The uniform-radius box got that
+// wrong in a way that finally mattered: its 0.34 bottom roll pinched the mouth
+// to a 3.12-wide slot, and the flint wheel reaches 1.82 off axis -- so during
+// opening the wheel provably crossed the SOLID skin (measured: every theta from
+// 0.05 to 0.32, poking out through the bottom corner). No wheel small enough to
+// pass a 0.34-rolled mouth looks like a flint wheel. With the lip at LID_LIP
+// and the wheel at WHEEL_Y/WHEEL_R below, an analytic sweep of the whole
+// opening arc finds zero crossings outside the mouth, with margin: it stays
+// clean with the lip fattened or the wheel raised/fattened by 0.02.
+// Geometry is centred like RoundedBoxGeometry so the mesh transform is shared.
+function lidSkinGeo(w, h, d, rTop, rLip, rCorner, yOff, hTotal) {
+  const hx = w / 2, hz = d / 2, hy = h / 2;
+  // outline of the x-z cross-section with outward normals, walked once around
+  const pts = [], nrm = [];
+  // each corner's arc ENDS at a0; it spans [a0 - 90deg, a0], so the (+x,+z)
+  // corner carries outward normals 0..90deg, and so on around
+  const corners = [
+    [hx - rCorner, hz - rCorner, Math.PI / 2], [-(hx - rCorner), hz - rCorner, Math.PI],
+    [-(hx - rCorner), -(hz - rCorner), Math.PI * 1.5], [hx - rCorner, -(hz - rCorner), Math.PI * 2],
+  ];
+  const S = 7, A = 9;                       // samples per straight, per corner arc
+  for (let k = 0; k < 4; k++) {
+    const [cx, cz, a0] = corners[k];
+    for (let i = 0; i < A; i++) {           // quarter arc, start inclusive
+      const a = a0 + (i / (A - 1)) * Math.PI / 2 - Math.PI / 2;
+      pts.push([cx + rCorner * Math.cos(a), cz + rCorner * Math.sin(a)]);
+      nrm.push([Math.cos(a), Math.sin(a)]);
+    }
+    const [nx, nz, na] = corners[(k + 1) % 4];
+    const ex = pts[pts.length - 1], en = nrm[nrm.length - 1];
+    const sx = nx + rCorner * Math.cos(na - Math.PI / 2), sz = nz + rCorner * Math.sin(na - Math.PI / 2);
+    for (let i = 1; i <= S; i++) {
+      const t = i / (S + 1);
+      pts.push([ex[0] + (sx - ex[0]) * t, ex[1] + (sz - ex[1]) * t]);
+      nrm.push(en.slice());
+    }
+  }
+  const N = pts.length;
+  // rows: wall top (meets the crown), wall bottom, then the lip roll to y = -hy
+  const rows = [];
+  rows.push({ y: hy - rTop, k: 1, lift: 0 });
+  rows.push({ y: -hy + rLip, k: 1, lift: 0 });
+  const ROLL = 6;
+  for (let i = 1; i <= ROLL; i++) {
+    const phi = (i / ROLL) * Math.PI / 2;
+    rows.push({ y: -hy + rLip * (1 - Math.sin(phi)), k: Math.cos(phi), lift: -Math.sin(phi), inset: rLip * (1 - Math.cos(phi)) });
+  }
+  const pos = [], nor = [];
+  for (const r of rows) for (let i = 0; i <= N; i++) {
+    const j = i % N, inset = r.inset || 0;
+    pos.push(pts[j][0] - nrm[j][0] * inset, r.y, pts[j][1] - nrm[j][1] * inset);
+    nor.push(nrm[j][0] * r.k, r.lift, nrm[j][1] * r.k);
+  }
+  const idx = [];
+  for (let r = 0; r < rows.length - 1; r++) for (let i = 0; i < N; i++) {
+    const a = r * (N + 1) + i, b = a + 1, c = a + (N + 1), dd = c + 1;
+    idx.push(a, b, c, b, dd, c);
+  }
+  const strip = new THREE.BufferGeometry();
+  strip.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  strip.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  strip.setAttribute('uv', new THREE.Float32BufferAttribute(new Array((pos.length / 3) * 2).fill(0), 2));
+  strip.setIndex(idx);
+  const stripFlat = strip.toNonIndexed();
+  const crown = keepAbove(new RoundedBoxGeometry(w, h, d, 4, rTop), hy - rTop);
+  const g = mergeGeometries([crown, stripFlat]);
+  return boxProjectUV(g, w, d, h, yOff, hTotal);
 }
 // The seated lighter keeps the solid, perfectly-shaded body. The moment the
 // insert lifts out we swap in an open-topped shell of the same silhouette, so
@@ -1516,35 +1604,33 @@ caseG.add(caseShellG);
 // Same solid/shell trick as the case: the closed lid keeps the seamless
 // rounded body; once it cracks open we show a hollow shell so you look up
 // into a real stamped-metal cavity instead of a flat black plate.
-// ONE outer surface, always. The lid used to swap a solid rounded box for a
-// shell built from a cap plus an extruded wall ring, and the ring's bottom was a
-// SQUARE cut where the solid's was a 0.34-radius roll. So the moment the lid
-// cracked open its outline changed -- measured, 601 pixels of silhouette moved --
-// and the new square edge caught the light as a hard white line across the
-// bottom of the lid. Both complaints, one cause. Now the same rounded box serves
-// open and shut with only its flat underside removed: the outline cannot change
-// because it is the same triangles, and there is no square edge to catch.
+// ONE outer surface, always: crown, skirt and lip are a single static mesh, so
+// the outline cannot change as the lid opens and there is no swap to pop. See
+// lidSkinGeo for why the mouth wears a thin lip instead of the crown's fat
+// roll -- the flint wheel has to pass through it.
 const lidMesh = new THREE.Mesh(
-  openBottom(boxGeo(CFG.BODY_W, CFG.LID_H, CFG.BODY_D, CFG.EDGE_R, CFG.LID_H / 2, CFG.LID_H),
-    CFG.LID_H), matChrome);
+  lidSkinGeo(CFG.BODY_W, CFG.LID_H, CFG.BODY_D, CFG.EDGE_R, CFG.LID_LIP, CFG.EDGE_R,
+    CFG.LID_H / 2, CFG.LID_H), matChrome);
 lidMesh.position.set(-HINGE_X, CFG.LID_H / 2, 0);
 lidG.add(lidMesh);   // also the raycast target for lid taps
 const lidShellG = new THREE.Group();
 lidShellG.position.set(-HINGE_X, 0, 0);
-lidShellG.visible = false;
 lidG.add(lidShellG);
 {
-  const capH = 0.72;
-  const liner = new THREE.Mesh(
-    roundedWallGeo(CFG.BODY_W - CASE_WALL * 2 + 0.006, CFG.BODY_D - CASE_WALL * 2 + 0.006,
-      Math.max(0.05, CFG.EDGE_R - CASE_WALL), 0.02, CFG.LID_H - capH - 0.02), matCaseInner);
-  liner.position.y = 0.01;
-  lidShellG.add(liner);
-  const ceiling = new THREE.Mesh(
-    roundedPlanGeo(CFG.BODY_W - CASE_WALL * 2, CFG.BODY_D - CASE_WALL * 2,
-      Math.max(0.05, CFG.EDGE_R - CASE_WALL), 0.06), matCaseInner);
-  ceiling.position.y = CFG.LID_H - capH - 0.06;
-  lidShellG.add(ceiling);
+  // The interior is the same skin generator inset by the wall thickness, so it
+  // parallels the outer surface everywhere -- the old straight-sided liner was
+  // sized for a deleted square bore and burst 0.19 through the lid's own metal,
+  // which was the flat band the user photographed twice. Its rim hangs 0.02
+  // above the skin's and 0.03 inside it, so from below you see the sheet's
+  // edge thickness and then the dark inside, the way a real stamped lid reads.
+  const t = CASE_WALL;
+  const innerH = CFG.LID_H - t;
+  const inner = new THREE.Mesh(
+    lidSkinGeo(CFG.BODY_W - t * 2, innerH, CFG.BODY_D - t * 2,
+      CFG.EDGE_R - t, Math.max(0.03, CFG.LID_LIP - t + 0.03), CFG.EDGE_R - t,
+      innerH / 2, innerH), matLidInner);
+  inner.position.y = innerH / 2 + 0.02;
+  lidShellG.add(inner);
 }
 { // 5-knuckle hinge along the narrow side: barrel on the case, leaves on the lid
   const kg = new THREE.CylinderGeometry(0.12, 0.12, 0.2, 10);
@@ -2552,6 +2638,8 @@ function applyFinish(name) {
   // not part of the insert, and a brass case cannot have a chrome-coloured
   // inside. Finishes still declare `insert:`; it is simply no longer applied.
   matCaseInner.color.setHex(fp.inner);
+  // the lid's inside follows the same tone, pulled toward shadow
+  matLidInner.color.setHex(fp.inner).multiplyScalar(0.55);
   // the main-screen swatch button wears the current finish
   const sw = document.getElementById('finishSwatch');
   if (sw) {
@@ -4243,10 +4331,10 @@ function updateFrame(dt, tSec) {
     }
   }
   // solid lid while shut (seamless shading); hollow shell once it cracks open
-  // lidMesh is the lid's only outer surface and is never hidden -- swapping it
-  // was what made the outline jump. lidShellG is now just the interior, which
-  // nothing can see until the lid is off the case.
-  lidShellG.visible = sim.lid.theta > 0.06;
+  // Nothing about the lid swaps any more: lidMesh is its only outer surface and
+  // lidShellG its only interior, both always on. The interior is fully occluded
+  // while the lid is shut, so there is nothing to gate -- and the old 0.06
+  // visibility threshold was itself a pop, the interior blinking into the crack.
   // ---- service pose: lift while pulling, then float out + flip to face you ----
   {
     const S = sim.svc;
@@ -6121,6 +6209,8 @@ window.LIGHTER = {
   get motionAttached() { return Motion.attached; },
   refill: doRefill,
   get svcState() { return sim.svc.state; },
+  // the lid's pivot, so tests can reason about the opening arc geometrically
+  hinge: { x: HINGE_X, y: HINGE_Y },
   // How far off parallel the pulled insert is held, in degrees. Folded to
   // [0, 90] because "upside down but alongside the case" IS parallel -- that is
   // the grip you fuel one in. Guards the pose against drifting back out to the

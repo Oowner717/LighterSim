@@ -1133,6 +1133,48 @@ check('no brand names anywhere user-visible', await L(
     excess < 0.15, `swap ${swap} vs rotation-only control ${spin}`);
 }
 
+// The flint wheel must pass through the lid's MOUTH as the lid opens, never
+// through its solid skin. With the old uniform 0.34 bottom roll the mouth was a
+// 3.12-wide slot against a wheel reaching 1.82 off axis, so the wheel provably
+// crossed the metal at every angle from 0.05 to 0.32 -- the clipping the user
+// photographed. This sweeps the whole arc analytically from the live CFG, so
+// fattening the lip or raising the wheel fails here before anyone sees it.
+{
+  const g = await L(`(() => { const C = LIGHTER.CFG; return {
+    hx: C.BODY_W / 2, hy: C.LID_H / 2, r0: C.EDGE_R, r1: C.LID_LIP,
+    wx: C.WHEEL_X, wy: C.WHEEL_Y, wr: C.WHEEL_R,
+    hgx: LIGHTER.hinge.x, hgy: LIGHTER.hinge.y }; })()`);
+  const CX = -g.hgx, CY = g.hy;      // box centre in lidG space
+  const sdf = (x, y) => {
+    const r = y < 0 ? g.r1 : g.r0;
+    const dx = Math.abs(x) - (g.hx - r), dy = Math.abs(y) - (g.hy - r);
+    const ox = Math.max(dx, 0), oy = Math.max(dy, 0);
+    return Math.hypot(ox, oy) + Math.min(Math.max(dx, dy), 0) - r;
+  };
+  const dirty = [];
+  for (let th = 0; th <= 0.7; th += 0.005) {
+    const c = Math.cos(-th), sn = Math.sin(-th);
+    let prev = null;
+    for (let i = 0; i <= 1440; i++) {
+      const a = i / 1440 * Math.PI * 2;
+      const wx = g.wx + g.wr * Math.cos(a), wy = g.wy + g.wr * Math.sin(a);
+      const px = wx - g.hgx, py = wy - g.hgy;
+      const x = c * px - sn * py - CX, y = sn * px + c * py - CY;
+      const v = sdf(x, y);
+      if (prev && prev.v * v < 0) {
+        const t = prev.v / (prev.v - v);
+        const cx = prev.x + (x - prev.x) * t, cy = prev.y + (y - prev.y) * t;
+        if (!(cy < -(g.hy - g.r1) + 1e-6 && Math.abs(cx) <= g.hx - g.r1 + 1e-6)) {
+          dirty.push(th); i = 1e9;
+        }
+      }
+      prev = { v, x, y };
+    }
+  }
+  check('the wheel passes through the lid mouth, never its metal',
+    dirty.length === 0,
+    dirty.length ? `crosses the skin at ${dirty.length} angles (${dirty[0].toFixed(2)}..${dirty[dirty.length - 1].toFixed(2)})` : '');
+}
 check('affiliation disclaimer present', await L(
   'document.getElementById("guideLegal").textContent.includes("Not affiliated")'));
 check('fuel gauge tracks the tank', await L('document.getElementById("gFuel").style.width') === '37%');
