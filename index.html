@@ -2430,190 +2430,374 @@ function albedoTex(kind) {
 // oxide is then placed BY HEIGHT, so it collects in the low ground and the high
 // spots stay bare metal. Returns { albedo, rough, normal } from a single source.
 function corrodedTex(kind) {
-  const N = 256, RUST = kind === 'rust';
-  // Seeded, like the rest of the procedural textures: two loads of the same
-  // build must produce the same lighter, and nothing here is comparable if the
-  // corrosion is reshuffled every visit.
-  let seed = RUST ? 17.3 : 61.9;
-  const rnd = () => hashN(seed += 1.37);
-  const hc = document.createElement('canvas'); hc.width = hc.height = N;
-  const hg = hc.getContext('2d');
-  hg.fillStyle = 'rgb(150,150,150)'; hg.fillRect(0, 0, N, N);
+  const N = 512, RUST = kind === 'rust';
+  const SEED = RUST ? 17.3 : 61.9;
+  const clamp01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
+  const sstep = (a, b, x) => { const t = clamp01((x - a) / (b - a || 1e-6)); return t * t * (3 - 2 * t); };
 
-  // Corrosion is not a field of circles, which is all this used to draw and is
-  // why both finishes read as measles. It has a DIRECTION -- gravity -- and it
-  // has EDGES, because oxide grows in layers that lift and break away. Three
-  // structures, in the order they happen on a real case.
+  /* ---------- tileable value-noise stack --------------------------------
+     Corrosion is a FIELD, not a set of stamped shapes. Drawing it with canvas
+     primitives -- circles, gradient bars -- which is all this used to do, can
+     only produce blobs with the primitive's own outline, and that is why both
+     finishes read as measles. A warped fBm has no shape of its own, so its
+     level sets come out crenellated at every scale the way a real oxide front
+     is. Lattices are built once and sampled bilinearly, so a 512 map costs
+     about a tenth of a second and is then cached for the session.           */
+  const SZ = [4, 8, 16, 32, 64, 128, 256];
+  const GR = SZ.map((sz, i) => {
+    const a = new Float32Array(sz * sz);
+    for (let k = 0; k < sz * sz; k++) a[k] = hashN(k * 0.7317 + i * 91.73 + SEED);
+    return a;
+  });
+  const samp = (o, u, v) => {
+    const sz = SZ[o], a = GR[o];
+    const x = u * sz, y = v * sz;
+    let x0 = Math.floor(x), y0 = Math.floor(y);
+    const fx = x - x0, fy = y - y0;
+    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    x0 = ((x0 % sz) + sz) % sz; y0 = ((y0 % sz) + sz) % sz;
+    const x1 = (x0 + 1) % sz, y1 = (y0 + 1) % sz;
+    const p0 = a[y0 * sz + x0], p1 = a[y0 * sz + x1];
+    const q0 = a[y1 * sz + x0], q1 = a[y1 * sz + x1];
+    const t = p0 + (p1 - p0) * sx;
+    return t + ((q0 + (q1 - q0) * sx) - t) * sy;
+  };
+  // centred on zero, so fields add without dragging the mean around
+  const fbm = (u, v, o, n) => {
+    let s = 0, amp = 1, tot = 0;
+    for (let i = 0; i < n; i++) { s += amp * samp(o + i, u, v); tot += amp; amp *= 0.5; }
+    return s / tot - 0.5;
+  };
+  // multi-stop colour ramp
+  const ramp = (st, t, out) => {
+    let i = 1; while (i < st.length - 1 && t > st[i][0]) i++;
+    const a = st[i - 1], b = st[i];
+    const k = clamp01((t - a[0]) / (b[0] - a[0] || 1e-6));
+    out[0] = a[1][0] + (b[1][0] - a[1][0]) * k;
+    out[1] = a[1][1] + (b[1][1] - a[1][1]) * k;
+    out[2] = a[1][2] + (b[1][2] - a[1][2]) * k;
+  };
 
-  // 1. where it took hold: a few large, soft, irregular regions
-  const zones = [];
-  for (let i = 0; i < 7; i++) {
-    zones.push({ x: rnd() * N, y: rnd() * N * 0.7, r: N * (0.16 + rnd() * 0.22) });
-  }
-  // 2. runs: moisture sits in a zone and creeps DOWN from it, so the oxide
-  //    trails below every patch in soft vertical fingers
-  for (const z of zones) {
-    const fingers = 5 + Math.floor(rnd() * 6);
-    for (let f = 0; f < fingers; f++) {
-      const x = z.x + (rnd() - 0.5) * z.r * 1.6;
-      const w = 2 + rnd() * (RUST ? 5 : 8);
-      const len = z.r * (0.6 + rnd() * 1.9);
-      const g2 = hg.createLinearGradient(0, z.y, 0, z.y + len);
-      g2.addColorStop(0, 'rgba(96,96,96,0.30)');
-      g2.addColorStop(0.35, 'rgba(120,120,120,0.20)');
-      g2.addColorStop(1, 'rgba(190,190,190,0)');
-      hg.fillStyle = g2;
-      // a run wanders as it descends rather than falling as a straight bar
-      hg.beginPath();
-      hg.moveTo(x - w, z.y);
-      for (let t = 0; t <= 1.001; t += 0.2) {
-        hg.lineTo(x - w * (1 - t * 0.6) + Math.sin(t * 5 + f) * w * 0.9, z.y + len * t);
-      }
-      for (let t = 1; t >= -0.001; t -= 0.2) {
-        hg.lineTo(x + w * (1 - t * 0.6) + Math.sin(t * 5 + f) * w * 0.9, z.y + len * t);
-      }
-      hg.closePath(); hg.fill();
-    }
-  }
-  // 3. pitting inside the zones, and scale that has FLAKED: a hard-edged patch
-  //    with a bright lip where the layer lifted and a dark floor where it left
-  const dents = RUST ? 340 : 190;
-  for (let i = 0; i < dents; i++) {
-    const z = zones[Math.floor(rnd() * zones.length)];
-    const a2 = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * z.r;
-    const x = z.x + Math.cos(a2) * d, y = z.y + Math.sin(a2) * d + z.r * 0.35;
-    const r = RUST ? 2 + rnd() * 9 : 6 + rnd() * 16;
-    const g2 = hg.createRadialGradient(x, y, 0, x, y, r);
-    g2.addColorStop(0, 'rgba(34,34,34,0.60)');
-    g2.addColorStop(0.7, 'rgba(120,120,120,0.26)');
-    g2.addColorStop(1, 'rgba(210,210,210,0)');
-    hg.fillStyle = g2; hg.beginPath(); hg.arc(x, y, r, 0, Math.PI * 2); hg.fill();
-  }
-  const flakes = RUST ? 46 : 22;
-  for (let i = 0; i < flakes; i++) {
-    const z = zones[Math.floor(rnd() * zones.length)];
-    const x = z.x + (rnd() - 0.5) * z.r * 1.5, y = z.y + (rnd() - 0.2) * z.r * 1.5;
-    const r = 4 + rnd() * (RUST ? 11 : 8);
-    hg.beginPath();
-    const n = 6 + Math.floor(rnd() * 4);
-    for (let k = 0; k <= n; k++) {
-      const a3 = (k / n) * Math.PI * 2, rr = r * (0.55 + rnd() * 0.7);
-      const px = x + Math.cos(a3) * rr, py = y + Math.sin(a3) * rr * 0.8;
-      k ? hg.lineTo(px, py) : hg.moveTo(px, py);
-    }
-    hg.closePath();
-    hg.fillStyle = 'rgba(40,40,40,0.62)';      // the pit it left behind
-    hg.fill();
-    // The lip has to be a hint. At 0.45 white it read as a bright chip sitting
-    // ON the surface -- confetti -- rather than the edge of a layer that lifted.
-    hg.strokeStyle = 'rgba(206,206,206,0.16)';
-    hg.lineWidth = 0.9; hg.stroke();
-  }
-  // 4. wear: a case lives in a pocket, so the edges and a few high spots get
-  //    rubbed back to bright metal. Without this the whole face corrodes evenly
-  //    and reads as painted-on colour -- it is the surviving metal next to the
-  //    oxide that tells you the oxide is oxide.
-  {
-    const wg = hg.createLinearGradient(0, 0, N, 0);
-    wg.addColorStop(0, 'rgba(255,255,255,0.50)');
-    wg.addColorStop(0.16, 'rgba(255,255,255,0)');
-    wg.addColorStop(0.84, 'rgba(255,255,255,0)');
-    wg.addColorStop(1, 'rgba(255,255,255,0.50)');
-    hg.fillStyle = wg; hg.fillRect(0, 0, N, N);
-    for (let i = 0; i < 9; i++) {
-      const x = rnd() * N, y = rnd() * N, r = N * (0.07 + rnd() * 0.15);
-      const g5 = hg.createRadialGradient(x, y, 0, x, y, r);
-      g5.addColorStop(0, `rgba(255,255,255,${0.28 + rnd() * 0.3})`);
-      g5.addColorStop(1, 'rgba(255,255,255,0)');
-      hg.fillStyle = g5; hg.beginPath(); hg.arc(x, y, r, 0, Math.PI * 2); hg.fill();
-    }
-  }
-  // 5. crust: fine grain so the oxide is granular rather than smooth paint
-  {
-    const gi = hg.getImageData(0, 0, N, N);
-    for (let i = 0; i < N * N; i++) {
-      const g4 = (hashN(i * 0.7 + seed) - 0.5) * (RUST ? 46 : 34);
-      gi.data[i * 4] = gi.data[i * 4 + 1] = gi.data[i * 4 + 2] =
-        Math.max(0, Math.min(255, gi.data[i * 4] + g4));
-    }
-    hg.putImageData(gi, 0, 0);
-  }
-  const H = hg.getImageData(0, 0, N, N).data;
+  /* ---------- pass 1: attack, protection, and the incidental fields ------ */
+  const NN = N * N;
+  const C = new Float32Array(NN);   // attack: how hard corrosion pushed here
+  const PR = new Float32Array(NN);  // protection: rubbed crest, handled flat
+  const AGE = new Float32Array(NN); // thickness/age of the oxide, decorrelated from C
+  const F = new Float32Array(NN);   // crust grain
+  const ND = new Float32Array(NN);  // nodules: the lumpy scab structure of thick crust
+  const P = new Float32Array(NN);   // spall field
+  const Q = new Float32Array(NN);   // spall kind: crater or bared metal
+  const K = new Float32Array(NN);   // bloom / chalk
+  const UU = new Float32Array(NN), VV = new Float32Array(NN);  // the warped domain
+  const SRC = new Float32Array(NN); // where corrosion took hold, before it ran
+  const BIG = new Float32Array(NN); // and after
+  let mean = 0;
 
+  // Where it took hold. Five octaves, evaluated ONCE per texel: the run below
+  // is then a max over shifted ROWS of this array rather than four more full
+  // fBm evaluations, which is three quarters of the generator's cost gone for
+  // an image difference you cannot see.
+  for (let y = 0; y < N; y++) {
+    const v = y / N;
+    for (let x = 0; x < N; x++) {
+      const u = x / N, i = y * N + x;
+      const wx = fbm(u, v, 2, 3), wy = fbm(u + 0.31, v + 0.17, 2, 3);
+      UU[i] = u + wx * 0.085; VV[i] = v + wy * 0.085;
+      SRC[i] = fbm(UU[i], VV[i], 1, 5);
+    }
+  }
+  // The RUN. A source bleeds downward, so a texel inherits, attenuated,
+  // whatever sits above it. v is height within the PART, so "below a source"
+  // means reading the source from a HIGHER row.
+  const RUN = [[15, 0.90, 0.015], [38, 0.80, 0.035], [72, 0.68, 0.060]];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = y * N + x;
+    let big = SRC[i];
+    for (const [d, k, s] of RUN) {
+      const w = SRC[(((y + d) % N) * N) + x] * k - s;
+      if (w > big) big = w;
+    }
+    BIG[i] = big;
+  }
+
+  for (let y = 0; y < N; y++) {
+    const v = y / N;
+    for (let x = 0; x < N; x++) {
+      const u = x / N, i = y * N + x;
+      const uu = UU[i], vv = VV[i], big = BIG[i];
+
+      // u = 0 and u = 1 are the four vertical corner edges of the case -- that
+      // is where boxProjectUV puts them -- and v = 0 and v = 1 are the base and
+      // the lid seam. Water sits in a seam, so corrosion starts there; but the
+      // CREST of a corner is exactly what rubs on a pocket, so a hairline of it
+      // stays bright metal. Oxide creeping out of a seam with a polished ridge
+      // running along it is the single most legible "there is metal under this"
+      // cue, and it is the one the old map had no way of saying.
+      const eu = Math.min(u, 1 - u), ev = Math.min(v, 1 - v);
+      const wet = clamp01(Math.exp(-eu / 0.070) * 0.50 + Math.exp(-ev / 0.055) * 0.70);
+      const ridge = Math.exp(-eu / 0.011);
+      const du = (u - 0.5) / 0.33, dv = (v - 0.56) / 0.40;
+      const hand = Math.exp(-(du * du + dv * dv));
+      // protection is patchy, not a smooth mask: a thumb does not wear evenly
+      const mott = 0.55 + fbm(uu + 0.61, vv + 0.13, 2, 4) * 1.6;
+
+      // Three of the fields below are overlapping sub-sums of the SAME three
+      // lattices, so the octaves are taken once and combined three ways. Same
+      // numbers to the last bit, a third fewer lattice fetches.
+      const s3 = samp(3, uu, vv), s4 = samp(4, uu, vv), s5 = samp(5, uu, vv);
+      const mid = (s3 + s4 * 0.5 + s5 * 0.25) / 1.75 - 0.5;
+      C[i] = big + mid * 0.30 + wet * 0.30;
+      PR[i] = (ridge * 1.15 + hand * 0.40) * clamp01(mott);
+      AGE[i] = fbm(uu + 0.47, vv + 0.71, 1, 4) + big * 0.55 + wet * 0.22;
+      F[i] = fbm(u, v, 4, 3);
+      // Thick oxide is NODULAR -- a scab of lumps a millimetre across, not a
+      // smooth film. Without this the colour ramp comes out airbrushed.
+      ND[i] = (s3 + s4 * 0.5) / 1.5 - 0.5;
+      // spall is a chip a millimetre or two across, not a continent: these
+      // octaves put its cells at 8 and 4 texels
+      P[i] = (s4 + s5 * 0.5) / 1.5 - 0.5;
+      // Whether a chip shows a dark crater or bared metal is a property of the
+      // CHIP, not a gradient across it. Sampling this per-texel is what put a
+      // dark half and a bright half in every flake and made them read as
+      // peeling stickers, so it is sampled coarse and then hard-thresholded.
+      Q[i] = s3;
+      K[i] = fbm(u + 0.53, v + 0.29, 3, 4);
+      mean += C[i];
+    }
+  }
+  mean /= NN;
+  let sd = 0;
+  for (let i = 0; i < NN; i += 7) { const d = C[i] - mean; sd += d * d; }
+  sd = Math.sqrt(sd / Math.ceil(NN / 7)) || 0.1;
+  // The first cut of this added the exposure bias raw. fBm clusters near its
+  // mean while the bias swings over a full unit, so the bias won outright and
+  // the map came out a bullseye -- one bare island in the middle of every face,
+  // ringed by concentric bands. Scaling protection to the field's own spread
+  // keeps it a TENDENCY rather than a shape.
+  for (let i = 0; i < NN; i++) C[i] -= PR[i] * sd * 2.3;
+
+  /* ---------- one hard boundary, and only one ---------------------------
+     Second thing the earlier cuts got wrong: they thresholded the field three
+     or four times, so every patch came out ringed by concentric bands and the
+     whole face read as a contour map, or as marbled paper. In a photograph of
+     rust exactly ONE boundary is hard -- metal against oxide -- plus the edges
+     of flakes that have lifted. Everything inside the oxide is a continuous
+     change of thickness, and thickness is what sets the colour. So: one cut,
+     taken at a percentile so the bare-metal fraction is fixed, and a smooth
+     ramp for the oxide itself.                                             */
+  const quant = (arr, p) => {
+    const s = [];
+    for (let i = 0; i < NN; i += 11) s.push(arr[i]);
+    s.sort((a, b) => a - b);
+    return q => s[Math.min(s.length - 1, Math.floor(q * s.length))];
+  };
+  const pct = quant(C);
+  const t0 = pct(RUST ? 0.060 : 0.19);          // bare metal fraction
+  const SPAN = pct(0.98) - pct(0.02);
+  const AA = SPAN * 0.008;                      // about a texel
+  // Spall coverage set the same way, for the same reason: guessing a raw
+  // threshold against an fBm gave a fifth of the case in flakes, which reads as
+  // a peeling decal. A chip is a rare event on a case this size.
+  const ppct = quant(P);
+  const pt = ppct(RUST ? 0.968 : 0.968);
+
+  // the oxide's colour is a function of THICKNESS, and thickness runs from a
+  // pale dusting at the metal's edge through fresh orange to old, dark, nearly
+  // black scale in the deepest ground
+  const STOPS = RUST ? [
+    [0.00, [164, 130, 88]],   // barely-there film right at the metal's edge
+    [0.17, [172, 111, 56]],   // fresh bloom: the brightest rust gets
+    [0.40, [143, 80, 42]],
+    [0.63, [114, 58, 33]],
+    [0.85, [88, 45, 28]],
+    [1.00, [63, 34, 23]],     // old scale in the low ground
+  ] : [
+    [0.00, [156, 122, 72]],   // brass going brown under the crust's edge
+    [0.18, [104, 80, 50]],    // tarnish: a real bronze keeps a lot of this
+    // Verdigris lives in a NARROW band of value. Widening it -- near-black
+    // green against near-white chalk -- made the case read as lichen on stone,
+    // which is the opposite failure to the mint egg it started as.
+    [0.34, [76, 92, 74]],
+    [0.54, [78, 112, 98]],
+    [0.78, [92, 124, 108]],   // crust proper: dry, desaturated blue-green
+    [1.00, [106, 134, 118]],
+  ];
+  // NOTE on these roughnesses. This is a DARK product studio: a mirror-smooth
+  // metal in it reflects mostly darkness and comes back nearly black, which is
+  // not what surviving metal looks like in a photograph of a corroded case. At
+  // 0.38 the brass came out khaki suede. They are given the same 0.5-ish the
+  // plain chrome and brass finishes use, which is what makes them read as metal
+  // in THIS room.
+  const METAL = RUST
+    ? { a: [132, 130, 126], b: [156, 154, 148], r: 0.52, m: 1.00 }
+    : { a: [220, 180, 104], b: [198, 158, 88], r: 0.50, m: 1.00 };
+  // Under a chip: a dark crater, or metal. Two discrete outcomes, chosen per
+  // chip. The bared metal is duller than the rubbed crest -- it has been under
+  // an oxide, not under a thumb.
+  const PIT_DARK = RUST ? [52, 29, 20] : [46, 62, 56];
+  const PIT_BARE = RUST ? [120, 119, 116] : [196, 160, 92];
+
+  /* ---------- pass 2: albedo, rough+metal, height ------------------------ */
   const ac = document.createElement('canvas'); ac.width = ac.height = N;
   const ag = ac.getContext('2d');
-  const img = ag.createImageData(N, N);
-  // Three tones, not two, and a sharper break between them. The old version
-  // lerped bare metal straight to oxide over the whole range, so most of the
-  // surface sat in a muddy middle that belonged to neither.
-  const HI   = RUST ? [142, 145, 149] : [196, 146, 72];   // metal that survived
-  const MID  = RUST ? [148, 70, 26]   : [78, 138, 102];   // fresh oxide
-  const LO   = RUST ? [88, 38, 16]    : [40, 108, 94];    // older, darker oxide
-  const DEEP = RUST ? [34, 18, 10]    : [156, 200, 184];  // crust in the pits
-  for (let i = 0; i < N * N; i++) {
-    const h = H[i * 4] / 255;
-    // A corroded case is mostly oxide with metal surviving on the high spots,
-    // not bare metal with spots of oxide -- the first cut of this had the
-    // balance the wrong way round and came out a pale peach. Only genuinely
-    // high ground keeps its metal now.
-    const t = Math.min(1, Math.max(0, (0.95 - h) / 0.45));
-    const u = Math.min(1, Math.max(0, (0.60 - h) / 0.40));
-    const k = Math.max(0, (0.34 - h) / 0.34);
-    const px = i * 4;
-    for (let c = 0; c < 3; c++) {
-      let v = HI[c] + (MID[c] - HI[c]) * t;
-      v += (LO[c] - v) * u * 0.85;
-      v += (DEEP[c] - v) * k * 0.75;
-      img.data[px + c] = v;
-    }
-    img.data[px + 3] = 255;
-  }
-  ag.putImageData(img, 0, 0);
-  // the runs stain the colour too, not just the relief
-  for (const z of zones) {
-    const g3 = ag.createLinearGradient(0, z.y - z.r * 0.3, 0, z.y + z.r * 2.2);
-    const c = RUST ? '132,60,24' : '70,140,120';
-    g3.addColorStop(0, `rgba(${c},0)`);
-    g3.addColorStop(0.3, `rgba(${c},0.30)`);
-    g3.addColorStop(1, `rgba(${c},0)`);
-    ag.fillStyle = g3;
-    ag.fillRect(z.x - z.r, z.y - z.r * 0.3, z.r * 2, z.r * 2.5);
-  }
   const rc = document.createElement('canvas'); rc.width = rc.height = N;
   const rg = rc.getContext('2d');
-  const rimg = rg.createImageData(N, N);
-  for (let i = 0; i < N * N; i++) {
-    const h = H[i * 4] / 255;
-    // oxide is matte, the surviving metal is not
-    const v = 255 * (0.30 + 0.62 * Math.min(1, Math.pow(1 - h, 1.4) * 1.9));
-    rimg.data[i * 4] = rimg.data[i * 4 + 1] = rimg.data[i * 4 + 2] = v;
-    rimg.data[i * 4 + 3] = 255;
-  }
-  rg.putImageData(rimg, 0, 0);
+  const A = ag.createImageData(N, N), R = rg.createImageData(N, N);
+  const H = new Float32Array(NN), H2 = new Float32Array(NN);
+  const col = [0, 0, 0];
 
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const i = y * N + x, fine = F[i];
+      // The cut is jittered by the crust's own grain, so at macro range the
+      // metal/oxide boundary is fringed at the scale of the oxide particles
+      // rather than being a clean vector outline. It is the same field that
+      // supplies the grain, which is right: the fringe IS the grain.
+      const c = C[i] + fine * SPAN * 0.055;
+      // the hard cut, and the only one
+      const ox = sstep(t0 - AA, t0 + AA, c);
+
+      // --- the metal that survived. Given the same 0.4-ish roughness the plain
+      // chrome and brass finishes use: this is a DARK product studio, and a
+      // mirror-smooth metal in it reflects mostly darkness and comes out nearly
+      // black, which is not what surviving metal looks like in a photograph.
+      const mp = clamp01(fine * 3.0 + 0.5);
+      col[0] = METAL.a[0] + (METAL.b[0] - METAL.a[0]) * mp;
+      col[1] = METAL.a[1] + (METAL.b[1] - METAL.a[1]) * mp;
+      col[2] = METAL.a[2] + (METAL.b[2] - METAL.a[2]) * mp;
+      let rgh = METAL.r, met = METAL.m, hgt = 0.50;
+      const streak = samp(5, x / N * 5, y / N) - 0.5;      // vertical mill grain
+      rgh += streak * 0.045; hgt += streak * 0.004;
+      col[0] *= 1 + streak * 0.022; col[1] *= 1 + streak * 0.022; col[2] *= 1 + streak * 0.022;
+      // Metal does not meet oxide at a clean line: for a millimetre or so out
+      // from the edge it is stained by it. Without this the bare patches read
+      // as grey inlay dropped into the rust.
+      const stain = sstep(t0 - SPAN * (RUST ? 0.20 : 0.09), t0, c) * (RUST ? 0.52 : 0.26);
+      if (stain > 0) {
+        const SC = RUST ? [136, 94, 60] : [128, 102, 58];
+        col[0] += (SC[0] - col[0]) * stain; col[1] += (SC[1] - col[1]) * stain; col[2] += (SC[2] - col[2]) * stain;
+        rgh += 0.22 * stain;
+      }
+
+      if (ox > 0) {
+        // --- thickness, and colour from thickness. Jittered by an independent
+        // field so the bands are not offsets of the metal's outline.
+        let age = clamp01((c - t0) / (SPAN * 0.66) * 0.72 + AGE[i] * 0.55 + 0.16);
+        const o = [0, 0, 0];
+        ramp(STOPS, age, o);
+        // oxide is particulate: a granular value break-up, only here, never on
+        // the metal. The old map peppered grain over the whole face including
+        // the worn areas, which is most of why they read as cork.
+        // Nodules. Thick oxide is a scab of lumps, and the shading that comes
+        // off them is most of what stops a colour ramp reading as airbrush. The
+        // lump darkens its own down-slope in the albedo as well as displacing
+        // the height, so the structure survives even head-on to the key light.
+        const nod = ND[i] * clamp01(age * 1.8);
+        const GA = RUST ? 1 : 0.62;
+        const g = (1 + (fine * 0.46 + (samp(6, x / N, y / N) - 0.5) * 0.20) * GA)
+          * (1 - 0.16 * GA + 0.32 * GA * sstep(-0.12, 0.13, nod));
+        const orgh = 0.72 + age * 0.20 + fine * 0.22;
+        const omet = RUST ? clamp01(0.30 - age * 0.42) : clamp01(0.22 - age * 0.60);
+        const ohgt = 0.53 + age * 0.09 - Math.max(0, age - 0.80) * 0.30
+          + nod * 0.085 + fine * 0.028;
+        col[0] += (o[0] * g - col[0]) * ox;
+        col[1] += (o[1] * g - col[1]) * ox;
+        col[2] += (o[2] * g - col[2]) * ox;
+        rgh += (orgh - rgh) * ox; met += (omet - met) * ox; hgt += (ohgt - hgt) * ox;
+
+        // --- lifted scale. A hard-edged chip where the layer let go: a curled
+        // lip outside it, a floor below the crust, and under it either a dark
+        // crater or bared metal. This is the structure that says "layers" and
+        // not "paint", and no colour ramp can fake it.
+        const p = P[i];
+        if (p > pt - 0.030) {
+          const inside = sstep(pt - 0.004, pt + 0.004, p) * ox;
+          if (inside > 0) {
+            const bare = Q[i] > (RUST ? 0.72 : 0.46) ? 1 : 0;   // per chip, not per texel
+            const PC = bare ? PIT_BARE : PIT_DARK;
+            const pg = 1 + fine * 0.26;
+            col[0] += (PC[0] * pg - col[0]) * inside;
+            col[1] += (PC[1] * pg - col[1]) * inside;
+            col[2] += (PC[2] * pg - col[2]) * inside;
+            rgh += ((bare ? 0.58 : 0.76) - rgh) * inside;
+            met += ((bare ? 1.0 : 0.05) - met) * inside;
+            hgt += (0.41 - hgt) * inside;
+          }
+          const lip = sstep(pt - 0.022, pt - 0.011, p) * (1 - sstep(pt - 0.010, pt - 0.003, p));
+          hgt += lip * 0.030 * ox;
+        }
+
+        // --- bloom over the crust: the chalky efflorescence verdigris grows,
+        // or the thin fresh film rust blooms after a wetting. It sits OVER what
+        // is beneath instead of replacing it, so it is the one soft-edged thing
+        // in the map.
+        const bl = sstep(RUST ? 0.11 : 0.075, RUST ? 0.28 : 0.250, K[i]) * ox
+          * (RUST ? 0.26 : 0.18) * (0.5 + fine * 1.6);
+        if (bl > 0) {
+          const BC = RUST ? [196, 146, 78] : [138, 150, 138];
+          col[0] += (BC[0] - col[0]) * bl; col[1] += (BC[1] - col[1]) * bl; col[2] += (BC[2] - col[2]) * bl;
+          rgh += (0.985 - rgh) * bl; met *= 1 - bl * 0.9;
+          hgt += bl * 0.012;
+        }
+      }
+
+      // cavity darkening, baked in: free at runtime and enough at this scale.
+      // Without it a crater reads as black paint rather than as a hole.
+      const ao = 0.80 + 0.20 * sstep(0.36, 0.56, hgt);
+      A.data[i * 4] = clamp01(col[0] * ao / 255) * 255;
+      A.data[i * 4 + 1] = clamp01(col[1] * ao / 255) * 255;
+      A.data[i * 4 + 2] = clamp01(col[2] * ao / 255) * 255;
+      A.data[i * 4 + 3] = 255;
+      // One texture carries both: three reads roughness from .g and metalness
+      // from .b, so the pair costs one upload and one sampler. The metalness
+      // map is the whole game -- oxide is a mineral, bare steel is a mirror,
+      // and no albedo on its own can say that.
+      R.data[i * 4] = 0;
+      R.data[i * 4 + 1] = clamp01(rgh) * 255;
+      R.data[i * 4 + 2] = clamp01(met) * 255;
+      R.data[i * 4 + 3] = 255;
+      H[i] = hgt;
+    }
+  }
+  ag.putImageData(A, 0, 0);
+  rg.putImageData(R, 0, 0);
+
+  /* ---------- normals from the height field ------------------------------
+     One box-blur pass first. Without it every hard step in the height is a
+     one-texel cliff, the derived normal there is very nearly horizontal, and
+     the case comes back covered in bright specular worms tracing each boundary
+     -- which reads as wet varnish, not as oxide.                            */
+  const at0 = (x, y) => H[(((y % N) + N) % N) * N + (((x % N) + N) % N)];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    H2[y * N + x] = (at0(x - 1, y) + at0(x + 1, y) + at0(x, y - 1) + at0(x, y + 1)) * 0.16
+      + at0(x, y) * 0.36;
+  }
   const nc = document.createElement('canvas'); nc.width = nc.height = N;
   const ng = nc.getContext('2d');
-  const nimg = ng.createImageData(N, N);
-  const at = (x, y) => H[((((y % N) + N) % N) * N + (((x % N) + N) % N)) * 4];
+  const NI = ng.createImageData(N, N);
+  const at = (x, y) => H2[(((y % N) + N) % N) * N + (((x % N) + N) % N)];
+  const STR = 6.0;
   for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-    const dx = (at(x + 1, y) - at(x - 1, y)) / 255, dy = (at(x, y + 1) - at(x, y - 1)) / 255;
-    const nx = -dx * 2.4, ny = -dy * 2.4, len = Math.hypot(nx, ny, 1) || 1;
+    const dx = at(x + 1, y) - at(x - 1, y), dy = at(x, y + 1) - at(x, y - 1);
+    const nx = -dx * STR, ny = -dy * STR, len = Math.hypot(nx, ny, 1) || 1;
     const i = (y * N + x) * 4;
-    nimg.data[i] = (nx / len * 0.5 + 0.5) * 255;
-    nimg.data[i + 1] = (ny / len * 0.5 + 0.5) * 255;
-    nimg.data[i + 2] = (1 / len * 0.5 + 0.5) * 255;
-    nimg.data[i + 3] = 255;
+    NI.data[i] = (nx / len * 0.5 + 0.5) * 255;
+    NI.data[i + 1] = (ny / len * 0.5 + 0.5) * 255;
+    NI.data[i + 2] = (1 / len * 0.5 + 0.5) * 255;
+    NI.data[i + 3] = 255;
   }
-  ng.putImageData(nimg, 0, 0);
+  ng.putImageData(NI, 0, 0);
 
   const mk = (cv, srgb) => {
     const t = new THREE.CanvasTexture(cv);
     if (srgb) t.colorSpace = THREE.SRGBColorSpace;
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(1, 1);
+    t.anisotropy = 4;
     return t;
   };
-  return { albedo: mk(ac, true), rough: mk(rc, false), normal: mk(nc, false) };
+  const mr = mk(rc, false);
+  return { albedo: mk(ac, true), rough: mr, metal: mr, normal: mk(nc, false) };
 }
 const CORRODE_CACHE = {};
 const corrodedMap = k => CORRODE_CACHE[k] || (CORRODE_CACHE[k] = corrodedTex(k));
@@ -2717,8 +2901,8 @@ const FINISH_EXTRA = {
   // part-oxidised metals, so metalness drops and the key light does the work.
   patina: {
     swatch: 'radial-gradient(circle at 34% 32%, #8fbfa0 0%, #6a4630 72%)',
-    chrome: { color: 0xffffff, rough: 1.0, corrode: 'patina', metal: 0.45, env: 0.8, nscale: 0.9 },
-    dark: { color: 0xe8e8e8, rough: 1.0, corrode: 'patina', metal: 0.5, env: 0.85, nscale: 0.9 },
+    chrome: { color: 0xffffff, rough: 1.0, corrode: 'patina', metal: 1.0, env: 1.05, nscale: 1.0 },
+    dark: { color: 0xe8e8e8, rough: 1.0, corrode: 'patina', metal: 1.0, env: 1.05, nscale: 1.0 },
     insert: 0x6d7a68, inner: 0x5f6b58,
   },
   tortoise: {
@@ -2735,8 +2919,8 @@ const FINISH_EXTRA = {
   },
   rust: {
     swatch: 'radial-gradient(circle at 34% 32%, #a5613a 0%, #4a4d50 76%)',
-    chrome: { color: 0xffffff, rough: 1.0, corrode: 'rust', metal: 0.6, env: 0.75, nscale: 1.0 },
-    dark: { color: 0xe4e4e4, rough: 1.0, corrode: 'rust', metal: 0.65, env: 0.8, nscale: 1.0 },
+    chrome: { color: 0xffffff, rough: 1.0, corrode: 'rust', metal: 1.0, env: 1.0, nscale: 1.0 },
+    dark: { color: 0xe4e4e4, rough: 1.0, corrode: 'rust', metal: 1.0, env: 1.0, nscale: 1.0 },
     insert: 0x6b5a4c, inner: 0x5c4c40,
   },
   camo: {
@@ -2826,6 +3010,16 @@ function applyFinish(name) {
     if (m.roughnessMap !== map) { m.roughnessMap = map; m.needsUpdate = true; }
     if (m.normalMap !== nrm) { m.normalMap = nrm; m.needsUpdate = true; }
     if (m.map !== alb) { m.map = alb; m.needsUpdate = true; }
+    // The metalness MAP is what makes corrosion read as corrosion. Oxide is a
+    // mineral and bare steel is a mirror, and no albedo can say that on its own
+    // -- paint a rust colour onto a metal and you get orange chrome, which is
+    // what the old one looked like. One texture carries both: roughness in .g,
+    // metalness in .b, which is where three samples them from anyway.
+    const met = cor ? cor.metal : null;
+    if (m.metalnessMap !== met) { m.metalnessMap = met; m.needsUpdate = true; }
+    // three MULTIPLIES both by their map, so the scalars must be 1 for the map
+    // to mean what it says
+    if (cor) { m.roughness = 1.0; m.metalness = 1.0; }
     if (nrm) m.normalScale.set(p.nscale || 0.85, p.nscale || 0.85);
   }
   // The insert does NOT follow the case. It is a separate part -- chimney, tank,
