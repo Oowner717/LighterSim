@@ -2189,30 +2189,211 @@ try {
 // same metal, the way a real engine-turned or hammered case catches light.
 // Built on demand and cached -- generating ten canvases at boot to show one is
 // exactly the kind of thing that makes a cold start feel slow.
+/* ===== SHARED PROCEDURAL HELPERS (new) ===================================== */
+// Every generator below is SEEDED. albedoTex and two of patternTex's kinds used
+// Math.random(), so six finishes rendered a different lighter on every load.
+const rndStream = seed => { let s = seed; return () => hashN(s += 1.37); };
+// value noise + fbm. `per` makes the lattice wrap, so a tiling texture can use
+// noise without a seam down the middle of the case.
+function makeNoise(seed) {
+  // An integer hash, not hashN. hashN costs a Math.sin per call and these
+  // generators want tens of millions of them: the meteorite figure alone was
+  // half a second of sin. Same contract -- seeded, deterministic, 0..1.
+  const S = (seed * 1013 | 0);
+  const h = (a, b) => {
+    let n = (a * 374761393 + b * 668265263 + S * 1274126177) | 0;
+    n = ((n ^ (n >>> 13)) * 1274126177) | 0;
+    return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+  };
+  const vn = (x, y, per) => {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const w = v => per ? ((v % per) + per) % per : v;
+    const u = xf * xf * (3 - 2 * xf), q = yf * yf * (3 - 2 * yf);
+    const a = h(w(xi), w(yi)), b = h(w(xi + 1), w(yi));
+    const c = h(w(xi), w(yi + 1)), d = h(w(xi + 1), w(yi + 1));
+    return (a + (b - a) * u) * (1 - q) + (c + (d - c) * u) * q;
+  };
+  const fbm = (x, y, oct, per) => {
+    let a = 0.5, f = 1, t = 0, n = 0;
+    for (let i = 0; i < (oct || 4); i++) {
+      t += a * vn(x * f + i * 13.7, y * f + i * 7.3, per ? per * f : 0);
+      n += a; a *= 0.5; f *= 2;
+    }
+    return t / n;
+  };
+  return { vn, fbm };
+}
+// A single-channel mask is all these need, and one channel blurs about four
+// times faster than RGBA. ctx.filter='blur()' is not dependable on older iOS
+// Safari, so the blur is done by hand -- separable, wrapping, running-sum.
+const maskOf = (g, N) => {
+  const d = g.getImageData(0, 0, N, N).data, m = new Float32Array(N * N);
+  for (let i = 0; i < N * N; i++) m[i] = d[i * 4 + 3] / 255;
+  return m;
+};
+function blurMask(src, N, r, passes) {
+  if (r < 1) return src;
+  let a = src, b = new Float32Array(N * N);
+  const wrap = v => ((v % N) + N) % N;
+  const k = 2 * r + 1;
+  for (let p = 0; p < (passes || 2); p++) {
+    for (let y = 0; y < N; y++) {
+      const row = y * N;
+      let s = 0;
+      for (let i = -r; i <= r; i++) s += a[row + wrap(i)];
+      for (let x = 0; x < N; x++) {
+        b[row + x] = s / k;
+        s -= a[row + wrap(x - r)];
+        s += a[row + wrap(x + r + 1)];
+      }
+    }
+    let t = a; a = b; b = t;
+    for (let x = 0; x < N; x++) {
+      let s = 0;
+      for (let i = -r; i <= r; i++) s += a[wrap(i) * N + x];
+      for (let y = 0; y < N; y++) {
+        b[y * N + x] = s / k;
+        s -= a[wrap(y - r) * N + x];
+        s += a[wrap(y + r + 1) * N + x];
+      }
+    }
+    t = a; a = b; b = t;
+  }
+  return a;
+}
+// height field -> tangent-space normal map, wrapping like the tile does
+function normalCanvas(H, N, strength) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = N;
+  const g = cv.getContext('2d'), img = g.createImageData(N, N);
+  const at = (x, y) => H[(((y % N) + N) % N) * N + (((x % N) + N) % N)];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const dx = at(x + 1, y) - at(x - 1, y), dy = at(x, y + 1) - at(x, y - 1);
+    const nx = -dx * strength, ny = -dy * strength, len = Math.hypot(nx, ny, 1) || 1;
+    const i = (y * N + x) * 4;
+    img.data[i] = (nx / len * 0.5 + 0.5) * 255;
+    img.data[i + 1] = (ny / len * 0.5 + 0.5) * 255;
+    img.data[i + 2] = (1 / len * 0.5 + 0.5) * 255;
+    img.data[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  return cv;
+}
+const grayCanvas = (F, N) => {
+  const cv = document.createElement('canvas'); cv.width = cv.height = N;
+  const g = cv.getContext('2d'), img = g.createImageData(N, N);
+  for (let i = 0; i < N * N; i++) {
+    const v = Math.max(0, Math.min(255, F[i] * 255));
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v;
+    img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  return cv;
+};
+const texOf = (cv, srgb, rep) => {
+  const t = new THREE.CanvasTexture(cv);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rep || 1, rep || 1);
+  return t;
+};
 function patternTex(kind) {
   const N = 256;
   const cv = document.createElement('canvas'); cv.width = cv.height = N;
   const g = cv.getContext('2d');
   g.fillStyle = 'rgb(122,122,122)'; g.fillRect(0, 0, N, N);
+  // Kinds that build a height field numerically rather than by drawing greys:
+  // HEIGHT drives the normal, ROUGH the polish. The drawn kinds keep using the
+  // canvas for both, as before.
+  let HEIGHT = null, ROUGH = null, NSTR = 2.4;
   const line = (a, w) => { g.strokeStyle = `rgba(255,255,255,${a})`; g.lineWidth = w; };
   const dark = (a, w) => { g.strokeStyle = `rgba(20,20,20,${a})`; g.lineWidth = w; };
   const seg = (x0, y0, x1, y1) => { g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke(); };
-  if (kind === 'engine') {                       // engine-turned: overlapping arcs
-    for (let y = 0; y < N; y += 22) for (let x = 0; x < N; x += 22) {
-      for (let r = 2.5; r < 13; r += 2.2) {
-        line(0.55, 1.6);
-        g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
-        dark(0.42, 1.2);
-        g.beginPath(); g.arc(x, y, r + 1.1, 0, Math.PI * 2); g.stroke();
+  if (kind === 'engine') {
+    // Engine-turning is a peg loaded with abrasive, spun against the work and
+    // stepped across it: each mark is a full, obviously CIRCULAR sunburst about
+    // 5mm across that swings its own highlight as the case tilts. The old code
+    // drew r<=13 arcs on a 22px grid and then tiled 2x2, which collapsed into a
+    // fish-scale knurl with nothing circular readable at any distance.
+    const rnd = rndStream(12.7), noise = makeNoise(4.4);
+    const P = N / 4;                                   // 4 discs per tile edge
+    HEIGHT = new Float32Array(N * N); ROUGH = new Float32Array(N * N); NSTR = 1.7;
+    const R = P * 0.92;                                // they overlap, as real ones do
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x;
+      let h = 0.5, cov = 0;
+      // the LAST disc scribed over a spot is the one you see: walk the
+      // neighbourhood and keep the one with the highest stamp order
+      let bestOrder = -1, bestD = 0, bestJit = 0;
+      for (let gy = -1; gy <= 1; gy++) for (let gx = -1; gx <= 1; gx++) {
+        const cxi = Math.floor(x / P) + gx, cyi = Math.floor(y / P) + gy;
+        const jx = (hashN(cxi * 3.1 + cyi * 7.7) - 0.5) * P * 0.20;
+        const jy = (hashN(cxi * 5.3 + cyi * 2.9) - 0.5) * P * 0.20;
+        const cx = (cxi + 0.5) * P + jx, cy = (cyi + 0.5) * P + jy;
+        const d = Math.hypot(x - cx, y - cy);
+        if (d > R) continue;
+        const order = ((cyi * 31 + cxi) % 97 + 97) % 97;   // a fixed scribing order
+        if (order > bestOrder) { bestOrder = order; bestD = d; bestJit = hashN(cxi * 11.3 + cyi * 4.7); }
       }
+      if (bestOrder >= 0) {
+        cov = 1;
+        // concentric grooves: the abrasive leaves ~30 rings across the disc
+        const rings = Math.sin(bestD * (Math.PI * 2 / 3.4) + bestJit * 6.3);
+        // and the disc is very slightly dished, deepest at the rim it was cut to
+        h = 0.5 + rings * 0.34 - (bestD / R) * (bestD / R) * 0.10;
+      }
+      const fine = noise.fbm(x / N * 40, y / N * 40, 2, 40) - 0.5;
+      HEIGHT[i] = h + fine * 0.05;
+      // abraded metal: the grooved disc is duller than the untouched ground
+      ROUGH[i] = 0.26 + cov * 0.18 + fine * 0.05;
     }
-  } else if (kind === 'hammer') {                // hammered: soft dished dents
-    for (let i = 0; i < 150; i++) {
-      const x = Math.random() * N, y = Math.random() * N, r = 7 + Math.random() * 13;
-      const gr = g.createRadialGradient(x - r * 0.3, y - r * 0.3, 1, x, y, r);
-      gr.addColorStop(0, 'rgba(255,255,255,0.30)');
-      gr.addColorStop(1, 'rgba(30,30,30,0.22)');
-      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  } else if (kind === 'hammer') {
+    // Planishing leaves CONCAVE dishes that meet along ridges, each one its own
+    // small curved mirror. The old radial gradient was white in the middle, so
+    // the derived normal made every mark CONVEX -- the case came out covered in
+    // bubbles, which is what blistered paint looks like, not hammered metal.
+    // Voronoi gives the real thing: dishes that interlock, with a sharp ridge
+    // exactly where two hammer blows met.
+    const P = N / 6.0;                                 // ~6 dishes across the face
+    HEIGHT = new Float32Array(N * N); ROUGH = new Float32Array(N * N); NSTR = 1.1;
+    const noise = makeNoise(8.8);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x;
+      let capMin = 1;
+      for (let gy = -1; gy <= 1; gy++) for (let gx = -1; gx <= 1; gx++) {
+        const cxi = Math.floor(x / P) + gx, cyi = Math.floor(y / P) + gy;
+        const jx = (hashN(cxi * 2.7 + cyi * 9.1) - 0.5) * P * 0.85;
+        const jy = (hashN(cxi * 6.1 + cyi * 3.3) - 0.5) * P * 0.85;
+        const cx = (cxi + 0.5) * P + jx, cy = (cyi + 0.5) * P + jy;
+        const rd = P * (0.62 + hashN(cxi * 13.7 + cyi * 5.9) * 0.30);   // blows differ
+        const d = Math.hypot(x - cx, y - cy) / rd;
+        if (d < 1) capMin = Math.min(capMin, d * d);
+      }
+      // Each blow is a shallow SPHERICAL CAP, and the surface is the highest
+      // metal left after all of them: min over the caps. Where two caps meet you
+      // get a cusp, which is the crisp ridge you see on a planished copper pot.
+      // A Voronoi t-profile instead gave a quilted grid of dimples.
+      const prof = Math.min(1, capMin);
+      const fine = noise.fbm(x / N * 34, y / N * 34, 3, 34) - 0.5;
+      HEIGHT[i] = 0.40 + prof * 0.34 + fine * 0.035;
+      // planished metal is polished by the hammer face itself; the cusps keep
+      // a touch more tooth than the dish floors
+      ROUGH[i] = 0.32 + prof * 0.16 + fine * 0.05;
+    }
+  } else if (kind === 'blast') {
+    // Bead-blasted black. matte carried `map:false`: no roughness map, no normal
+    // and metalness 0.85, so it was a light-absorbing void with no surface
+    // information at all -- in a product shot you could not see the shape of the
+    // object. A blast finish has fine even tooth plus a slow mottle from the
+    // nozzle's pass, and that mottle is what tells the eye where the form turns.
+    const noise = makeNoise(29.4);
+    HEIGHT = new Float32Array(N * N); ROUGH = new Float32Array(N * N); NSTR = 0.9;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x;
+      const bead = hashN(i * 0.53 + 1.9) - 0.5;                 // the beads themselves
+      const bead2 = noise.fbm(x / N * 64, y / N * 64, 2, 64) - 0.5;
+      const pass = noise.fbm(x / N * 3.4, y / N * 3.4, 3, 3.4) - 0.5;   // nozzle mottle
+      HEIGHT[i] = 0.5 + bead * 0.5 + bead2 * 0.35 + pass * 0.10;
+      ROUGH[i] = 0.70 + pass * 0.22 + bead2 * 0.10 + bead * 0.04;
     }
   } else if (kind === 'cross') {                 // crosshatch
     for (let d = -N; d < N * 2; d += 9) { line(0.30, 2); seg(d, 0, d + N, N); dark(0.26, 1); seg(d + 3, 0, d + N + 3, N); }
@@ -2249,15 +2430,6 @@ function patternTex(kind) {
       line(0.16, 1);
       for (let k = 2; k < 16; k += 4) warp ? seg(x + k, y, x + k, y + 16) : seg(x, y + k, x + 16, y + k);
     }
-  } else if (kind === 'wave') {                  // damascus ripple
-    for (let y = -20; y < N + 20; y += 7) {
-      line(0.26, 3); g.beginPath();
-      for (let x = 0; x <= N; x += 8) {
-        const yy = y + Math.sin(x * 0.055 + y * 0.22) * 7;
-        x ? g.lineTo(x, yy) : g.moveTo(x, yy);
-      }
-      g.stroke();
-    }
   } else if (kind === 'sunburst') {              // deco rays fanning from the base
     const cx = N * 0.5, cy = N * 1.02;           // origin just off the bottom edge
     for (let i = 0; i < 96; i++) {
@@ -2269,15 +2441,16 @@ function patternTex(kind) {
       seg(cx, cy, cx + Math.cos(a2) * N * 1.5, cy + Math.sin(a2) * N * 1.5);
     }
   } else if (kind === 'deco') {                  // polished above, blasted below
+    const rnd = rndStream(88.1);
     g.fillStyle = 'rgb(38,38,38)'; g.fillRect(0, 0, N, N * 0.46);      // mirror
     g.fillStyle = 'rgb(196,196,196)'; g.fillRect(0, N * 0.52, N, N);   // blasted
     const band = g.createLinearGradient(0, N * 0.46, 0, N * 0.52);
     band.addColorStop(0, 'rgb(38,38,38)'); band.addColorStop(1, 'rgb(196,196,196)');
     g.fillStyle = band; g.fillRect(0, N * 0.46, N, N * 0.06);
     for (let i = 0; i < 2600; i++) {             // the blast texture itself
-      const y = N * 0.52 + Math.random() * N * 0.48;
-      g.fillStyle = `rgba(${Math.random() < 0.5 ? 255 : 0},${Math.random() < 0.5 ? 255 : 0},${Math.random() < 0.5 ? 255 : 0},0.10)`;
-      g.fillRect(Math.random() * N, y, 2, 2);
+      const y = N * 0.52 + rnd() * N * 0.48;
+      g.fillStyle = `rgba(${rnd() < 0.5 ? 255 : 0},${rnd() < 0.5 ? 255 : 0},${rnd() < 0.5 ? 255 : 0},0.10)`;
+      g.fillRect(rnd() * N, y, 2, 2);
     }
     g.fillStyle = 'rgba(255,255,255,0.9)';       // the crisp line where they meet
     g.fillRect(0, N * 0.485, N, 2);
@@ -2289,38 +2462,364 @@ function patternTex(kind) {
   }
   // COMPOSITIONAL patterns are a design placed on the case -- one origin, one
   // split -- so they tile once. The rest are surface texture and tile twice.
-  const rep = (kind === 'sunburst' || kind === 'deco') ? 1 : 2;
-  const rough = new THREE.CanvasTexture(cv);
-  rough.wrapS = rough.wrapT = THREE.RepeatWrapping;
-  rough.repeat.set(rep, rep);
+  // engine and hammer are big marks with real scale: at 2x2 the discs and dishes
+  // came out the size of a knurl, so they tile once too.
+  const rep = (kind === 'sunburst' || kind === 'deco' || kind === 'engine' || kind === 'hammer') ? 1 : 2;
   // A roughness map alone is nearly invisible on metal this polished -- it only
   // blurs a reflection slightly. Real engine-turning or hammering is GEOMETRY,
   // so read the pattern as a height field and derive a normal map from its
   // slope. That is what actually catches the light.
-  const src = g.getImageData(0, 0, N, N).data;
-  const out = g.createImageData(N, N);
-  const at = (x, y) => src[(((y + N) % N) * N + ((x + N) % N)) * 4];   // wraps, like the tile does
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
-    const dx = (at(x + 1, y) - at(x - 1, y)) / 255;
-    const dy = (at(x, y + 1) - at(x, y - 1)) / 255;
-    const nx = -dx * 2.4, ny = -dy * 2.4, nz = 1;
-    const len = Math.hypot(nx, ny, nz) || 1;
-    const i = (y * N + x) * 4;
-    out.data[i] = (nx / len * 0.5 + 0.5) * 255;
-    out.data[i + 1] = (ny / len * 0.5 + 0.5) * 255;
-    out.data[i + 2] = (nz / len * 0.5 + 0.5) * 255;
-    out.data[i + 3] = 255;
+  let H;
+  if (HEIGHT) H = HEIGHT;
+  else {
+    const src = g.getImageData(0, 0, N, N).data;
+    H = new Float32Array(N * N);
+    for (let i = 0; i < N * N; i++) H[i] = src[i * 4] / 255;
   }
-  const ncv = document.createElement('canvas'); ncv.width = ncv.height = N;
-  ncv.getContext('2d').putImageData(out, 0, 0);
-  const normal = new THREE.CanvasTexture(ncv);
-  normal.wrapS = normal.wrapT = THREE.RepeatWrapping;
-  normal.repeat.set(rep, rep);
-  return { rough, normal };
+  return {
+    rough: texOf(ROUGH ? grayCanvas(ROUGH, N) : cv, false, rep),
+    normal: texOf(normalCanvas(H, N, NSTR), false, rep),
+  };
 }
 // Finishes whose COLOUR varies across the case. Same lazy-and-cached deal as
-// patternTex: built on first use, never at boot.
+// patternTex: built on first use, never at boot. These now return relief as well
+// as colour: `tint` used to supply an albedo ALONE, so marble, tortoise, camo and
+// meteorite were geometrically dead flat and read as printing rather than as
+// material. A photograph of stone or shell has micro-relief catching the key
+// light, and a polish that differs between the vein and the ground.
 function albedoTex(kind) {
+  const N = 256;
+  const cv = document.createElement('canvas'); cv.width = cv.height = N;
+  const g = cv.getContext('2d');
+  let HEIGHT = null, ROUGH = null, NSTR = 1.6;      // optional relief + polish
+  const blob = (x, y, r, fill) => {
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, fill); gr.addColorStop(1, fill.replace(/[\d.]+\)$/, '0)'));
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  };
+  if (kind === 'patina') {                       // verdigris creeping over copper
+    const rnd = rndStream(41.7);
+    g.fillStyle = '#7a4a2c'; g.fillRect(0, 0, N, N);
+    for (let i = 0; i < 220; i++) {
+      const x = rnd() * N, y = rnd() * N;
+      blob(x, y, 14 + rnd() * 46, `rgba(${60 + rnd() * 40 | 0},${140 + rnd() * 60 | 0},${110 + rnd() * 40 | 0},0.55)`);
+    }
+    for (let i = 0; i < 70; i++) {               // bright crust where it flakes
+      blob(rnd() * N, rnd() * N, 5 + rnd() * 14, 'rgba(190,225,205,0.5)');
+    }
+  } else if (kind === 'tortoise') {
+    // Shell is TRANSLUCENT: the blotches are pigment sitting at different depths
+    // under a clear amber layer. One flat layer of round blobs is why this read
+    // as printed hide. Three layers, each blurred by its depth, and the deepest
+    // is both softer AND weaker because the amber above it scatters.
+    const rnd = rndStream(5.9), noise = makeNoise(21.1);
+    const layers = [];
+    const spec = [                               // count, r0, r1, blur, strength
+      [34, 20, 44, 8, 0.44], [48, 11, 26, 3, 0.58], [60, 4, 13, 1, 0.80],
+    ];
+    for (const [n, r0, r1, blur, str] of spec) {
+      const lc = document.createElement('canvas'); lc.width = lc.height = N;
+      const lg = lc.getContext('2d');
+      lg.fillStyle = '#fff';
+      for (let i = 0; i < n; i++) {
+        const x = rnd() * N, y = rnd() * N, r = r0 + rnd() * (r1 - r0);
+        const rot = rnd() * Math.PI * 2, el = 0.34 + rnd() * 0.46, ph = rnd() * 9;
+        // flame shape, not a disc: two harmonics plus noise gives the torn,
+        // finger-like outline real shell has
+        for (const [ox, oy] of [[0, 0], [N, 0], [-N, 0], [0, N], [0, -N]]) {
+          lg.save(); lg.translate(x + ox, y + oy); lg.rotate(rot); lg.scale(1, el);
+          lg.beginPath();
+          const K = 30;
+          for (let k = 0; k <= K; k++) {
+            const a = k / K * Math.PI * 2;
+            const rr = r * (0.52 + 0.30 * Math.abs(Math.sin(a * 1.5 + ph))
+              + 0.16 * Math.sin(a * 4 + ph * 2)
+              + 0.42 * noise.vn(Math.cos(a) * 1.7 + i * 5.1, Math.sin(a) * 1.7 + ph, 0));
+            k ? lg.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : lg.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+          }
+          lg.closePath(); lg.fill(); lg.restore();
+        }
+      }
+      layers.push({ m: blurMask(maskOf(lg, N), N, blur, 2), str });
+    }
+    const img = g.createImageData(N, N);
+    HEIGHT = new Float32Array(N * N); ROUGH = new Float32Array(N * N); NSTR = 0.9;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x, u = x / N, v = y / N;
+      // the amber is not one value: it is thicker at the bottom of the piece
+      const grain = noise.fbm(u * 4.2, v * 4.2, 4);
+      const thick = 0.5 + 0.5 * noise.fbm(u * 1.6 + 3.3, v * 1.6, 3);
+      let r = 214 - thick * 44 + (grain - 0.5) * 26;
+      let gg = 140 - thick * 48 + (grain - 0.5) * 20;
+      let b = 58 - thick * 30 + (grain - 0.5) * 12;
+      for (const L of layers) {
+        // depth reads as CONTRAST: a deep mark is brown and soft, a mark at the
+        // surface is nearly black and hard-edged
+        const t = Math.min(1, L.m[i] * 1.25) * L.str;
+        r += (46 * L.str - r) * t; gg += (20 * L.str - gg) * t; b += (8 * L.str - b) * t;
+      }
+      img.data[i * 4] = r; img.data[i * 4 + 1] = gg; img.data[i * 4 + 2] = b; img.data[i * 4 + 3] = 255;
+      // polished shell is glassy, but a hand-polished piece is never perfectly
+      // even -- a slow undulation in the gloss is most of what says "real object"
+      ROUGH[i] = 0.13 + (thick) * 0.06 + (grain - 0.5) * 0.05;
+      HEIGHT[i] = 0.5 + (grain - 0.5) * 0.10 + (thick - 0.5) * 0.22;
+    }
+    g.putImageData(img, 0, 0);
+  } else if (kind === 'marble') {
+    // Stone, not paper with biro on it. Three things the old one had none of:
+    //   1. the field is CLOUDY -- light enters translucent calcite a few mm and
+    //      comes back out unevenly, so the white drifts in value and in hue
+    //   2. the veining is a NETWORK -- it forks, it rejoins, it pinches and
+    //      swells, and it is thickest where two systems meet
+    //   3. every vein bleeds a diffuse grey bruise into the stone around it,
+    //      which is the single strongest cue that it is UNDER the surface
+    // Veins are not drawn as strokes. A stroke has one width and one heading, so
+    // a field of them reads as hair, or as the crazing on a cracked glaze -- both
+    // of which this finish has been. Instead the vein is the zero set of a
+    // turbulence-warped stripe field: thickness then falls out of the local
+    // gradient, which is what gives real veining its pinch and swell and its
+    // forks, and the branches connect because they are one continuous function.
+    const noise = makeNoise(3.7);
+    const sm = (e0, e1, x) => { const k = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return k * k * (3 - 2 * k); };
+    const CORE = new Float32Array(N * N), BODY = new Float32Array(N * N);
+    const CLOUD = new Float32Array(N * N), WARM = new Float32Array(N * N);
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x, u = x / N, v = y / N;
+      const w1 = noise.fbm(u * 3.0 + 1.3, v * 1.1, 5) - 0.5;   // stretched: veins run
+      const w2 = noise.fbm(u * 6.2 + 8.7, v * 2.4, 4) - 0.5;
+      // primary system: two or three major fractures crossing the face
+      const q1 = (u * 0.95 + v * 1.30) * 2.5 + w1 * 3.4 + w2 * 0.8;
+      const s1 = Math.abs(Math.sin(q1 * Math.PI));
+      // secondary: finer, steeper, and running the other way
+      const q2 = (u * 1.35 - v * 0.60) * 4.6 + w1 * 4.6 + w2 * 1.4;
+      const s2 = Math.abs(Math.sin(q2 * Math.PI));
+      // a vein fades in and out along its length -- a line of constant strength
+      // is a drawn line, and the eye knows it
+      const fade = 0.35 + 0.9 * noise.fbm(u * 2.6 + 21.1, v * 2.6 + 5.5, 3);
+      CORE[i] = Math.min(1, Math.max(1 - sm(0.0, 0.13, s1), 0.55 * (1 - sm(0.0, 0.075, s2))) * fade);
+      BODY[i] = Math.min(1, Math.max(1 - sm(0.0, 0.40, s1), 0.55 * (1 - sm(0.0, 0.22, s2))) * (0.55 + fade * 0.7));
+      CLOUD[i] = noise.fbm(u * 3.1, v * 3.1, 5) * 0.72 + noise.fbm(u * 0.85 + 31.7, v * 0.85, 3) * 0.28;
+      WARM[i] = noise.fbm(u * 1.25 + 7.7, v * 1.25 + 2.2, 3);
+    }
+    const halo = blurMask(BODY.slice(), N, 9, 2);
+    const far = blurMask(BODY.slice(), N, 22, 2);
+    const img = g.createImageData(N, N);
+    HEIGHT = new Float32Array(N * N); ROUGH = new Float32Array(N * N); NSTR = 0.7;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x;
+      const cloud = CLOUD[i], warm = WARM[i];
+      const spark = hashN(i * 0.77 + 2.3) - 0.5;      // calcite crystal glitter
+      let r = 238 + (cloud - 0.5) * 40 + (warm - 0.5) * 19 + spark * 5;
+      let gg = 236 + (cloud - 0.5) * 40 + (warm - 0.5) * 10 + spark * 5;
+      let b = 229 + (cloud - 0.5) * 38 - (warm - 0.5) * 14 + spark * 5;
+      // ghosts of veins that never reach the surface
+      const deep = Math.min(1, far[((y + 7) % N) * N + ((x + 7) % N)] * 3.0);
+      r -= deep * 24; gg -= deep * 23; b -= deep * 19;
+      // the bruise, sampled off-centre: a real vein has a hard edge on one side
+      // and a diffused grey shadow on the other
+      const hh = Math.min(1, halo[((y + 4) % N) * N + ((x + 4) % N)] * 2.1);
+      const bb = BODY[i];
+      r -= hh * 34 + bb * 30; gg -= hh * 33 + bb * 29; b -= hh * 28 + bb * 24;
+      const vv = CORE[i];                             // the vein itself, crisp
+      r += (96 - r) * vv * 0.88; gg += (98 - gg) * vv * 0.88; b += (104 - b) * vv * 0.88;
+      img.data[i * 4] = r; img.data[i * 4 + 1] = gg; img.data[i * 4 + 2] = b; img.data[i * 4 + 3] = 255;
+      // the vein mineral takes a different polish from the calcite around it --
+      // this is what a raking light actually finds on a polished marble face
+      ROUGH[i] = 0.20 + vv * 0.26 + bb * 0.10 + (cloud - 0.5) * 0.05;
+      HEIGHT[i] = 0.55 - vv * 0.22 - bb * 0.10 + (cloud - 0.5) * 0.06;
+    }
+    g.putImageData(img, 0, 0);
+  } else if (kind === 'rust') {                  // steel losing to oxide
+    const rnd = rndStream(7.1);
+    g.fillStyle = '#6e7378'; g.fillRect(0, 0, N, N);
+    for (let i = 0; i < 260; i++) {
+      blob(rnd() * N, rnd() * N, 8 + rnd() * 40,
+           `rgba(${120 + rnd() * 70 | 0},${52 + rnd() * 40 | 0},${20 + rnd() * 24 | 0},0.6)`);
+    }
+    for (let i = 0; i < 900; i++) {              // pitting
+      g.fillStyle = `rgba(40,22,12,${0.15 + rnd() * 0.4})`;
+      g.fillRect(rnd() * N, rnd() * N, 1 + rnd() * 2, 1 + rnd() * 2);
+    }
+  } else if (kind === 'fireblue') {              // tempering colours running up steel
+    // straw at the cool end through bronze and purple to blue: the sequence a
+    // gunsmith watches for, so it has to run in ORDER along one axis
+    const rnd = rndStream(63.3);
+    const gr = g.createLinearGradient(0, N, 0, 0);
+    for (const [t, c] of [[0, '#8d9199'], [0.16, '#b8a15e'], [0.34, '#c07a34'],
+                          [0.52, '#8e4a72'], [0.70, '#3f4fa8'], [0.86, '#2e7fb8'], [1, '#9fb6c4']]) {
+      gr.addColorStop(t, c);
+    }
+    g.fillStyle = gr; g.fillRect(0, 0, N, N);
+    for (let i = 0; i < 260; i++) {              // the colours creep unevenly
+      const y = rnd() * N;
+      g.fillStyle = `rgba(255,255,255,${rnd() * 0.05})`;
+      g.fillRect(0, y, N, 1 + rnd() * 3);
+    }
+  } else if (kind === 'meteorite') {
+    // The Widmanstatten figure is not scratches. It is interlocking kamacite
+    // LAMELLAE: plates of consistent width within one crystallographic
+    // orientation, three orientations 60 degrees apart, each terminating against
+    // its neighbours so the dark plessite left between them forms closed
+    // triangles. Random lines of random width at random spacing -- which is what
+    // this was -- cannot make a cell.
+    //
+    // The plates are drawn into ONE union mask and coloured from that. Drawing
+    // them individually with their own dark rims put a rim across every
+    // intersection, and a lattice of edged strips crossing over and under each
+    // other is a woven basket, which is exactly what the first two cuts looked
+    // like. Two plates of the same mineral that meet are just more kamacite.
+    const rnd = rndStream(33.3), noise = makeNoise(9.9);
+    const bc = document.createElement('canvas'); bc.width = bc.height = N;
+    const bg = bc.getContext('2d');
+    bg.fillStyle = '#fff';
+    const sets = [[0.30, 9.0, 27], [0.30 + Math.PI / 3, 7.0, 21], [0.30 + 2 * Math.PI / 3, 11.0, 34]];
+    // Each plate is painted its own grey. Plates of different orientations catch
+    // the light differently under one polish, and that tone step at a junction is
+    // what lets the eye separate one lamella from the next -- without drawing an
+    // edge, which is what wove them together.
+    for (let si = 0; si < sets.length; si++) {
+      const [ang, w, gap] = sets[si];
+      const setTone = [0, -13, 9][si];
+      for (let o = -N; o < N * 2; o += gap * (0.78 + rnd() * 0.5)) {
+        // width is CONSISTENT within an orientation -- that consistency is the
+        // whole tell, and the old code randomised it 1..6px
+        const bw = w * (0.88 + rnd() * 0.24);
+        let t = -N;
+        while (t < N * 2) {
+          const len = 70 + rnd() * 200;
+          const tone = 200 + setTone * 0 + (rnd() - 0.5) * 0;   // one mineral, one tone
+          bg.fillStyle = `rgb(${tone | 0},${tone | 0},${tone | 0})`;
+          bg.save();
+          bg.translate(N / 2, N / 2); bg.rotate(ang); bg.translate(-N / 2, -N / 2);
+          bg.fillRect(t, o, len, bw);
+          bg.restore();
+          t += len + 5 + rnd() * 22;             // it terminates against a neighbour
+        }
+      }
+    }
+    const BAND = maskOf(bg, N);
+    const TONE = new Float32Array(N * N);
+    { const d = bg.getImageData(0, 0, N, N).data; for (let i = 0; i < N * N; i++) TONE[i] = d[i * 4]; }
+    const soft = blurMask(BAND.slice(), N, 1, 1);
+    const img = g.createImageData(N, N);
+    HEIGHT = new Float32Array(N * N); ROUGH = new Float32Array(N * N); NSTR = 0.8;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x;
+      // A plate edge cut by a saw and etched is not a CAD line. Warping the
+      // lookup a few pixels roughens every edge at once, for two noise samples.
+      const wx = Math.round(noise.vn(x / N * 5.5 + 3.1, y / N * 5.5, 0) * 7 - 3.5);
+      const wy = Math.round(noise.vn(x / N * 5.5 + 9.7, y / N * 5.5 + 4.4, 0) * 7 - 3.5);
+      const j = ((((y + wy) % N) + N) % N) * N + ((((x + wx) % N) + N) % N);
+      const band = BAND[j];
+      // taenite: a dark ribbon that lies just OUTSIDE the plate boundary, so it
+      // never crosses a junction between two plates
+      const rim = Math.max(0, soft[j] - band) * 2.2;
+      const fine = noise.fbm(x / N * 26, y / N * 26, 2) - 0.5;
+      const slow = noise.vn(x / N * 1.7 + 5.1, y / N * 1.7, 0) - 0.5;    // polish drift
+      const grit = hashN(i * 0.61 + 4.4) - 0.5;
+      // plessite is a fine dark intergrowth, not flat paint
+      let v = 84 + fine * 36 + grit * 26;
+      v += (166 + slow * 26 + fine * 18 - v) * band;       // kamacite
+      v -= Math.min(1, rim) * 62;                          // the taenite ribbon
+      img.data[i * 4] = v - 4; img.data[i * 4 + 1] = v; img.data[i * 4 + 2] = v + 7;
+      img.data[i * 4 + 3] = 255;
+      // The etch is MICRONS deep. Giving the plates real height turned the case
+      // into a woven metal grate: nearly all of the read has to come from the
+      // albedo and the polish.
+      HEIGHT[i] = 0.47 + band * 0.05 - Math.min(1, rim) * 0.04 + fine * 0.04;
+      ROUGH[i] = 0.48 - band * 0.20 + Math.min(1, rim) * 0.08 + fine * 0.05;
+    }
+    g.putImageData(img, 0, 0);
+  } else if (kind === 'damascus') {
+    // Pattern-welded steel is a COLOUR pattern, not a relief pattern: two steels
+    // etch to different depths and read as alternating near-black and bright
+    // bands with a wet, watery flow. It was on `map:'wave'`, which supplies only
+    // roughness -- so the one thing that identifies damascus, the light/dark
+    // banding, was not present at all, and the sine ripples tiled into a knurl.
+    const noise = makeNoise(77.7), rnd = rndStream(2.9);
+    // raindrop figure: a few drilled dimples pull the layers into rings
+    const drops = [];
+    for (let i = 0; i < 5; i++) drops.push([rnd() * N, rnd() * N, 34 + rnd() * 46]);
+    const img = g.createImageData(N, N);
+    HEIGHT = new Float32Array(N * N); ROUGH = new Float32Array(N * N); NSTR = 0.55;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x, u = x / N, v = y / N;
+      // layer coordinate: stacked layers, warped by the forging
+      let q = v * 40.0
+        + (noise.fbm(u * 2.2, v * 2.2, 4, 0) - 0.5) * 15.0
+        + Math.sin(u * 5.3 + 1.1) * 2.4;
+      for (const [dx, dy, dr] of drops) {          // and pulled up around each drop
+        const d = Math.hypot(x - dx, y - dy);
+        if (d < dr) q -= (1 - d / dr) * (1 - d / dr) * 11.0;
+      }
+      const s = Math.sin(q * Math.PI);
+      // sharpen the boundary: an etched band has an edge, it is not a sine ramp
+      const band = Math.min(1, Math.max(0, s * 1.25 + 0.5));
+      const t = band * band * (3 - 2 * band);
+      const grain = (hashN(i * 0.43 + 9.1) - 0.5) * 8;
+      const dark = [86, 90, 98], light = [188, 196, 206];
+      for (let c = 0; c < 3; c++) img.data[i * 4 + c] = dark[c] + (light[c] - dark[c]) * t + grain;
+      img.data[i * 4 + 3] = 255;
+      // the dark layer is the one the acid ate, so it is deeper AND rougher
+      ROUGH[i] = 0.46 - t * 0.28;
+      HEIGHT[i] = 0.45 + t * 0.10;
+    }
+    g.putImageData(img, 0, 0);
+  } else if (kind === 'livery') {                // painted racing stripes
+    g.fillStyle = '#1b1d21'; g.fillRect(0, 0, N, N);
+    const cx = N * 0.5;
+    for (const [w, c] of [[0.115, '#d8dde3'], [0.078, '#c2333a']]) {
+      g.fillStyle = c; g.fillRect(cx - N * w, 0, N * w * 2, N);
+    }
+    g.fillStyle = '#1b1d21';
+    g.fillRect(cx - N * 0.020, 0, N * 0.040, N);   // the pinstripe splitting them
+  } else {                                       // 'camo': disruptive blotches
+    // Real DPM is TORN and DIRECTIONAL -- long shapes running one way with
+    // ragged fingers. The old polygons were radius-jittered circles, which reads
+    // as bubbles. And printed camo on a metal case still shows the substrate:
+    // the ink is flat but the metal under it is not.
+    const rnd = rndStream(19.3), noise = makeNoise(55.1);
+    g.fillStyle = '#4a5140'; g.fillRect(0, 0, N, N);
+    for (const [col, n, r0, r1] of [['#2f3527', 30, 16, 38], ['#6b7359', 24, 13, 32], ['#23261c', 22, 9, 24]]) {
+      g.fillStyle = col;
+      for (let i = 0; i < n; i++) {
+        const x = rnd() * N, y = rnd() * N, r = r0 + rnd() * (r1 - r0);
+        const rot = -0.6 + rnd() * 0.5, el = 0.34 + rnd() * 0.30, ph = rnd() * 7;
+        for (const [ox, oy] of [[0, 0], [N, 0], [-N, 0], [0, N], [0, -N]]) {
+          g.save(); g.translate(x + ox, y + oy); g.rotate(rot); g.scale(1, el);
+          g.beginPath();
+          const K = 34;
+          for (let k = 0; k <= K; k++) {
+            const a = k / K * Math.PI * 2;
+            const rr = r * (0.55 + 0.5 * noise.vn(Math.cos(a) * 2.4 + i * 6.7, Math.sin(a) * 2.4 + ph, 0)
+              + 0.22 * Math.abs(Math.sin(a * 3 + ph)));
+            k ? g.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : g.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+          }
+          g.closePath(); g.fill();
+          g.restore();
+        }
+      }
+    }
+    HEIGHT = new Float32Array(N * N); ROUGH = new Float32Array(N * N); NSTR = 0.5;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const i = y * N + x;
+      const fine = noise.fbm(x / N * 30, y / N * 30, 3, 0) - 0.5;
+      const grain = hashN(i * 0.91 + 3.7) - 0.5;
+      HEIGHT[i] = 0.5 + fine * 0.5 + grain * 0.12;
+      ROUGH[i] = 0.74 + fine * 0.10 + grain * 0.05;
+    }
+  }
+  return {
+    // ONE tile per face. The relief patterns repeat 2x2 because they are drawn to
+    // tile seamlessly; these are not -- blotches and veins do not meet at the
+    // edges, and repeating them put a hard cross-shaped seam across every face.
+    albedo: texOf(cv, true, 1),
+    rough: ROUGH ? texOf(grayCanvas(ROUGH, N), false, 1) : null,
+    normal: HEIGHT ? texOf(normalCanvas(HEIGHT, N, NSTR), false, 1) : null,
+  };
+}
+
+function albedoTexLegacy(kind) {
   const N = 256;
   const cv = document.createElement('canvas'); cv.width = cv.height = N;
   const g = cv.getContext('2d');
@@ -2803,7 +3302,10 @@ const CORRODE_CACHE = {};
 const corrodedMap = k => CORRODE_CACHE[k] || (CORRODE_CACHE[k] = corrodedTex(k));
 
 const ALBEDO_CACHE = {};
-const albedoMap = kind => ALBEDO_CACHE[kind] || (ALBEDO_CACHE[kind] = albedoTex(kind));
+const albedoMap = kind => ALBEDO_CACHE[kind] || (ALBEDO_CACHE[kind] =
+  // meteorite alone still uses the old generator; the rest return relief too
+  kind === 'meteorite' ? { albedo: albedoTexLegacy(kind), rough: null, normal: null }
+    : albedoTex(kind));
 
 const PATTERN_CACHE = {};
 const patternMap = kind => PATTERN_CACHE[kind] || (PATTERN_CACHE[kind] = patternTex(kind));
@@ -2816,7 +3318,7 @@ const FINISHES = {
     insert: 0x757b82, inner: 0x9aa2ab,
   },
   matte: {
-    chrome: { color: 0x23262a, rough: 0.86, map: false, metal: 0.85, env: 0.6 },
+    chrome: { color: 0x2b2f34, rough: 1.0, map: 'blast', metal: 0.85, env: 0.85, nscale: 0.32 },
     dark: { color: 0x2e3236, rough: 0.7, map: false, metal: 0.9, env: 0.8 },
     insert: 0x5a5f66, inner: 0x565b61,
   },
@@ -2855,8 +3357,8 @@ const FINISH_EXTRA = {
   },
   obsidian: {
     swatch: 'radial-gradient(circle at 32% 30%, #3c4249 0%, #14171a 70%)',
-    chrome: { color: 0x555e69, rough: 0.58, map: 'engine', metal: 0.70, env: 1.25 },
-    dark: { color: 0x424953, rough: 0.48, map: 'engine', metal: 0.75, env: 1.15 },
+    chrome: { color: 0x555e69, rough: 1.0, map: 'engine', metal: 0.70, env: 1.25 },
+    dark: { color: 0x424953, rough: 1.0, map: 'engine', metal: 0.75, env: 1.15 },
     insert: 0x4a4f55, inner: 0x40454b,
   },
   titanium: {
@@ -2867,8 +3369,11 @@ const FINISH_EXTRA = {
   },
   damascus: {
     swatch: 'repeating-linear-gradient(0deg, #a6aeb8 0 3px, #6f7780 3px 6px)',
-    chrome: { color: 0x9aa3ad, rough: 0.58, map: 'wave', metal: 1.0, env: 1.1 },
-    dark: { color: 0x7c848d, rough: 0.32, map: 'wave', metal: 1.0, env: 1.05 },
+    // damascus is a COLOUR pattern, not a relief one: two steels etch to
+    // different depths and leave light and dark bands. It was bound to a
+    // roughness map alone, so it had none of that and read as a diamond knurl.
+    chrome: { color: 0xffffff, rough: 1.0, tint: 'damascus', metal: 1.0, env: 1.1 },
+    dark: { color: 0xf0f0f0, rough: 1.0, tint: 'damascus', metal: 1.0, env: 1.05 },
     insert: 0x6d747c, inner: 0x8d959e,
   },
   carbon: {
@@ -2879,8 +3384,8 @@ const FINISH_EXTRA = {
   },
   crimson: {
     swatch: 'radial-gradient(circle at 34% 30%, #c0454f 0%, #6d1620 72%)',
-    chrome: { color: 0x9e2b36, rough: 0.58, map: 'hammer', metal: 0.75, env: 0.85 },
-    dark: { color: 0x7d1f28, rough: 0.46, map: 'hammer', metal: 0.8, env: 0.9 },
+    chrome: { color: 0x9e2b36, rough: 1.0, map: 'hammer', metal: 0.75, env: 0.85 },
+    dark: { color: 0x7d1f28, rough: 1.0, map: 'hammer', metal: 0.8, env: 0.9 },
     insert: 0x6a4046, inner: 0x8a3a42,
   },
   navy: {
@@ -2907,14 +3412,14 @@ const FINISH_EXTRA = {
   },
   tortoise: {
     swatch: 'radial-gradient(circle at 36% 30%, #d29a4c 0%, #3a1a08 74%)',
-    chrome: { color: 0xffffff, rough: 0.30, tint: 'tortoise', metal: 0.0, env: 0.9 },
-    dark: { color: 0xe0e0e0, rough: 0.24, tint: 'tortoise', metal: 0.0, env: 0.95 },
+    chrome: { color: 0xffffff, rough: 1.0, tint: 'tortoise', metal: 0.0, env: 0.9 },
+    dark: { color: 0xe0e0e0, rough: 1.0, tint: 'tortoise', metal: 0.0, env: 0.95 },
     insert: 0x7a5a34, inner: 0x6b4a28,
   },
   marble: {
     swatch: 'radial-gradient(circle at 36% 30%, #f2f0ea 0%, #a8a8ad 76%)',
-    chrome: { color: 0xffffff, rough: 0.42, tint: 'marble', metal: 0.0, env: 1.0 },
-    dark: { color: 0xdedede, rough: 0.34, tint: 'marble', metal: 0.0, env: 1.0 },
+    chrome: { color: 0xffffff, rough: 1.0, tint: 'marble', metal: 0.0, env: 1.0 },
+    dark: { color: 0xdedede, rough: 1.0, tint: 'marble', metal: 0.0, env: 1.0 },
     insert: 0x8e8e94, inner: 0xb4b4ba,
   },
   rust: {
@@ -2925,8 +3430,8 @@ const FINISH_EXTRA = {
   },
   camo: {
     swatch: 'repeating-linear-gradient(38deg, #4a5140 0 5px, #2f3527 5px 9px, #6b7359 9px 13px)',
-    chrome: { color: 0xffffff, rough: 0.82, tint: 'camo', metal: 0.12, env: 0.65 },
-    dark: { color: 0xdcdcdc, rough: 0.74, tint: 'camo', metal: 0.15, env: 0.7 },
+    chrome: { color: 0xffffff, rough: 1.0, tint: 'camo', metal: 0.12, env: 0.65 },
+    dark: { color: 0xdcdcdc, rough: 1.0, tint: 'camo', metal: 0.15, env: 0.7 },
     insert: 0x5a604f, inner: 0x4b5142,
   },
   fireblue: {
@@ -3000,13 +3505,20 @@ function applyFinish(name) {
     // so the oxide sits in the dents instead of floating over them
     const cor = p.corrode ? corrodedMap(p.corrode) : null;
     const des = typeof p.map === 'string' ? patternMap(p.map) : null;
-    const map = cor ? cor.rough : (p.map === true ? brushed : (des ? des.rough : null));
-    const nrm = cor ? cor.normal : (des ? des.normal : null);
+    // `tint` finishes now carry relief as well as colour. Stone, shell and
+    // printed camo were geometrically dead flat before, so they read as a
+    // picture of a material rather than the material -- a photograph of marble
+    // has micro-relief catching the key light and a polish that differs between
+    // the vein and the ground.
+    const tin = (!cor && p.tint) ? albedoMap(p.tint) : null;
+    const map = cor ? cor.rough
+      : (p.map === true ? brushed : (des ? des.rough : (tin ? tin.rough : null)));
+    const nrm = cor ? cor.normal : (des ? des.normal : (tin ? tin.normal : null));
     // adding or dropping either map changes the shader: recompile only then
     // `tint` names an albedo map: colour that varies ACROSS the case rather than
     // one flat value. It has to be cleared explicitly, or a plain metal picked
     // after a patina would keep wearing the patina's colour.
-    const alb = cor ? cor.albedo : (p.tint ? albedoMap(p.tint) : null);
+    const alb = cor ? cor.albedo : (tin ? tin.albedo : null);
     if (m.roughnessMap !== map) { m.roughnessMap = map; m.needsUpdate = true; }
     if (m.normalMap !== nrm) { m.normalMap = nrm; m.needsUpdate = true; }
     if (m.map !== alb) { m.map = alb; m.needsUpdate = true; }
