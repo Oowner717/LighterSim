@@ -484,7 +484,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-17c';
+  window.__BUILD = '2026-08-17d';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -875,328 +875,1156 @@ function radialCanvas(size, stops, inner = 0) {
   return cv;
 }
 /* ============================== BACKDROPS ============================== */
-// A photographer's sweep, not a flat field: light pools behind the subject and
-// falls away to a darker floor, with a vignette framing it. The old version was
-// a dim radial on near-black, which left a black case with nothing to sit
-// against -- obsidian, carbon and matte all read as a hole in the screen.
-// `pool` is the bright band the lighter is silhouetted on, and is what the
-// menu swatch shows.
-const BACKDROPS = {
-  midnight: { sky: '#39424f', pool: '#4b5768', floor: '#10131a' },
-  noir:     { sky: '#2b2b2d', pool: '#3b3b3f', floor: '#0a0a0b' },
-  slate:    { sky: '#3d4a5a', pool: '#53637a', floor: '#111820' },
-  steel:    { sky: '#46505c', pool: '#61707f', floor: '#14181d' },
-  ember:    { sky: '#4a2e21', pool: '#6b4029', floor: '#170d09' },
-  oxblood:  { sky: '#4a2029', pool: '#66242f', floor: '#170709' },
-  forest:   { sky: '#22402e', pool: '#2d5a3e', floor: '#0a140e' },
-  indigo:   { sky: '#2d3260', pool: '#3c4380', floor: '#0c0e1c' },
-  plum:     { sky: '#432857', pool: '#5a3573', floor: '#150a1c' },
-  teal:     { sky: '#1c4a50', pool: '#26646b', floor: '#08171a' },
-  sand:     { sky: '#4d4132', pool: '#6b5a44', floor: '#16120d' },
-  ash:      { sky: '#3e3e42', pool: '#525258', floor: '#111113' },
-  // --- recipes that are not the sweep ---------------------------------------
-  softbox:  { draw: drawSoftbox, swatch: 'linear-gradient(135deg,#dbe6f2 0%,#2a2f37 55%,#0d0f13 100%)' },
-  spotlight:{ draw: drawSpotlight, floor: '#0b0c10', rgb: '236,226,206',
-              swatch: 'radial-gradient(ellipse at 50% 62%, #ece2ce 0%, #0b0c10 72%)' },
-  blueprint:{ draw: drawBlueprint, swatch: 'repeating-linear-gradient(0deg,#2a4a78 0 3px,#152238 3px 8px)' },
-  horizon:  { draw: drawHorizon, swatch: 'linear-gradient(0deg,#1a1024 0%,#7a2f4a 34%,#d9743a 62%,#f2b25c 100%)',
-              bands: ['#241a3a', '#3d2350', '#7a2f4a', '#b8503f', '#d9743a', '#f2b25c', '#8a4a34', '#2a1620'] },
-  bokeh:    { draw: drawBokeh, sky: '#101828', floor: '#05070c',
-              lights: ['255,196,120', '120,190,255', '255,130,170', '180,255,220'],
-              swatch: 'radial-gradient(circle at 32% 34%, #ffc478 0 12%, #0f1728 60%)' },
-  stars:    { draw: drawStars, finish: 'noshadow', swatch: 'radial-gradient(circle at 44% 40%, #5668c4 0%, #05060b 70%)' },
-  gels:     { draw: drawGels, left: '255,64,150', right: '60,200,255',
-              swatch: 'linear-gradient(90deg,#ff4096 0%,#0a0b10 50%,#3cc8ff 100%)' },
-  fog:      { draw: drawFog, finish: 'noshadow',
-              swatch: 'linear-gradient(0deg,#8d9ba1 0%,#c3ced3 38%,#dfe6e9 62%,#cfd8dd 100%)' },
-  velvet:   { draw: drawVelvet, deep: '#14060c', rgb: '150,26,58',
-              swatch: 'radial-gradient(circle at 42% 38%, #961a3a 0%, #14060c 74%)' },
-};
-// sweep backdrops take their swatch from the pool colour; the drawn ones
-// declare their own, so only fill in what is missing
-for (const b of Object.values(BACKDROPS)) if (!b.swatch) b.swatch = b.pool;
-const BACKDROP_ORDER = Object.keys(BACKDROPS);
-// Shared furniture every backdrop gets, whatever it draws: the shadow the
-// lighter drops on it, the vignette that frames it, and the dither.
-function backdropFinish(g, S, opt) {
-  if (opt !== 'noshadow') {
-    const sh = g.createRadialGradient(S * 0.5, S * 0.80, 0, S * 0.5, S * 0.80, S * 0.36);
-    sh.addColorStop(0, 'rgba(0,0,0,0.44)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = sh; g.fillRect(0, 0, S, S);
-  }
-  const vg = g.createRadialGradient(S * 0.5, S * 0.46, S * 0.16, S * 0.5, S * 0.52, S * 0.80);
-  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.66)');
-  g.fillStyle = vg; g.fillRect(0, 0, S, S);
-  // +-2/255 noise dithers the gradient so OLED screens don't show banding rings
-  const id = g.getImageData(0, 0, S, S);
-  for (let i = 0; i < id.data.length; i += 4) {
-    const n = (Math.random() - 0.5) * 5;
-    id.data[i] += n; id.data[i + 1] += n; id.data[i + 2] += n;
-  }
-  g.putImageData(id, 0, 0);
-}
-// the original sweep, now one recipe among several rather than the only one
-// Twelve of the backdrops are this one recipe in different hues, and as a bare
-// three-stop ramp it gave them nothing to tell each other apart and nothing for
-// the parallax to reveal -- panning a smooth gradient looks exactly like not
-// panning it. So the sweep now has a place in it: a horizon where the wall
-// meets the floor, a few soft masses standing off in the dark at low contrast,
-// and enough grain to break the banding a wide ramp always shows. Seeded off
-// the palette, so each of the twelve gets its own arrangement and keeps it.
-function drawSweep(g, S, b) {
-  const v = g.createLinearGradient(0, 0, 0, S);
-  v.addColorStop(0, b.sky); v.addColorStop(0.44, b.pool); v.addColorStop(1, b.floor);
-  g.fillStyle = v; g.fillRect(0, 0, S, S);
-  // the pool itself, brightest just behind where the lighter stands
-  const r = g.createRadialGradient(S * 0.5, S * 0.44, 0, S * 0.5, S * 0.44, S * 0.62);
-  r.addColorStop(0, b.pool); r.addColorStop(1, 'rgba(0,0,0,0)');
-  g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.42;
-  g.fillStyle = r; g.fillRect(0, 0, S, S);
-  g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
-
-  let seed = 0;
-  for (let i = 0; i < b.sky.length; i++) seed += b.sky.charCodeAt(i) * (i + 3);
-  const rnd = () => hashN(seed += 2.11);
-
-  // things standing off in the dark: too dim to identify, enough to give the
-  // eye something that moves against the lighter when the camera swings
-  g.globalCompositeOperation = 'source-over';
-  for (let i = 0; i < 5; i++) {
-    const w = S * (0.10 + rnd() * 0.26), h = S * (0.16 + rnd() * 0.4);
-    const x = rnd() * S, y = S * (0.42 + rnd() * 0.3);
-    const m = g.createLinearGradient(0, y - h, 0, y + h * 0.2);
-    m.addColorStop(0, `rgba(0,0,0,0)`);
-    m.addColorStop(1, `rgba(0,0,0,${0.10 + rnd() * 0.16})`);
-    g.fillStyle = m;
-    g.beginPath();
-    g.ellipse(x, y, w, h, 0, 0, Math.PI * 2);
-    g.fill();
-  }
-  // the horizon: a thin lift where the floor turns away from the wall
-  const hy = S * 0.62;
-  const hz = g.createLinearGradient(0, hy - S * 0.05, 0, hy + S * 0.07);
-  hz.addColorStop(0, 'rgba(255,255,255,0)');
-  hz.addColorStop(0.42, 'rgba(255,255,255,0.055)');
-  hz.addColorStop(1, 'rgba(0,0,0,0.10)');
-  g.fillStyle = hz; g.fillRect(0, hy - S * 0.05, S, S * 0.12);
-
-  // grain, or a 512px ramp of one hue bands visibly on an OLED phone
-  const gi = g.getImageData(0, 0, S, S);
-  for (let i = 0; i < S * S; i++) {
-    const n = (hashN(i * 0.37 + seed) - 0.5) * 7;
-    gi.data[i * 4] += n; gi.data[i * 4 + 1] += n; gi.data[i * 4 + 2] += n;
-  }
-  g.putImageData(gi, 0, 0);
-}
-// ---- backdrops that are not the sweep --------------------------------------
-// Each one still has to SEPARATE the lighter from its ground: a dark case
-// against a dark field was a real bug once, so every recipe below puts
-// something lighter than the case directly behind where the lighter stands.
-function fillFlat(g, S, c) { g.fillStyle = c; g.fillRect(0, 0, S, S); }
-
-// the light source itself, visible in frame and mirrored in the chrome
-function drawSoftbox(g, S) {
-  const v = g.createLinearGradient(0, 0, 0, S);
-  v.addColorStop(0, '#2a2f37'); v.addColorStop(1, '#0d0f13');
-  g.fillStyle = v; g.fillRect(0, 0, S, S);
-  const bx = S * 0.06, by = S * 0.04, bw = S * 0.52, bh = S * 0.46;
-  for (let i = 26; i >= 0; i--) {          // soft-edged panel, built as rings
-    const k = i / 26, pad = k * S * 0.09;
-    g.fillStyle = `rgba(214,226,240,${0.055 + (1 - k) * 0.5})`;
-    g.beginPath();
-    g.roundRect(bx - pad, by - pad, bw + pad * 2, bh + pad * 2, S * 0.05 + pad);
-    g.fill();
-  }
-  const sp = g.createRadialGradient(S * 0.5, S * 0.5, 0, S * 0.5, S * 0.5, S * 0.5);
-  sp.addColorStop(0, 'rgba(150,170,196,0.30)'); sp.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = sp; g.fillRect(0, 0, S, S);
-}
-
-// one hard lamp: a bright ellipse with a real edge, the subject standing in it
-function drawSpotlight(g, S, b) {
-  fillFlat(g, S, b.floor);
-  g.save();
-  g.translate(S * 0.5, S * 0.60); g.scale(1, 0.46);
-  for (let i = 30; i >= 0; i--) {
-    const k = i / 30;
-    g.fillStyle = `rgba(${b.rgb},${0.06 + Math.pow(1 - k, 2.2) * 0.72})`;
-    g.beginPath(); g.arc(0, 0, S * 0.50 * (0.35 + k * 0.65), 0, Math.PI * 2); g.fill();
-  }
-  g.restore();
-  const beam = g.createLinearGradient(S * 0.5, 0, S * 0.5, S * 0.62);   // the cone above it
-  beam.addColorStop(0, `rgba(${b.rgb},0.16)`); beam.addColorStop(1, `rgba(${b.rgb},0)`);
-  g.fillStyle = beam;
-  g.beginPath(); g.moveTo(S * 0.40, 0); g.lineTo(S * 0.60, 0); g.lineTo(S * 0.80, S * 0.62);
-  g.lineTo(S * 0.20, S * 0.62); g.closePath(); g.fill();
-}
-
-// drafting paper: fine grid, and a brighter wash where the subject sits
-function drawBlueprint(g, S) {
-  fillFlat(g, S, '#152238');
-  const wash = g.createRadialGradient(S * 0.5, S * 0.46, 0, S * 0.5, S * 0.46, S * 0.55);
-  wash.addColorStop(0, 'rgba(96,138,196,0.55)'); wash.addColorStop(1, 'rgba(96,138,196,0)');
-  g.fillStyle = wash; g.fillRect(0, 0, S, S);
-  for (let i = 0; i * 16 <= S; i++) {
-    const major = i % 5 === 0;
-    g.strokeStyle = `rgba(168,206,255,${major ? 0.26 : 0.11})`;
-    g.lineWidth = major ? 1.6 : 0.8;
-    g.beginPath(); g.moveTo(i * 16, 0); g.lineTo(i * 16, S); g.stroke();
-    g.beginPath(); g.moveTo(0, i * 16); g.lineTo(S, i * 16); g.stroke();
-  }
-}
-
-// banded sky: the subject is silhouetted on the bright band at its own height
-function drawHorizon(g, S, b) {
-  const bands = b.bands;
-  for (let i = 0; i < bands.length; i++) {
-    const y0 = S * (i / bands.length), y1 = S * ((i + 1) / bands.length);
-    const gr = g.createLinearGradient(0, y0, 0, y1);
-    gr.addColorStop(0, bands[i]); gr.addColorStop(1, bands[Math.min(i + 1, bands.length - 1)]);
-    g.fillStyle = gr; g.fillRect(0, y0 - 1, S, y1 - y0 + 2);
-  }
-  const sun = g.createRadialGradient(S * 0.5, S * 0.52, 0, S * 0.5, S * 0.52, S * 0.34);
-  sun.addColorStop(0, 'rgba(255,226,170,0.55)'); sun.addColorStop(1, 'rgba(255,200,140,0)');
-  g.fillStyle = sun; g.fillRect(0, 0, S, S);
-}
-
-// out-of-focus city: the discs behind the subject are the brightest thing
-function drawBokeh(g, S, b) {
-  const v = g.createLinearGradient(0, 0, 0, S);
-  v.addColorStop(0, b.sky); v.addColorStop(1, b.floor);
-  g.fillStyle = v; g.fillRect(0, 0, S, S);
-  const cols = b.lights;
-  for (let i = 0; i < 90; i++) {
-    const x = Math.random() * S, y = Math.random() * S * 0.86;
-    // bigger and brighter near the middle, so the subject reads against them
-    const near = 1 - Math.min(1, Math.hypot(x - S * 0.5, y - S * 0.45) / (S * 0.55));
-    const r = S * (0.018 + Math.random() * 0.055) * (0.6 + near);
-    const c = cols[(Math.random() * cols.length) | 0];
-    const gr = g.createRadialGradient(x, y, 0, x, y, r);
-    gr.addColorStop(0, `rgba(${c},${0.10 + near * 0.34})`);
-    gr.addColorStop(0.72, `rgba(${c},${0.06 + near * 0.20})`);
-    gr.addColorStop(1, `rgba(${c},0)`);
-    g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
-  }
-}
-
-// deep field: a nebula wash behind the subject keeps it from being a hole
-function drawStars(g, S) {
-  fillFlat(g, S, '#05060b');
-  for (const [x, y, r, c] of [[0.44, 0.40, 0.42, '86,104,196'], [0.62, 0.55, 0.30, '150,72,150']]) {
-    const gr = g.createRadialGradient(S * x, S * y, 0, S * x, S * y, S * r);
-    gr.addColorStop(0, `rgba(${c},0.42)`); gr.addColorStop(1, `rgba(${c},0)`);
-    g.fillStyle = gr; g.fillRect(0, 0, S, S);
-  }
-  for (let i = 0; i < 700; i++) {
-    const a = 0.15 + Math.random() * 0.85, r = Math.random() < 0.94 ? 0.7 : 1.7;
-    g.fillStyle = `rgba(255,252,245,${a})`;
-    g.beginPath(); g.arc(Math.random() * S, Math.random() * S, r, 0, Math.PI * 2); g.fill();
-  }
-}
-
-// two gelled lamps: the subject is lit warm from one side and cool from the other
-function drawGels(g, S, b) {
-  fillFlat(g, S, '#0a0b10');
-  for (const [cx, col] of [[0.10, b.left], [0.90, b.right]]) {
-    const gr = g.createRadialGradient(S * cx, S * 0.42, 0, S * cx, S * 0.42, S * 0.78);
-    gr.addColorStop(0, `rgba(${col},0.72)`); gr.addColorStop(1, `rgba(${col},0)`);
-    g.globalCompositeOperation = 'lighter';
-    g.fillStyle = gr; g.fillRect(0, 0, S, S);
-  }
-  g.globalCompositeOperation = 'source-over';
-}
-
-// display cloth: a soft sheen with folds falling away from the subject
-function drawVelvet(g, S, b) {
-  fillFlat(g, S, b.deep);
-  const sh = g.createRadialGradient(S * 0.5, S * 0.42, 0, S * 0.5, S * 0.5, S * 0.66);
-  sh.addColorStop(0, `rgba(${b.rgb},0.72)`); sh.addColorStop(1, `rgba(${b.rgb},0)`);
-  g.fillStyle = sh; g.fillRect(0, 0, S, S);
-  for (let i = 0; i < 22; i++) {                  // folds
-    const x = Math.random() * S, w = S * (0.02 + Math.random() * 0.07);
-    const gr = g.createLinearGradient(x - w, 0, x + w, 0);
-    gr.addColorStop(0, 'rgba(0,0,0,0)');
-    gr.addColorStop(0.5, `rgba(255,255,255,${0.02 + Math.random() * 0.05})`);
-    gr.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = gr; g.fillRect(x - w, 0, w * 2, S);
-  }
-}
-// Dawn fog: the only HIGH-KEY backdrop. All twenty others are dark fields, so a
-// pale case had nothing to be dark against and a dark case was doing all the
-// work. Here the subject reads as a silhouette instead, which no amount of
-// case colour can defeat.
-function drawFog(g, S) {
-  const v = g.createLinearGradient(0, 0, 0, S);
-  v.addColorStop(0, '#cfd8dd'); v.addColorStop(0.52, '#dfe6e9');
-  v.addColorStop(0.62, '#c3ced3'); v.addColorStop(1, '#8d9ba1');
-  g.fillStyle = v; g.fillRect(0, 0, S, S);
-  // a ridge dissolving into the air, well above the subject band
-  g.fillStyle = 'rgba(120,138,146,0.34)';
-  g.beginPath(); g.moveTo(0, S * 0.50);
-  for (let x = 0; x <= S; x += 16) {
-    g.lineTo(x, S * 0.50 - Math.sin(x * 0.012) * S * 0.035 - Math.sin(x * 0.031) * S * 0.018);
-  }
-  g.lineTo(S, S * 0.60); g.lineTo(0, S * 0.60); g.closePath(); g.fill();
-  // the water line, and the haze that sits on it
-  const w = g.createLinearGradient(0, S * 0.60, 0, S);
-  w.addColorStop(0, 'rgba(196,208,213,0.85)'); w.addColorStop(1, 'rgba(108,120,126,0.9)');
-  g.fillStyle = w; g.fillRect(0, S * 0.60, S, S * 0.40);
-  for (let i = 0; i < 26; i++) {                 // reed strokes at the near bank
-    const x = Math.random() * S, h = S * (0.05 + Math.random() * 0.10);
-    g.strokeStyle = `rgba(74,84,88,${0.12 + Math.random() * 0.2})`;
-    g.lineWidth = 1 + Math.random() * 2;
-    g.beginPath(); g.moveTo(x, S); g.lineTo(x + (Math.random() - 0.5) * 14, S - h); g.stroke();
-  }
-  const haze = g.createRadialGradient(S * 0.5, S * 0.46, 0, S * 0.5, S * 0.46, S * 0.5);
-  haze.addColorStop(0, 'rgba(255,255,255,0.34)'); haze.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = haze; g.fillRect(0, 0, S, S);
-}
-
-function backdropCanvas(b) {
-  const S = 512;
-  const cv = document.createElement('canvas'); cv.width = cv.height = S;
-  const g = cv.getContext('2d');
-  (b.draw || drawSweep)(g, S, b);
-  backdropFinish(g, S, b.finish);
-  return cv;
-}
-// How far the backdrop may slide, as a fraction of the canvas. The texture is
-// shown at 1/(1 + 2*MARGIN) scale so there is always this much image parked off
-// each edge to pan into -- pan further and you would drag the clamped edge
-// pixels across the screen.
+// A backdrop is a PLACE the lighter is standing in, not a picture stuck to the
+// lens. Three things follow from that and all three are new here:
+//
+//  1. IT IS CYLINDRICAL. Each backdrop paints a 360x90 degree strip. What you
+//     see is the slice of that strip your camera is pointed at, so walking round
+//     the lighter walks you round the room: the wall behind it at yaw 0 is not
+//     the wall behind it at yaw 180. The old version panned a screen-sized image
+//     by sin(yaw), which returns to where it started half way round -- a wobble,
+//     not a place.
+//  2. IT HAS MORE THAN ONE DEPTH. A far strip at infinity, a near strip at twice
+//     the rate, and lamps that are real points in the world (they sweep past at
+//     a rate that depends on how close they are, and they LEAVE FRAME). One
+//     layer can only ever slide; two layers moving at different rates is what
+//     depth actually looks like.
+//  3. IT IS COMPOSITED ON THE GPU. The strips are painted once, into a texture,
+//     and a fragment shader assembles the frame from them each time the camera
+//     moves. That buys the animated parts -- twinkle, caustics, breathing bokeh,
+//     firelight flicker -- for uniform writes instead of a full canvas
+//     re-upload, which is the only way any of it can run at 60fps on a phone.
+//
+// The composite lands in a render target and THAT is scene.background, so the
+// rest of the app is unchanged: still one texture, still one background draw.
+// The vignette and the lighter's contact shadow are drawn in SCREEN space at the
+// end, which also fixes a real bug -- they used to be painted into the backdrop
+// and panned away from under the lighter as you orbited.
+// The strip is painted in a 1024x256 coordinate space -- 360 x 90 degrees, one
+// unit per 0.35 degree -- and rendered at 2x that, because the slice of it you
+// can see at any moment is only 24 degrees wide. At 1x, brick and blind and
+// quilting all landed inside 70 texels and came out as coloured mush; the
+// identity of half these rooms is detail at that scale, so it has to survive.
+// The painted strip wraps the full 360 degrees, so u carries every bit of the
+// room's identity and must not be cut. v is a 90-degree band of soft masses and
+// pools with no hard horizontal detail in it, so it can be. At 2x supersampling
+// in both axes a backdrop cost 2 x 4.2MB resident and the same again uploaded
+// on every menu tap -- the largest new cost on a phone by a wide margin, and
+// paid on a tap rather than amortised. Supersampling v at 1 rather than 2 halves
+// it for no visible loss; the horizon is drawn analytically in the shader, not
+// carried in these pixels.
+const PW = 1024, PH = 256, BG_SS = 2, BG_SS_V = 1;
+const BG_W = PW * BG_SS, BG_H = PH * BG_SS_V;
+const BG_VSPAN = Math.PI / 2;
+const BG_TAU = Math.PI * 2;
 const BG_MARGIN = 0.085;
-const BG_YAW0 = 0.32;      // the camera's resting yaw: parallax is measured from it
+const BG_YAW0 = 0.32;
+const HOR = PH * 0.5;                     // eye level: the horizon row
+
+/* ---- painting helpers ---------------------------------------------------
+   Everything here is seeded off the backdrop's own name, so a given backdrop
+   paints the same room on every load, and wraps at the seam: an element near
+   x=0 is drawn again at x=W so the strip closes. */
+function bgSeed(name) { let k = 0; for (let i = 0; i < name.length; i++) k += name.charCodeAt(i) * (i + 7); return () => hashN(k += 1.618); }
+function bgWrap(g, x, fn) { fn(x); if (x < PW * 0.5) fn(x + PW); else fn(x - PW); }
+function hexA(h, a) {
+  const n = parseInt(h.slice(1), 16);
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+function bgFill(g, c) { g.fillStyle = c; g.fillRect(0, 0, PW, PH); }
+function bgVGrad(g, y0, y1, stops) {
+  const gr = g.createLinearGradient(0, y0, 0, y1);
+  for (const [o, c] of stops) gr.addColorStop(o, c);
+  g.fillStyle = gr; g.fillRect(0, y0 - 1, PW, y1 - y0 + 2);
+}
+// a soft pool of light. Wrapped, elliptical, and falls off as a real one does:
+// bright core, long tail, no visible edge anywhere.
+function bgGlow(g, x, y, rx, ry, rgb, a, add) {
+  g.save();
+  if (add) g.globalCompositeOperation = 'lighter';
+  bgWrap(g, x, px => {
+    const gr = g.createRadialGradient(px, y, 0, px, y, rx);
+    gr.addColorStop(0, `rgba(${rgb},${a})`);
+    gr.addColorStop(0.42, `rgba(${rgb},${a * 0.42})`);
+    gr.addColorStop(1, `rgba(${rgb},0)`);
+    g.save(); g.translate(px, y); g.scale(1, ry / rx); g.translate(-px, -y);
+    g.fillStyle = gr; g.fillRect(px - rx, y - rx, rx * 2, rx * 2); g.restore();
+  });
+  g.restore();
+}
+// something standing on the floor: an object, not a smudge. It has a real
+// silhouette at its sides and top and fades out toward its own base, where the
+// floor light wraps around it. The old sweep drew ellipses with the gradient
+// clipped at the widest point, which put a hard elliptical RIM on every one.
+function bgMass(g, x, w, top, bot, rgb, a) {
+  bgWrap(g, x, px => {
+    const gr = g.createLinearGradient(0, top, 0, bot);
+    gr.addColorStop(0, `rgba(${rgb},${a})`);
+    gr.addColorStop(0.72, `rgba(${rgb},${a * 0.86})`);
+    gr.addColorStop(1, `rgba(${rgb},0)`);
+    g.fillStyle = gr;
+    g.beginPath();
+    g.moveTo(px - w / 2, bot); g.lineTo(px - w / 2, top + w * 0.18);
+    g.quadraticCurveTo(px, top - w * 0.05, px + w / 2, top + w * 0.18);
+    g.lineTo(px + w / 2, bot); g.closePath(); g.fill();
+  });
+}
+// the smear a light leaves down a floor with any polish on it: the single
+// cheapest cue that there IS a floor and the subject is standing on it
+function bgStreak(g, x, w, y0, y1, rgb, a) {
+  bgWrap(g, x, px => {
+    const gr = g.createLinearGradient(0, y0, 0, y1);
+    gr.addColorStop(0, `rgba(${rgb},${a})`); gr.addColorStop(1, `rgba(${rgb},0)`);
+    g.save(); g.globalCompositeOperation = 'lighter'; g.fillStyle = gr;
+    g.beginPath(); g.moveTo(px - w * 0.5, y0); g.lineTo(px + w * 0.5, y0);
+    g.lineTo(px + w * 1.5, y1); g.lineTo(px - w * 1.5, y1); g.closePath(); g.fill();
+    g.restore();
+  });
+}
+// the floor: a plane, so it darkens with distance toward the horizon and is
+// never the same value as the wall it meets. Painted with a soft top edge --
+// a wall meets a floor in a cove or a shadow, never in a 1px step, and a step
+// is instantly readable as a seam in a picture.
+function bgFloor(g, near, far) {
+  const y0 = HOR - PH * 0.16;
+  const gr = g.createLinearGradient(0, y0, 0, PH);
+  gr.addColorStop(0, hexA(far, 0)); gr.addColorStop(0.42, hexA(far, 1));
+  gr.addColorStop(1, hexA(near, 1));
+  g.fillStyle = gr; g.fillRect(0, y0, PW, PH - y0);
+}
+// every place needs some light at the subject's own height ALL the way round,
+// or you walk a quarter turn and a dark case falls into a dark wall. This is
+// that guarantee, applied last: a wide, very soft lift centred on eye level.
+function bgLift(g, rgb, a) {
+  const gr = g.createLinearGradient(0, HOR - PH * 0.34, 0, HOR + PH * 0.30);
+  gr.addColorStop(0, `rgba(${rgb},0)`);
+  gr.addColorStop(0.5, `rgba(${rgb},${a})`);
+  gr.addColorStop(1, `rgba(${rgb},0)`);
+  g.save(); g.globalCompositeOperation = 'lighter';
+  g.fillStyle = gr; g.fillRect(0, 0, PW, PH); g.restore();
+}
+
+// the near edge of whatever it is standing on, plus something out of focus at
+// the side of frame. Painted into the NEAR strip, so it slides at twice the
+// wall's rate -- that rate difference is the entire depth cue.
+function bgForeground(g, rgb, a, r, sides) {
+  const y0 = PH * 0.60;
+  const gr = g.createLinearGradient(0, y0, 0, PH);
+  gr.addColorStop(0, `rgba(${rgb},0)`);
+  gr.addColorStop(0.20, `rgba(${rgb},${a * 0.45})`);
+  gr.addColorStop(0.40, `rgba(${rgb},${a})`);
+  gr.addColorStop(1, `rgba(${rgb},${a})`);
+  g.fillStyle = gr; g.fillRect(0, y0, PW, PH - y0);
+  if (sides === false) return;
+  for (let i = 0; i < 3; i++) {           // things standing between you and it
+    const x = (0.14 + i * 0.31) * PW + r() * 80, w = 30 + r() * 70;
+    const h = PH * (0.32 + r() * 0.26);
+    const m = g.createLinearGradient(0, PH - h, 0, PH);
+    m.addColorStop(0, `rgba(${rgb},0)`); m.addColorStop(0.4, `rgba(${rgb},${a * 0.8})`);
+    m.addColorStop(1, `rgba(${rgb},${a})`);
+    g.fillStyle = m;
+    g.beginPath(); g.moveTo(x - w, PH); g.lineTo(x - w, PH - h + w * 0.4);
+    g.quadraticCurveTo(x, PH - h - w * 0.1, x + w, PH - h + w * 0.4);
+    g.lineTo(x + w, PH); g.closePath(); g.fill();
+  }
+}
+
+/* ---- the rooms ---------------------------------------------------------- */
+// Each entry paints the far strip, optionally the near strip (RGBA, at twice
+// the pan rate), and declares its lamps and which shader effects it uses.
+// lamps: [where on the strip (0..1, so it lines up with what you painted),
+//         d/R (0 = infinitely far, 0.8 = close enough to swing right past you),
+//         height above eye, angular size, intensity, 'r,g,b'].
+// These are POINTS IN THE WORLD, not stickers on the lens: the rate they sweep
+// past at depends on how close they are, and they go out of frame behind you.
+const BACKDROPS = {
+  midnight: {
+    swatch: 'linear-gradient(160deg,#5a6b84 0%,#2b3444 45%,#0a0d14 100%)',
+    lift: ['92,116,150', 0.2], shadow: 0.42,
+    lamps: [[0.50, 0.30, 0.30, 0.42, 0.55, '150,180,225'],
+            [0.17, 0.55, 0.10, 0.30, 0.85, '255,168,96']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#0b0e15'], [0.34, '#1b2434'], [0.5, '#28344a'], [0.62, '#141a26'], [1, '#05070c']]);
+      bgFloor(g, '#04060a', '#161d2b');
+      // the corner of the room: two walls at different values meeting on a line
+      g.fillStyle = 'rgba(0,0,0,0.34)'; g.fillRect(0, 0, PW * 0.30, HOR);
+      g.fillStyle = 'rgba(0,0,0,0.20)'; g.fillRect(PW * 0.74, 0, PW * 0.26, HOR);
+      bgGlow(g, PW * 0.5, HOR - 14, 106, 80, '120,152,196', 0.42, true);
+      bgStreak(g, PW * 0.5, 44, HOR, PH, '96,124,166', 0.22);
+      // a lit doorway a quarter turn away, so the room has somewhere else in it
+      const dx = PW * 0.17;
+      g.fillStyle = 'rgba(255,186,120,0.5)'; g.fillRect(dx - 15, HOR - 74, 30, 74);
+      bgGlow(g, dx, HOR - 40, 108, 96, '255,170,96', 0.34, true);
+      bgStreak(g, dx, 34, HOR, PH * 0.94, '255,170,96', 0.22);
+      for (let i = 0; i < 9; i++) bgMass(g, r() * PW, 40 + r() * 120, HOR - 30 - r() * 46, HOR + 8, '2,3,6', 0.5 + r() * 0.3);
+    },
+    near(g, r) {   // the near edge of the table the lighter is standing on
+      const gr = g.createLinearGradient(0, PH * 0.80, 0, PH);
+      gr.addColorStop(0, 'rgba(10,12,17,0)'); gr.addColorStop(0.30, 'rgba(8,10,15,0.9)');
+      gr.addColorStop(1, 'rgba(4,5,8,1)');
+      g.fillStyle = gr; g.fillRect(0, PH * 0.80, PW, PH * 0.2);
+    },
+  },
+  noir: {
+    swatch: 'repeating-linear-gradient(12deg,#0a0a0b 0 5px,#b9b3a4 5px 9px)',
+    lift: ['120,116,106', 0.17], shadow: 0.5,
+    fg: ['3,3,4', 0.95],
+    lamps: [[0.52, 0.45, 0.34, 0.24, 0.50, '236,226,198']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#08080a'], [0.5, '#17171a'], [1, '#050506']]);
+      bgFloor(g, '#050506', '#131315');
+      // venetian blinds: hard slats thrown across ONE wall by a window off to
+      // the side. They are the whole identity, so they are hard-edged and they
+      // sit in one place in the room -- turn away and you are in the dark.
+      g.save();
+      // The throw of a window is a PATCH on one wall, not a wallpaper: it is
+      // about 60 degrees wide, it is skewed by the angle of the glass, it is
+      // cut by the frame, and it breaks over the floor. Walk out of it and you
+      // are in the dark, which is the entire point of the room.
+      g.beginPath(); g.rect(PW * 0.40, 0, PW * 0.20, PH); g.clip();
+      g.translate(PW * 0.50, 0); g.transform(1, 0.12, -0.36, 1, 0, 0);
+      for (let i = -14; i < 22; i++) {
+        const y = i * 15 + 3, h = 3.4;
+        const gr = g.createLinearGradient(-120, 0, 130, 0);
+        gr.addColorStop(0, 'rgba(232,224,202,0)');
+        gr.addColorStop(0.20, 'rgba(240,232,210,0.86)');
+        gr.addColorStop(0.62, 'rgba(232,224,202,0.44)');
+        gr.addColorStop(1, 'rgba(232,224,202,0)');
+        g.fillStyle = gr; g.fillRect(-120, y, 250, h);
+        g.fillStyle = 'rgba(240,232,210,0.16)';        // the soft edge under it
+        g.fillRect(-120, y + h, 250, 2.2);
+      }
+      g.fillStyle = 'rgba(4,4,5,0.9)';                 // the window's own mullion
+      g.fillRect(-14, -PH, 9, PH * 3);
+      g.restore();
+      bgGlow(g, PW * 0.50, HOR - 6, 120, 96, '210,202,182', 0.10, true);
+      bgStreak(g, PW * 0.50, 46, HOR, PH, '198,190,170', 0.10);
+      // the rest of the room: a desk lamp round one side, the crack under a
+      // door round the other. Dim, but you are never standing in nothing.
+      bgGlow(g, PW * 0.80, HOR - 20, 90, 66, '232,196,140', 0.26, true);
+      bgStreak(g, PW * 0.80, 36, HOR, PH, '232,196,140', 0.16);
+      g.fillStyle = 'rgba(240,232,206,0.5)'; g.fillRect(PW * 0.18, HOR - 3, 62, 3);
+      bgGlow(g, PW * 0.18 + 31, HOR + 2, 70, 26, '240,232,206', 0.20, true);
+      for (let i = 0; i < 7; i++) bgMass(g, r() * PW, 30 + r() * 90, HOR - 40 - r() * 40, HOR + 6, '0,0,0', 0.8);
+      for (let i = 0; i < 5; i++) bgMass(g, PW * (0.78 + r() * 0.35) % PW, 60 + r() * 90, HOR - 50 - r() * 40, HOR + 6, '0,0,0', 0.75);
+    },
+  },
+  slate: {
+    swatch: 'linear-gradient(150deg,#8496ab 0%,#3d4a5a 50%,#0d1218 100%)',
+    lift: ['110,132,158', 0.120], shadow: 0.44,
+    fg: ['8,10,13', 0.92],
+    lamps: [[0.47, 0.18, 0.42, 0.34, 0.55, '186,208,236']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#0d1116'], [0.40, '#2a323d'], [0.55, '#1d242d'], [1, '#070a0d']]);
+      bgFloor(g, '#080a0e', '#1b212a');
+      // poured concrete: panel joints with the tie holes still in them
+      for (let i = 0; i < 22; i++) {
+        const x = (i / 22) * PW + 9;
+        g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(x, 0, 1.6, HOR + 20);
+        g.fillStyle = 'rgba(255,255,255,0.10)'; g.fillRect(x + 1.6, 0, 1.0, HOR + 20);
+        for (let j = 0; j < 3; j++) {
+          g.fillStyle = 'rgba(0,0,0,0.3)';
+          g.beginPath(); g.arc(x + 22, 26 + j * 38, 1.5, 0, 7); g.fill();
+        }
+      }
+      // wide daylight from a high window, washing down one face of the room
+      g.save(); g.globalCompositeOperation = 'lighter';
+      const w = g.createLinearGradient(PW * 0.40, 0, PW * 0.56, PH * 0.9);
+      w.addColorStop(0, 'rgba(190,214,244,0.5)'); w.addColorStop(1, 'rgba(178,204,236,0)');
+      g.fillStyle = w;
+      g.beginPath(); g.moveTo(PW * 0.40, 0); g.lineTo(PW * 0.53, 0);
+      g.lineTo(PW * 0.58, PH); g.lineTo(PW * 0.36, PH); g.closePath(); g.fill();
+      g.restore();
+      // conduit down the wall, and its shadow: something with an EDGE
+      for (const [u, wd] of [[0.63, 5], [0.645, 5], [0.30, 3]]) {
+        g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(PW * u + wd * 1.6, 0, wd * 1.4, HOR + 10);
+        g.fillStyle = 'rgba(150,168,190,0.30)'; g.fillRect(PW * u, 0, wd, HOR + 10);
+        g.fillStyle = 'rgba(20,24,30,0.7)'; g.fillRect(PW * u + wd, 0, wd * 0.6, HOR + 10);
+      }
+      bgGlow(g, PW * 0.47, HOR - 26, 100, 74, '166,196,232', 0.34, true);
+      bgGlow(g, PW * 0.93, HOR - 18, 78, 58, '150,178,214', 0.16, true);
+      bgGlow(g, PW * 0.22, HOR - 10, 64, 50, '132,158,192', 0.10, true);
+      bgStreak(g, PW * 0.47, 44, HOR, PH, '150,180,216', 0.20);
+      // damp staining down the wall, which concrete always has
+      for (let i = 0; i < 26; i++) {
+        const x = r() * PW, wd = 6 + r() * 26;
+        const gr = g.createLinearGradient(0, 0, 0, HOR);
+        gr.addColorStop(0, `rgba(12,16,22,${0.10 + r() * 0.14})`); gr.addColorStop(1, 'rgba(12,16,22,0)');
+        g.fillStyle = gr; g.fillRect(x, 0, wd, HOR);
+      }
+    },
+  },
+  steel: {
+    swatch: 'repeating-linear-gradient(90deg,#8d99a6 0 4px,#48525e 4px 9px)',
+    lift: ['140,156,174', 0.110], shadow: 0.40,
+    fg: ['9,11,13', 0.92],
+    lamps: [[0.50, 0.42, 0.40, 0.20, 0.85, '255,238,206'],
+            [0.02, 0.42, 0.40, 0.20, 0.45, '255,238,206']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#20262d'], [0.44, '#3b444f'], [1, '#0e1115']]);
+      bgFloor(g, '#0b0e11', '#242b33');
+      // a corrugated roller shutter: the ribs are what make it steel, and they
+      // are the thing that flows as you orbit
+      for (let x = 0; x < PW; x += 5.5) {
+        const gr = g.createLinearGradient(x, 0, x + 5.5, 0);
+        gr.addColorStop(0, 'rgba(0,0,0,0.62)');
+        gr.addColorStop(0.38, 'rgba(232,242,255,0.30)');
+        gr.addColorStop(0.58, 'rgba(180,196,214,0.06)');
+        gr.addColorStop(1, 'rgba(0,0,0,0.55)');
+        g.fillStyle = gr; g.fillRect(x, 0, 5.6, HOR + 4);
+      }
+      g.save(); g.globalCompositeOperation = 'lighter';   // the strip light it reflects
+      bgVGrad(g, HOR - 62, HOR - 40, [[0, 'rgba(236,244,255,0)'], [0.45, 'rgba(236,244,255,0.30)'], [1, 'rgba(236,244,255,0)']]);
+      g.restore();
+      g.fillStyle = 'rgba(6,8,10,0.85)'; g.fillRect(0, HOR - 6, PW, 12);   // the rail
+      g.fillStyle = 'rgba(200,214,232,0.16)'; g.fillRect(0, HOR - 8, PW, 2);
+      for (let i = 0; i < 5; i++) {   // the horizontal seams between sections
+        g.fillStyle = 'rgba(0,0,0,0.26)'; g.fillRect(0, 14 + i * 22, PW, 1.4);
+      }
+      bgGlow(g, PW * 0.5, HOR - 34, 96, 70, '236,226,196', 0.36, true);
+      bgGlow(g, PW * 0.02, HOR - 30, 80, 60, '236,226,196', 0.22, true);
+      bgGlow(g, PW * 0.72, HOR - 16, 56, 44, '196,206,220', 0.12, true);
+      bgStreak(g, PW * 0.5, 42, HOR, PH, '210,206,190', 0.24);
+      for (let i = 0; i < 40; i++) {   // rust and scuffing along the bottom rail
+        g.fillStyle = `rgba(${100 + r() * 40 | 0},${70 + r() * 30 | 0},50,${0.05 + r() * 0.12})`;
+        g.fillRect(r() * PW, HOR - 30 + r() * 30, 8 + r() * 40, 3 + r() * 10);
+      }
+    },
+  },
+  ember: {
+    swatch: 'radial-gradient(ellipse at 50% 78%, #ff9040 0%, #6b2a12 40%, #120806 100%)',
+    lift: ['150,72,32', 0.130], shadow: 0.30, flicker: 1.0,
+    embers: [1.0, '255,150,60'],
+    fg: ['14,7,4', 0.92],
+    lamps: [[0.50, 0.62, -0.30, 0.46, 1.10, '255,132,44']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#0a0604'], [0.46, '#2a140c'], [0.62, '#1a0d07'], [1, '#0d0603']]);
+      bgFloor(g, '#0d0503', '#1a0b06');
+      // brick, coursed and offset, dark until the fire finds it
+      for (let row = 0; row * 8 < HOR + 40; row++) {
+        const off = (row % 2) * 17;
+        for (let c = 0; c * 34 < PW + 34; c++) {
+          const x = (c * 34 + off) % PW, y = row * 8;
+          const v = 0.5 + r() * 0.5;
+          g.fillStyle = `rgba(${58 * v | 0},${30 * v | 0},${20 * v | 0},0.9)`;
+          g.fillRect(x + 0.9, y + 0.9, 32.2, 6.2);
+        }
+      }
+      // the fire itself: low, off to one side, throwing light UP the wall
+      bgGlow(g, PW * 0.5, HOR + 34, 120, 74, '255,120,40', 0.62, true);
+      bgGlow(g, PW * 0.5, HOR + 52, 60, 42, '255,196,110', 0.8, true);
+      bgStreak(g, PW * 0.5, 70, HOR + 20, PH, '255,140,52', 0.38);
+      bgGlow(g, PW * 0.5 + 300, HOR + 14, 90, 64, '180,64,22', 0.22, true);
+      bgGlow(g, PW * 0.5 - 300, HOR + 14, 90, 64, '180,64,22', 0.22, true);
+    },
+  },
+  oxblood: {
+    swatch: 'linear-gradient(150deg,#8e2b3c 0%,#4a121d 50%,#160508 100%)',
+    lift: ['128,40,54', 0.120], shadow: 0.40,
+    fg: ['10,3,5', 0.94],
+    lamps: [[0.32, 0.62, 0.22, 0.16, 0.85, '255,186,110'],
+            [0.68, 0.62, 0.22, 0.16, 0.85, '255,186,110']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#12060a'], [0.44, '#43121d'], [0.58, '#2c0b12'], [1, '#0a0305']]);
+      bgFloor(g, '#080304', '#1d080c');
+      // buttoned leather: the diamonds are soft dents, not a printed grid, so
+      // each one gets its own little highlight above and shadow below
+      const P = 30;
+      for (let iy = -1; iy * P * 0.5 < HOR + P; iy++) {
+        for (let ix = -1; ix * P < PW + P; ix++) {
+          const x = ix * P + (iy % 2 ? P / 2 : 0), y = iy * P * 0.5;
+          const gr = g.createRadialGradient(x, y - 8, 2, x, y, P * 0.62);
+          gr.addColorStop(0, 'rgba(176,54,76,0.42)');
+          gr.addColorStop(0.45, 'rgba(70,16,26,0.05)');
+          gr.addColorStop(1, 'rgba(14,3,6,0.52)');
+          g.fillStyle = gr; g.fillRect(x - P * 0.62, y - P * 0.62, P * 1.24, P * 1.24);
+          g.fillStyle = 'rgba(12,3,5,0.55)';
+          g.beginPath(); g.arc(x, y, 1.3, 0, 7); g.fill();
+        }
+      }
+      bgGlow(g, PW * 0.5, HOR - 12, 110, 80, '190,70,74', 0.26, true);
+      for (const u of [0.32, 0.68]) {
+        bgGlow(g, PW * u, HOR - 40, 60, 70, '255,170,96', 0.40, true);
+        bgGlow(g, PW * (u + 0.5) % PW, HOR - 36, 52, 60, '255,170,96', 0.30, true);
+        bgStreak(g, PW * u, 44, HOR, PH * 0.9, '255,160,90', 0.16);
+      }
+      // the brass rail, catching both sconces
+      g.save(); g.globalCompositeOperation = 'lighter';
+      const rail = g.createLinearGradient(0, HOR - 52, 0, HOR - 44);
+      rail.addColorStop(0, 'rgba(214,158,74,0)'); rail.addColorStop(0.5, 'rgba(236,186,96,0.5)');
+      rail.addColorStop(1, 'rgba(214,158,74,0)');
+      g.fillStyle = rail; g.fillRect(0, HOR - 54, PW, 12); g.restore();
+      bgStreak(g, PW * 0.5, 120, HOR, PH, '160,50,58', 0.20);
+    },
+  },
+  forest: {
+    swatch: 'linear-gradient(150deg,#9fc07a 0%,#2f5138 46%,#080f0b 100%)',
+    lift: ['96,132,90', 0.130], shadow: 0.26,
+    lamps: [[0.46, 0.10, 0.42, 0.30, 0.70, '226,246,190']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#0a120d'], [0.34, '#1e3122'], [0.52, '#31492f'], [0.62, '#16220f'], [1, '#050805']]);
+      // depth haze: everything far away goes pale and green
+      for (let i = 0; i < 90; i++) {     // the far trunks, thin and washed out
+        const x = r() * PW, w = 1.6 + r() * 4;
+        bgMass(g, x, w, 10 + r() * 40, HOR + 20 + r() * 20, '38,58,44', 0.30 + r() * 0.2);
+      }
+      g.save(); g.globalCompositeOperation = 'lighter';
+      bgVGrad(g, HOR - 90, HOR + 50, [[0, 'rgba(150,186,140,0)'], [0.5, 'rgba(150,186,140,0.13)'], [1, 'rgba(150,186,140,0)']]);
+      g.restore();
+      for (let i = 0; i < 34; i++) {     // the middle distance
+        const x = r() * PW, w = 5 + r() * 10;
+        bgMass(g, x, w, r() * 26, HOR + 40 + r() * 26, '10,18,12', 0.75 + r() * 0.25);
+      }
+      // sun shafts coming through, angled
+      g.save(); g.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 5; i++) {
+        const x = PW * (0.36 + i * 0.06) + r() * 20;
+        g.save(); g.translate(x, 0); g.transform(1, 0, 0.34, 1, 0, 0);
+        const gr = g.createLinearGradient(0, 0, 0, PH);
+        gr.addColorStop(0, 'rgba(220,244,180,0.20)'); gr.addColorStop(1, 'rgba(220,244,180,0)');
+        g.fillStyle = gr; g.fillRect(-8 - r() * 10, 0, 16 + r() * 22, PH); g.restore();
+      }
+      g.restore();
+      bgFloor(g, '#0b1410', '#20301f');
+    },
+    near(g, r) {   // two trunks close enough to sweep past you as you walk
+      for (const [x, w] of [[PW * 0.13, 30], [PW * 0.66, 20]]) {
+        const gr = g.createLinearGradient(x - w / 2, 0, x + w / 2, 0);
+        gr.addColorStop(0, 'rgba(9,14,10,0.98)');
+        gr.addColorStop(0.62, 'rgba(22,32,24,0.98)');
+        gr.addColorStop(0.86, 'rgba(46,62,44,0.95)');
+        gr.addColorStop(1, 'rgba(9,14,10,0.9)');
+        g.fillStyle = gr; g.fillRect(x - w / 2, 0, w, PH);
+      }
+    },
+  },
+  indigo: {
+    swatch: 'linear-gradient(0deg,#0b0e1c 0%,#2b3474 55%,#6b7ad0 100%)',
+    lift: ['74,92,168', 0.110], shadow: 0.42, windows: 1,
+    fg: ['4,5,10', 0.95],
+    lamps: [[0.20, 0.02, 0.40, 0.09, 0.90, '210,222,255']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#0a0f28'], [0.30, '#1d2758'], [0.48, '#3a4488'], [0.53, '#5a5f92'], [0.56, '#171c33'], [1, '#05070f']]);
+      // a city skyline at eye level: blocks of different heights, a few with
+      // their lights still on. This is what tells you the wall is a mile away.
+      let x = 0;
+      while (x < PW + 80) {
+        const w = 11 + r() * 34, h = 9 + r() * 40;
+        g.fillStyle = `rgba(${6 + r() * 8 | 0},${8 + r() * 10 | 0},${18 + r() * 14 | 0},0.96)`;
+        g.fillRect(x, HOR - h, w, h + 6);
+        for (let i = 0; i < w * h / 42; i++) {
+          if (r() > 0.72) continue;
+          g.fillStyle = `rgba(255,${190 + r() * 50 | 0},${120 + r() * 90 | 0},${0.3 + r() * 0.6})`;
+          g.fillRect(x + 1.5 + r() * (w - 3), HOR - h + 2 + r() * (h - 4), 1.1, 1.5);
+        }
+        x += w + 1.5 + r() * 5;
+      }
+      bgGlow(g, PW * 0.5, HOR - 4, 120, 44, '90,110,200', 0.30, true);
+      bgFloor(g, '#04060d', '#101634');
+      bgStreak(g, PW * 0.5, 130, HOR, PH, '70,90,170', 0.16);
+    },
+  },
+  plum: {
+    swatch: 'linear-gradient(150deg,#ff5ad0 0%,#4a2170 48%,#120a1c 100%)',
+    lift: ['118,60,150', 0.16], shadow: 0.44,
+    fg: ['8,4,12', 0.94],
+    lamps: [[0.545, 0.55, 0.10, 0.22, 0.90, '255,86,206'],
+            [0.178, 0.50, 0.16, 0.18, 0.60, '96,214,255']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#08040d'], [0.44, '#1d0d27'], [0.6, '#100617'], [1, '#04020a']]);
+      // wet brick down an alley
+      for (let row = 0; row * 7 < HOR + 20; row++) {
+        const off = (row % 2) * 16;
+        for (let c = 0; c * 32 < PW + 32; c++) {
+          const v = 0.55 + r() * 0.45;
+          g.fillStyle = `rgba(${44 * v | 0},${26 * v | 0},${48 * v | 0},0.85)`;
+          g.fillRect((c * 32 + off) % PW + 0.8, row * 7 + 0.8, 30.4, 5.4);
+        }
+      }
+      // the sign: a hard-edged bar of neon with its own bloom around it
+      const sx = PW * 0.5 + 46;
+      g.save(); g.globalCompositeOperation = 'lighter';
+      bgWrap(g, sx, px => { g.fillStyle = 'rgba(255,140,220,0.95)'; g.fillRect(px - 52, HOR - 74, 104, 7); });
+      g.restore();
+      bgGlow(g, sx, HOR - 62, 92, 66, '255,70,190', 0.6, true);
+      bgStreak(g, sx, 40, HOR, PH, '255,70,190', 0.34);
+      bgGlow(g, PW * 0.5 - 330, HOR - 20, 86, 70, '70,200,255', 0.30, true);
+      bgStreak(g, PW * 0.5 - 330, 34, HOR, PH, '70,200,255', 0.22);
+      bgFloor(g, '#0a0410', '#1c0e26');
+      for (let i = 0; i < 30; i++) {    // puddles catching the sign
+        const x = r() * PW, y = HOR + 14 + r() * 100;
+        bgGlow(g, x, y, 20 + r() * 46, 5 + r() * 8, '255,110,200', 0.05 + r() * 0.08, true);
+      }
+    },
+  },
+  teal: {
+    swatch: 'linear-gradient(180deg,#0a2c33 0%,#2fa3b0 46%,#0b3a42 100%)',
+    lift: ['46,150,164', 0.130], shadow: 0.30, caustic: 1.0,
+    fg: ['4,12,15', 0.9],
+    lamps: [[0.50, 0.14, 0.30, 0.30, 0.40, '188,244,250']],
+    far(g, r) {
+      // a tiled room lit through water: the wall above the line is dry and
+      // dull, the wall below it is where the caustics live
+      bgVGrad(g, 0, PH, [[0, '#050f13'], [0.34, '#0c262d'], [0.44, '#154852'], [0.47, '#6fb8c2'],
+                           [0.5, '#1e6a76'], [0.72, '#0d3941'], [1, '#041014']]);
+      for (let x = 0; x < PW; x += 17) {   // tile grout, going under the water
+        g.fillStyle = 'rgba(255,255,255,0.045)'; g.fillRect(x, 0, 1.4, PH);
+      }
+      for (let y = 0; y < PH; y += 17) {
+        g.fillStyle = 'rgba(255,255,255,0.045)'; g.fillRect(0, y, PW, 1.4);
+      }
+      g.save(); g.globalCompositeOperation = 'lighter';
+      bgVGrad(g, HOR - 24, HOR - 4, [[0, 'rgba(190,246,252,0)'], [0.6, 'rgba(190,246,252,0.5)'], [1, 'rgba(190,246,252,0)']]);
+      g.restore();
+      bgGlow(g, PW * 0.5, HOR + 4, 120, 76, '70,196,212', 0.32, true);
+      bgGlow(g, PW * 0.24, HOR + 2, 90, 60, '60,180,196', 0.22, true);
+      bgGlow(g, PW * 0.78, HOR + 6, 70, 50, '80,206,220', 0.18, true);
+      bgGlow(g, PW * 0.5 - 380, HOR + 6, 96, 62, '48,150,166', 0.20, true);
+    },
+  },
+  sand: {
+    swatch: 'linear-gradient(0deg,#2a1b10 0%,#c98c4e 46%,#f2d9a8 100%)',
+    lift: ['180,140,90', 0.100], shadow: 0.34,
+    fg: ['22,14,8', 0.9],
+    lamps: [[0.637, 0.02, 0.02, 0.30, 1.20, '255,190,110']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#3a4a72'], [0.24, '#8a7a86'], [0.40, '#e0a878'], [0.49, '#f4cf9a'],
+                           [0.52, '#c08a52'], [0.72, '#8a5c34'], [1, '#2a1a10']]);
+      // dunes: a soft ridge line all the way round, with the far ones hazier
+      for (const [amp, base, col, a] of [[16, HOR - 6, '150,110,78', 0.5], [26, HOR + 12, '112,76,48', 0.7], [40, HOR + 44, '72,46,28', 0.9]]) {
+        g.fillStyle = `rgba(${col},${a})`;
+        g.beginPath(); g.moveTo(0, PH);
+        const ph = r() * 10;
+        for (let x = 0; x <= PW; x += 8) {
+          const t = x / PW * BG_TAU;
+          g.lineTo(x, base + Math.sin(t * 3 + ph) * amp + Math.sin(t * 7 + ph * 2) * amp * 0.4);
+        }
+        g.lineTo(PW, PH); g.closePath(); g.fill();
+      }
+      bgGlow(g, PW * 0.5 + 140, HOR - 6, 120, 56, '255,200,130', 0.38, true);
+      bgGlow(g, PW * 0.08, HOR - 4, 90, 44, '210,150,110', 0.18, true);
+      // wind ripples on the near sand
+      for (let i = 0; i < 60; i++) {
+        const y = HOR + 20 + r() * 110;
+        g.strokeStyle = `rgba(60,38,22,${0.05 + r() * 0.08})`; g.lineWidth = 1 + r() * 2;
+        g.beginPath(); g.moveTo(r() * PW, y); g.lineTo(r() * PW, y + 2); g.stroke();
+      }
+    },
+  },
+  ash: {
+    swatch: 'linear-gradient(160deg,#8e8e96 0%,#4a4a50 46%,#0f0f11 100%)',
+    lift: ['150,150,158', 0.100], shadow: 0.44,
+    fg: ['9,9,10', 0.92],
+    lamps: [[0.50, 0.34, 0.36, 0.40, 0.60, '236,238,244'],
+            [0.91, 0.34, 0.26, 0.30, 0.28, '210,216,228']],
+    far(g, r) {
+      // the plain grey cyc: this is the neutral one, the reference every finish
+      // gets judged on, so it stays calm -- but it is now a real sweep with a
+      // cove, a floor and a lamp rather than a three-stop ramp
+      // A cyc has NO line in it: the wall curves into the floor over a metre
+      // and the only thing that tells you where the floor starts is that the
+      // light falls off. One continuous ramp, therefore, and no cove band --
+      // the band was reading as a compression artefact straight across frame.
+      bgVGrad(g, 0, PH, [[0, '#0d0e10'], [0.30, '#2b2d33'], [0.46, '#42444b'],
+                         [0.60, '#3a3c42'], [0.78, '#232429'], [1, '#0e0e10']]);
+      bgGlow(g, PW * 0.5, HOR - 16, 130, 96, '210,214,226', 0.34, true);
+      bgGlow(g, PW * 0.5, HOR + 40, 150, 44, '186,190,202', 0.26, true);   // spill on the floor
+      bgStreak(g, PW * 0.5, 52, HOR + 6, PH * 0.95, '170,174,186', 0.18);
+      bgGlow(g, PW * 0.5 + 400, HOR - 6, 100, 74, '150,156,170', 0.16, true);
+      // the edge of the sweep, and a stand behind it: a studio has hardware
+      bgMass(g, PW * 0.19, 46, HOR - 74, HOR + 4, '10,10,12', 0.44);
+      bgMass(g, PW * 0.83, 8, HOR - 92, HOR + 4, '8,8,10', 0.66);
+    },
+  },
+  softbox: {
+    swatch: 'linear-gradient(135deg,#eef4fb 0%,#39404b 52%,#0d0f13 100%)',
+    lift: ['150,164,186', 0.090], shadow: 0.46,
+    lamps: [[0.50, 0.68, 0.24, 0.34, 0.55, '226,238,255'],
+            [0.22, 0.50, 0.20, 0.18, 0.30, '150,180,230']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#141820'], [0.46, '#252c37'], [0.58, '#1a1f27'], [1, '#080a0d']]);
+      bgFloor(g, '#07080b', '#161b23');
+      bgGlow(g, PW * 0.5 + 40, HOR - 10, 130, 90, '150,178,214', 0.26, true);
+      bgGlow(g, PW * 0.12, HOR - 14, 84, 62, '130,158,196', 0.18, true);
+      bgGlow(g, PW * 0.70, HOR - 6, 66, 50, '150,178,214', 0.12, true);
+      bgStreak(g, PW * 0.5 + 40, 60, HOR, PH, '150,178,214', 0.22);
+      // the stand and the flag, so the studio has some hardware in it
+      bgMass(g, PW * 0.5 - 150, 6, HOR - 96, HOR + 10, '4,5,7', 0.9);
+      bgMass(g, PW * 0.5 + 260, 40, HOR - 70, HOR + 10, '4,5,7', 0.8);
+    },
+    near(g, r) {    // the panel itself, close enough to swing right past you
+      const x = PW * 0.5 - 46, w = 116, h = 74, y = 14;
+      for (let i = 22; i >= 0; i--) {
+        const k = i / 22, pad = k * 13;
+        g.fillStyle = `rgba(226,238,255,${(0.04 + Math.pow(1 - k, 1.7) * 0.92)})`;
+        g.beginPath(); g.roundRect(x - w / 2 - pad, y - pad, w + pad * 2, h + pad * 2, 14 + pad); g.fill();
+      }
+      g.fillStyle = 'rgba(20,24,30,0.9)';   // the frame's shadow edge at the bottom
+      g.fillRect(x - w / 2, y + h, w, 2.5);
+    },
+  },
+  spotlight: {
+    swatch: 'radial-gradient(ellipse at 50% 62%, #ece2ce 0%, #14140f 62%, #07070a 100%)',
+    lift: ['96,92,80', 0.050], shadow: 0.18,
+    fg: ['3,3,4', 0.96],
+    lamps: [[0.50, 0.30, 0.55, 0.13, 1.20, '255,244,214']],
+    far(g, r) {
+      bgFill(g, '#080809');
+      bgVGrad(g, 0, PH, [[0, '#050506'], [0.5, '#0e0e10'], [1, '#040405']]);
+      // the pool on the floor, and the wall lit only where the spill reaches
+      bgGlow(g, PW * 0.5, HOR + 46, 150, 40, '236,226,206', 0.9, true);
+      bgGlow(g, PW * 0.5, HOR + 40, 74, 20, '255,250,236', 0.75, true);
+      bgGlow(g, PW * 0.5, HOR - 14, 110, 80, '186,176,156', 0.12, true);
+      // the beam, going up out of frame
+      g.save(); g.globalCompositeOperation = 'lighter';
+      const b = g.createLinearGradient(0, HOR + 60, 0, 0);
+      b.addColorStop(0, 'rgba(236,226,206,0.16)'); b.addColorStop(1, 'rgba(236,226,206,0)');
+      g.fillStyle = b;
+      g.beginPath(); g.moveTo(PW * 0.5 - 62, HOR + 46); g.lineTo(PW * 0.5 + 62, HOR + 46);
+      g.lineTo(PW * 0.5 + 20, 0); g.lineTo(PW * 0.5 - 20, 0); g.closePath(); g.fill();
+      g.restore();
+      // a second pool a long way round, so the rest of the room is not a void
+      bgGlow(g, PW * 0.5 + 430, HOR + 44, 90, 26, '236,226,206', 0.22, true);
+    },
+  },
+  blueprint: {
+    swatch: 'repeating-linear-gradient(0deg,#2a4a78 0 3px,#152238 3px 8px)',
+    lift: ['70,110,160', 0.090], shadow: 0.30, grid: 1.0,
+    fg: null,
+    lamps: [[0.44, 0.50, 0.34, 0.26, 0.45, '236,244,255']],
+    far(g, r) {
+      // the room the drawing table is in: dim, so the sheet is the bright thing
+      bgVGrad(g, 0, PH, [[0, '#0a1220'], [0.42, '#16233a'], [0.55, '#101a2c'], [1, '#070c15']]);
+      bgGlow(g, PW * 0.5, HOR - 18, 120, 78, '80,124,180', 0.28, true);
+      bgGlow(g, PW * 0.14, HOR - 22, 90, 62, '70,110,164', 0.20, true);
+      bgGlow(g, PW * 0.74, HOR - 8, 70, 52, '96,140,196', 0.16, true);
+      for (let i = 0; i < 5; i++) bgMass(g, r() * PW, 50 + r() * 120, HOR - 34 - r() * 40, HOR + 8, '3,6,12', 0.5);
+      bgFloor(g, '#060a12', '#101a2c');
+    },
+  },
+  horizon: {
+    swatch: 'linear-gradient(0deg,#1a1024 0%,#7a2f4a 34%,#d9743a 62%,#f2b25c 100%)',
+    lift: ['160,90,80', 0.080], shadow: 0.34,
+    lamps: [[0.568, 0.02, 0.015, 0.30, 1.60, '255,196,120']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#12183c'], [0.16, '#2c2050'], [0.30, '#5e2a54'], [0.42, '#a8443f'],
+                           [0.48, '#d9743a'], [0.505, '#f2c06a'], [0.53, '#8a4634'], [0.72, '#3a1e2a'], [1, '#140a14']]);
+      // the sea, with the sun's road running out toward you
+      bgVGrad(g, HOR + 4, PH, [[0, 'rgba(150,90,70,0.5)'], [1, 'rgba(12,8,16,0.75)']]);
+      bgStreak(g, PW * 0.5 + 70, 30, HOR + 2, PH, '255,180,110', 0.46);
+      for (let i = 0; i < 80; i++) {    // glints on the water
+        const y = HOR + 6 + r() * 110;
+        const k = 1 - (y - HOR) / 120;
+        g.fillStyle = `rgba(255,${180 + r() * 60 | 0},130,${0.05 + r() * 0.22 * k})`;
+        g.fillRect(r() * PW, y, 4 + r() * 16, 1.4);
+      }
+    },
+    near(g, r) {    // cloud bars, which drift and cross the sun
+      for (let i = 0; i < 14; i++) {
+        const y = 20 + r() * 92, h = 3 + r() * 9, x = r() * PW, w = 60 + r() * 260;
+        const gr = g.createLinearGradient(x, 0, x + w, 0);
+        const a = 0.18 + r() * 0.4;
+        gr.addColorStop(0, 'rgba(40,24,40,0)');
+        gr.addColorStop(0.5, `rgba(${50 + r() * 60 | 0},${30 + r() * 30 | 0},44,${a})`);
+        gr.addColorStop(1, 'rgba(40,24,40,0)');
+        g.fillStyle = gr; g.fillRect(x, y, w, h);
+      }
+    },
+  },
+  bokeh: {
+    swatch: 'radial-gradient(circle at 32% 34%, #ffc478 0 10%, #2b3a6b 40%, #05070c 78%)',
+    lift: ['60,80,150', 0.100], shadow: 0.36, discs: 1.0,
+    fg: ['3,4,8', 0.94],
+    lamps: [[0.26, 0.70, 0.16, 0.16, 0.70, '255,190,120']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#070b16'], [0.44, '#141d34'], [0.56, '#0c1220'], [1, '#04060b']]);
+      // the city as a wash: the discs on top of this are the sharp part
+      for (let i = 0; i < 40; i++) {
+        const col = ['255,180,110', '110,170,255', '255,120,160', '150,255,210'][(r() * 4) | 0];
+        bgGlow(g, r() * PW, HOR - 60 + r() * 130, 40 + r() * 110, 30 + r() * 70, col, 0.05 + r() * 0.12, true);
+      }
+      bgGlow(g, PW * 0.5, HOR - 6, 130, 76, '90,120,200', 0.20, true);
+      bgFloor(g, '#03050a', '#0b1120');
+      bgStreak(g, PW * 0.5, 60, HOR, PH, '80,110,190', 0.16);
+    },
+  },
+  stars: {
+    swatch: 'radial-gradient(circle at 44% 40%, #6b7cd8 0%, #1a1330 40%, #04050a 78%)',
+    lift: ['40,48,96', 0.09], shadow: 0.0, starfield: 1.0,
+    fg: null,
+    lamps: [[0.12, 0.00, 0.30, 0.07, 0.50, '210,224,255']],
+    far(g, r) {
+      bgFill(g, '#04050a');
+      // the galactic band, running at an angle across the whole strip, with
+      // dust lanes cut out of it -- the structure a real sky has and a uniform
+      // scatter of dots never will
+      g.save(); g.translate(0, HOR * 0.9); g.transform(1, 0.10, 0, 1, 0, 0);
+      for (let i = 0; i < 120; i++) {
+        const x = r() * PW, y = (r() + r() + r() - 1.5) * 34;
+        bgGlow(g, x, y, 40 + r() * 130, 16 + r() * 46, i % 5 ? '108,124,196' : '158,110,168', 0.05 + r() * 0.09, true);
+      }
+      for (let i = 0; i < 34; i++) {   // the dust
+        const x = r() * PW, y = (r() + r() - 1) * 30;
+        bgGlow(g, x, y, 30 + r() * 90, 8 + r() * 26, '4,4,10', 0.28 + r() * 0.3, false);
+      }
+      g.restore();
+      bgGlow(g, PW * 0.5, HOR - 2, 110, 58, '70,84,164', 0.20, true);
+      bgGlow(g, PW * 0.5 - 300, HOR + 12, 84, 50, '120,60,130', 0.16, true);
+    },
+  },
+  gels: {
+    swatch: 'linear-gradient(90deg,#ff4096 0%,#0a0b10 50%,#3cc8ff 100%)',
+    lift: ['90,80,140', 0.13], shadow: 0.42,
+    fg: ['4,4,7', 0.94],
+    lamps: [[0.646, 0.72, 0.16, 0.22, 1.00, '255,60,150'],
+            [0.354, 0.72, 0.16, 0.22, 1.00, '60,200,255']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#08090f'], [0.48, '#12131c'], [0.58, '#0b0c12'], [1, '#050508']]);
+      bgFloor(g, '#040407', '#0e0f16');
+      for (let i = 0; i < 200; i++) {   // a wall, so the colour lands on something
+        g.fillStyle = `rgba(255,255,255,${0.008 + r() * 0.016})`;
+        g.fillRect(r() * PW, r() * HOR, 14 + r() * 60, 2 + r() * 8);
+      }
+      bgGlow(g, PW * 0.5 + 150, HOR - 14, 140, 110, '255,60,150', 0.42, true);
+      bgGlow(g, PW * 0.5 - 150, HOR - 14, 140, 110, '60,200,255', 0.42, true);
+      bgStreak(g, PW * 0.5 + 150, 56, HOR, PH, '255,60,150', 0.26);
+      bgStreak(g, PW * 0.5 - 150, 56, HOR, PH, '60,200,255', 0.26);
+      bgGlow(g, PW * 0.5 + 512, HOR - 6, 120, 90, '150,60,200', 0.18, true);
+    },
+  },
+  fog: {
+    swatch: 'linear-gradient(0deg,#8d9ba1 0%,#c3ced3 38%,#dfe6e9 62%,#cfd8dd 100%)',
+    lift: ['0,0,0', 0.000], shadow: 0.0, drift: 1.0,
+    lamps: [[0.56, 0.02, 0.10, 0.34, 0.42, '255,246,228']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#b9c6cc'], [0.34, '#d8e1e4'], [0.48, '#e6ecee'], [0.52, '#c6d1d6'], [1, '#7e8b91']]);
+      // three ridges, each paler and higher than the last: the whole depth cue
+      for (const [base, amp, a, ph] of [[HOR - 30, 22, 0.24, 0], [HOR - 14, 16, 0.36, 3], [HOR - 2, 11, 0.52, 7]]) {
+        g.fillStyle = `rgba(110,128,138,${a})`;
+        g.beginPath(); g.moveTo(0, HOR + 40);
+        for (let x = 0; x <= PW; x += 6) {
+          const t = x / PW * BG_TAU;
+          g.lineTo(x, base - Math.abs(Math.sin(t * 2.5 + ph)) * amp - Math.sin(t * 6 + ph) * amp * 0.3);
+        }
+        g.lineTo(PW, HOR + 40); g.closePath(); g.fill();
+      }
+      // the water, holding a mirrored, softened copy of the ridge
+      bgVGrad(g, HOR, PH, [[0, 'rgba(198,210,215,0.9)'], [0.5, 'rgba(160,174,180,0.85)'], [1, 'rgba(112,124,130,0.92)']]);
+      g.save(); g.globalAlpha = 0.34; g.translate(0, HOR * 2); g.scale(1, -0.7);
+      g.fillStyle = 'rgba(110,128,138,0.5)';
+      g.beginPath(); g.moveTo(0, HOR + 40);
+      for (let x = 0; x <= PW; x += 6) g.lineTo(x, HOR - 2 - Math.abs(Math.sin(x / PW * BG_TAU * 2.5 + 7)) * 10);
+      g.lineTo(PW, HOR + 40); g.closePath(); g.fill(); g.restore();
+      for (let i = 0; i < 90; i++) {   // ripple lines, flattening with distance
+        const y = HOR + 3 + Math.pow(r(), 1.6) * 120;
+        g.strokeStyle = `rgba(240,246,248,${0.06 + r() * 0.20})`; g.lineWidth = 1 + r();
+        const x = r() * PW, w = 8 + r() * 40;
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + w, y); g.stroke();
+      }
+    },
+    near(g, r) {    // reeds at the near bank, and they are the thing that moves
+      for (let i = 0; i < 40; i++) {
+        const x = r() * PW, h = 20 + r() * 70;
+        g.strokeStyle = `rgba(70,80,84,${0.25 + r() * 0.45})`;
+        g.lineWidth = 1 + r() * 2.6;
+        g.beginPath(); g.moveTo(x, PH); g.quadraticCurveTo(x + 4, PH - h * 0.6, x + (r() - 0.5) * 22, PH - h); g.stroke();
+      }
+    },
+  },
+  velvet: {
+    swatch: 'radial-gradient(circle at 42% 38%, #c0264e 0%, #5a0e22 45%, #12050a 82%)',
+    lift: ['120,26,52', 0.15], shadow: 0.26, sheen: 1.0,
+    fg: ['8,2,5', 0.94],
+    lamps: [[0.50, 0.40, 0.34, 0.22, 0.40, '255,214,200']],
+    far(g, r) {
+      bgVGrad(g, 0, PH, [[0, '#14060c'], [0.42, '#5a1028'], [0.56, '#3a0a18'], [1, '#0c0407']]);
+      // the drape: broad soft folds, seeded, each one a smooth swell rather
+      // than a hard stripe. The shader reads this as a height field and lights
+      // it from the camera, so the sheen crawls along the folds as you orbit --
+      // which is the one thing velvet actually does.
+      g.save(); g.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 26; i++) {
+        const x = (i / 26) * PW + (r() - 0.5) * 22, w = 20 + r() * 44;
+        const gr = g.createLinearGradient(x - w, 0, x + w, 0);
+        gr.addColorStop(0, 'rgba(0,0,0,0)');
+        gr.addColorStop(0.5, `rgba(210,80,110,${0.10 + r() * 0.16})`);
+        gr.addColorStop(1, 'rgba(0,0,0,0)');
+        g.fillStyle = gr;
+        g.save(); g.translate(x, 0); g.transform(1, 0, (r() - 0.5) * 0.4, 1, 0, 0);
+        g.fillRect(-w, -40, w * 2, PH + 80); g.restore();
+      }
+      g.restore();
+      for (let i = 0; i < 26; i++) {   // the shadow side of each fold
+        const x = r() * PW, w = 14 + r() * 40;
+        const gr = g.createLinearGradient(x - w, 0, x + w, 0);
+        gr.addColorStop(0, 'rgba(0,0,0,0)');
+        gr.addColorStop(0.5, `rgba(8,1,4,${0.30 + r() * 0.34})`);
+        gr.addColorStop(1, 'rgba(0,0,0,0)');
+        g.fillStyle = gr; g.fillRect(x - w, 0, w * 2, PH);
+      }
+      bgGlow(g, PW * 0.5, HOR - 8, 110, 84, '190,50,84', 0.30, true);
+      bgGlow(g, PW * 0.16, HOR - 4, 90, 70, '150,36,64', 0.24, true);
+      bgGlow(g, PW * 0.68, HOR - 12, 80, 62, '210,70,100', 0.20, true);
+      // the cloth pools on the surface it is draped over
+      bgVGrad(g, HOR + 40, PH, [[0, 'rgba(8,2,5,0)'], [1, 'rgba(8,2,5,0.8)']]);
+    },
+  },
+};
+for (const [k, b] of Object.entries(BACKDROPS)) b.name = k;
+const BACKDROP_ORDER = Object.keys(BACKDROPS);
+
+/* ---- the compositor ------------------------------------------------------
+   One fullscreen shader, one program for all 21. Which of the effects run is a
+   uniform, not a recompile, so switching backdrop costs two texture uploads and
+   nothing else. */
+const bgVert = `varying vec2 vUv;
+void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
+const bgFrag = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uFar, uNear;
+uniform vec2  uTan;        // tan(hfov/2), tan(vfov/2) of the RENDERED field
+uniform vec3  uCam;        // yaw (rad), pitch response (rad), time (s)
+uniform vec2  uCamSC;      // sin/cos of yaw, hoisted out of the per-pixel work
+uniform vec4  uCrop;       // offset.x, offset.y, repeat.x, repeat.y
+uniform vec4  uLampA, uLampB;   // angle, d/R, height, size
+uniform vec4  uLampAC, uLampBC; // r,g,b, intensity
+uniform vec4  uFx;         // starfield, discs, grid, caustic
+uniform vec4  uFx2;        // sheen, flicker, embers, drift
+uniform vec4  uFrame;      // vignette, shadow, flame level, aspect
+const float TAU = 6.2831853;
+const float VSPAN = 1.5707963;
+uniform float YAW0;
+
+float h11(float p){ return fract(sin(p*127.1)*43758.5453); }
+float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); }
+vec2  h22(vec2 p){ return fract(sin(vec2(dot(p,vec2(127.1,311.7)), dot(p,vec2(269.5,183.3))))*43758.5453); }
+float vnz(vec2 p){
+  vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+  return mix(mix(h21(i), h21(i+vec2(1,0)), f.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), f.x), f.y);
+}
+// where a point in the world lands on the screen, and how far away it is.
+// This is what makes a lamp an OBJECT: close ones sweep past fast and leave
+// frame, far ones barely move, and both go behind you if you keep walking.
+vec3 worldPoint(float ang, float k, float hgt){
+  vec2 P = -vec2(sin(ang), cos(ang));          // ang = the yaw it sits opposite
+  vec2 C = k * uCamSC;                         // the camera, k of the way out
+  vec2 d = P - C;
+  float dist = max(length(d), 0.06);
+  vec2 dir = d / dist;
+  vec2 R = vec2(uCamSC.y, -uCamSC.x);          // screen right, in world plan
+  vec2 A = -uCamSC;                            // the way the camera is looking
+  float a = atan(dot(dir, R), dot(dir, A));
+  float el = atan(hgt, dist) - uCam.y;
+  float front = step(abs(a), 1.35);
+  return vec3(0.5 + tan(clamp(a,-1.35,1.35))/(2.0*uTan.x),
+              0.5 + tan(clamp(el,-1.3,1.3))/(2.0*uTan.y), front / dist);
+}
+vec3 lampGlow(vec4 L, vec4 C, vec2 uv, float asp, float flick){
+  if (C.w <= 0.0) return vec3(0.0);
+  vec3 p = worldPoint(L.x, L.y, L.z);
+  if (p.z <= 0.0) return vec3(0.0);
+  float sz = L.w * clamp(p.z, 0.35, 3.0);
+  vec2 dv = (uv - p.xy) * vec2(asp, 1.0);
+  float d = length(dv) / sz;
+  // a real lamp is a small hot thing with a big soft halo, and the halo is
+  // most of what you see -- a flat bright blob is the giveaway of a painted one
+  float core = 0.55*exp(-d*d*3.0) + 0.42*exp(-d*1.35) + 0.14*exp(-d*0.45);
+  // and its reflection down the floor, stretched, which is what says 'floor'
+  vec2 rv = (uv - vec2(p.x, 1.30 - p.y)) * vec2(asp, 0.24);
+  float refl = exp(-dot(rv,rv)/(sz*sz*1.6)) * 0.34 * step(uv.y, 0.62);
+  return C.rgb * (C.w * flick * (core + refl) * clamp(p.z, 0.3, 2.2));
+}
+void main(){
+  // screen uv: the crop the texture matrix will take out of this frame, so the
+  // vignette and the contact shadow stay nailed to the screen while the world
+  // slides underneath them
+  vec2 suv = (vUv - uCrop.xy) / uCrop.zw;
+  float asp = uFrame.w;
+  float ax = atan((vUv.x - 0.5) * 2.0 * uTan.x);
+  float ay = atan((vUv.y - 0.5) * 2.0 * uTan.y);
+  float t = uCam.z;
+
+  // A far wall slides the SAME way you step, because you are stepping past it.
+  // u = 0.5 is whatever was painted behind the lighter at the resting yaw.
+  vec2 fuv = vec2(0.5 + (ax - uCam.x + YAW0)/TAU, 0.5 + (ay - uCam.y)/VSPAN);
+  vec3 col = texture2D(uFar, fuv).rgb;
+  // No wall, sky, cloth or road surface is a smooth ramp. Two octaves of
+  // mottle at the far layer's own scale is the difference between a painted
+  // gradient and a surface with light falling on it.
+  col *= 1.0 + (vnz(fuv*vec2(300.0,80.0)) - 0.5)*0.15;
+
+  // the near layer, at twice the rate: two speeds is what depth looks like
+  vec2 nuv = vec2(0.5 + (ax - (uCam.x - YAW0)*2.0)/TAU + uFx2.w*t*0.004,
+                  0.5 + (ay - uCam.y*1.5)/VSPAN);
+  vec4 nr = texture2D(uNear, nuv);
+  col = mix(col, nr.rgb, nr.a);
+
+  // firelight flicker: warm light rising off whatever is burning nearby
+  float flick = 1.0;
+  if (uFx2.y > 0.0) {
+    float f = vnz(vec2(t*2.6, 0.0))*0.6 + vnz(vec2(t*7.3, 5.0))*0.3 + vnz(vec2(t*17.0, 9.0))*0.1;
+    flick = 1.0 + uFx2.y * (f - 0.45) * 0.55;
+    float warm = smoothstep(0.0, 0.75, 1.0 - abs(fuv.y - 0.62)*3.0);
+    col += vec3(0.35,0.12,0.03) * warm * (flick - 1.0) * 1.6;
+  }
+
+  col += lampGlow(uLampA, uLampAC, vUv, asp, flick);
+  col += lampGlow(uLampB, uLampBC, vUv, asp, 1.0);
+
+  // --- deep field: a real sky is clustered, and every star is its own colour
+  if (uFx.x > 0.0) {
+    vec2 sp = vec2(fuv.x*3.6, fuv.y);
+    for (int L = 0; L < 3; L++) {
+      float sc = 190.0 + float(L)*260.0;
+      vec2 gp = sp*sc; vec2 id = floor(gp); vec2 f = fract(gp) - 0.5;
+      vec2 hh = h22(id);
+      float cluster = vnz(sp*7.0 + float(L)*3.0);
+      float live = step(h21(id+13.0), 0.10 + 0.34*cluster*cluster);
+      float mag = pow(h21(id+31.0), 3.2);
+      float d = length(f - (hh-0.5)*0.7);
+      float tw = 0.55 + 0.45*sin(t*(1.2+4.0*hh.x) + hh.y*40.0);
+      vec3 tint = mix(vec3(0.72,0.80,1.0), vec3(1.0,0.84,0.62), h21(id+61.0));
+      col += tint * live * mag * tw * smoothstep(0.30, 0.02, d) * (1.4 - float(L)*0.3) * uFx.x;
+    }
+  }
+  // --- out-of-focus city: discs with an EDGE and a flat middle, breathing
+  if (uFx.y > 0.0) {
+    vec2 bp = vec2(fuv.x*3.6, fuv.y);
+    for (int L = 0; L < 2; L++) {
+      float sc = 21.0 + float(L)*17.0;
+      vec2 gp = bp*sc + vec2(float(L)*0.37, float(L)*0.61);
+      vec2 id = floor(gp); vec2 f = fract(gp) - 0.5;
+      vec2 hh = h22(id);
+      float live = step(h21(id+7.0), 0.26);
+      float r = 0.11 + 0.26*hh.x*hh.x;
+      float d = length(f - (hh-0.5)*0.45);
+      float br = 0.75 + 0.25*sin(t*(0.5+0.7*hh.y) + hh.x*24.0);
+      float disc = smoothstep(r, r*0.90, d);
+      float rim = smoothstep(r*0.72, r*0.96, d) * disc;
+      float hue = h21(id+53.0);
+      vec3 tint = hue < 0.45 ? vec3(1.0,0.72,0.42) : (hue < 0.72 ? vec3(0.42,0.66,1.0)
+                 : (hue < 0.9 ? vec3(1.0,0.46,0.62) : vec3(0.56,1.0,0.82)));
+      float dim = (0.34 + 0.66*pow(h21(id+91.0), 1.8)) * smoothstep(0.92, 0.48, bp.y);
+      col += tint * live * dim * br * (disc*0.46 + rim*0.72) * uFx.y;
+    }
+  }
+  // --- embers: they rise, they go out, and they are the only thing in frame
+  // that is genuinely moving when nothing else is
+  if (uFx2.z > 0.0) {
+    vec2 ep = vec2(fuv.x*3.6, fuv.y*1.0);
+    for (int L = 0; L < 2; L++) {
+      float sc = 34.0 + float(L)*26.0;
+      vec2 gp = ep*sc; gp.y += t*(0.55 + float(L)*0.35);
+      vec2 id = floor(gp); vec2 f = fract(gp) - 0.5;
+      vec2 hh = h22(id);
+      float live = step(h21(id+3.0), 0.10);
+      float wob = sin(t*2.0 + hh.x*30.0)*0.16;
+      float d = length((f - (hh-0.5)*0.6 - vec2(wob,0.0)) * vec2(1.0, 1.6));
+      float lifespan = 0.5 + 0.5*sin(t*1.7 + hh.y*24.0);
+      col += vec3(1.0, 0.42, 0.10) * live * lifespan * smoothstep(0.16, 0.0, d) * uFx2.z;
+    }
+  }
+  // --- caustics: light through moving water, on the wall below the line
+  if (uFx.w > 0.0) {
+    vec2 cp = vec2(fuv.x*26.0, fuv.y*7.0);
+    float c = sin(cp.x + sin(cp.y*1.3 + t*0.7)*1.6 + t*0.4)
+            + sin(cp.y*1.7 + sin(cp.x*0.8 - t*0.5)*1.4 - t*0.3);
+    float m = smoothstep(0.44, 0.58, fuv.y) * smoothstep(1.0, 0.72, fuv.y);
+    col += vec3(0.42,0.86,0.92) * pow(max(c*0.5+0.5, 0.0), 3.5) * m * 0.42 * uFx.w;
+  }
+  // --- the drawing itself: a real plane, in perspective, turning with you.
+  // Everything else here is a distance; this is the one thing that is a
+  // SURFACE, and it has to recede or it is wallpaper again.
+  if (uFx.z > 0.0) {
+    float hy = 0.5 + (-uCam.y)/VSPAN*0.9;
+    float py = hy - vUv.y;
+    if (py > 0.0035) {
+      float w = 0.11 / py;
+      vec2 gp = vec2((vUv.x - 0.5) * w * 2.2 + -uCam.x * 0.9, w) * 3.0;
+      float fade = smoothstep(0.0, 0.10, py) * smoothstep(1.6, 0.3, w);
+      vec2 gg = abs(fract(gp) - 0.5);
+      vec2 fw = fwidth(gp) * 1.4 + 0.001;
+      float minor = 1.0 - min(smoothstep(0.0, fw.x, gg.x), smoothstep(0.0, fw.y, gg.y));
+      vec2 gp5 = gp * 0.2;
+      vec2 g5 = abs(fract(gp5) - 0.5);
+      vec2 fw5 = fwidth(gp5) * 1.4 + 0.001;
+      float major = 1.0 - min(smoothstep(0.0, fw5.x, g5.x), smoothstep(0.0, fw5.y, g5.y));
+      float paper = 0.06 + 0.05*vnz(gp*4.0) + 0.03*vnz(gp*31.0);
+      vec3 sheet = vec3(0.055,0.115,0.215) + paper*vec3(0.30,0.42,0.62);
+      sheet += vec3(0.34,0.52,0.78) * (minor*0.22 + major*0.55);
+      // the fold, and the ring someone's coffee left
+      float fold = exp(-pow(abs(gp.x*0.34 - 0.4), 2.0)*30.0);
+      sheet += vec3(0.18,0.26,0.38) * fold * 0.5;
+      float ring = abs(length(gp*vec2(1.0,1.0) - vec2(2.4, 3.1)) - 0.62);
+      sheet += vec3(0.20,0.14,0.05) * smoothstep(0.09, 0.0, ring) * 0.8;
+      col = mix(col, sheet, fade * uFx.z);
+    }
+  }
+  // --- velvet: read the painted drape as a height field and light it from
+  // where the camera actually is. The sheen then crawls along the folds when
+  // you orbit instead of sitting there like a printed highlight.
+  if (uFx2.x > 0.0) {
+    float e = 1.6/1024.0;
+    float hL = dot(texture2D(uFar, fuv - vec2(e,0.0)).rgb, vec3(0.33));
+    float hR = dot(texture2D(uFar, fuv + vec2(e,0.0)).rgb, vec3(0.33));
+    float slope = (hR - hL) * 26.0;
+    float grazing = clamp(abs(slope), 0.0, 1.0);
+    float nap = pow(grazing, 1.3) * (0.55 + 0.45*sin(ax*6.0 + slope*3.0));
+    col += vec3(0.78,0.34,0.42) * nap * 0.62 * uFx2.x;
+    col *= 1.0 - 0.30*smoothstep(0.0, 0.4, -slope);
+  }
+
+  // the light the LIGHTER throws back onto the room. Always on, every backdrop:
+  // it is the one thing in frame that proves the flame is a light source and
+  // not a sprite.
+  if (uFrame.z > 0.0) {
+    float fl = uFrame.z * (0.85 + 0.3*vnz(vec2(t*9.0, 3.0)));
+    vec2 d = (suv - vec2(0.5, 0.60)) * vec2(asp*0.85, 1.0);
+    col += vec3(0.85,0.42,0.13) * fl * 0.30 * exp(-dot(d,d)*3.4);
+  }
+
+  // --- screen-space furniture: these belong to the FRAME, not the wall ---
+  // the shadow the lighter drops, at the lighter's feet and NOWHERE else:
+  // it belongs to the object, so it does not pan with the wall
+  float sh = uFrame.y;
+  if (sh > 0.0) {
+    vec2 d = (suv - vec2(0.5, 0.142)) / vec2(0.33, 0.078);
+    col *= 1.0 - sh * exp(-dot(d,d));
+    vec2 d2 = (suv - vec2(0.5, 0.142)) / vec2(0.62, 0.20);
+    col *= 1.0 - sh * 0.34 * exp(-dot(d2,d2));
+  }
+  float vg = length((suv - vec2(0.5,0.5)) * vec2(asp, 1.0));
+  col *= 1.0 - uFrame.x * smoothstep(0.10, 0.60, vg*vg*2.4);
+  // fine grain, or a wide ramp of one hue bands visibly on an OLED phone
+  col += (h21(floor(gl_FragCoord.xy)) - 0.5) * 0.020;
+  // A shoulder, because the background is the one thing in this app that never
+  // goes through the tone mapper: without it every lamp is a flat clipped white
+  // disc with a hard edge, which is exactly what a photograph never has.
+  col = mix(col, 1.0 - exp(-col*1.25), 0.34);
+  gl_FragColor = vec4(max(col, 0.0), 1.0);
+}`;
+
+const bgRT = new THREE.WebGLRenderTarget(2, 2, {
+  format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+  minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false,
+});
+bgRT.texture.colorSpace = THREE.SRGBColorSpace;
+bgRT.texture.generateMipmaps = false;
+const bgScene = new THREE.Scene();
+const bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const bgUniforms = {
+  uFar: { value: null }, uNear: { value: null },
+  uTan: { value: new THREE.Vector2(0.3, 0.3) },
+  uCam: { value: new THREE.Vector3() },
+  uCamSC: { value: new THREE.Vector2() },
+  YAW0: { value: BG_YAW0 },
+  uCrop: { value: new THREE.Vector4(BG_MARGIN, BG_MARGIN, 1 - 2 * BG_MARGIN, 1 - 2 * BG_MARGIN) },
+  uLampA: { value: new THREE.Vector4() }, uLampB: { value: new THREE.Vector4() },
+  uLampAC: { value: new THREE.Vector4() }, uLampBC: { value: new THREE.Vector4() },
+  uFx: { value: new THREE.Vector4() }, uFx2: { value: new THREE.Vector4() },
+  uFrame: { value: new THREE.Vector4(0.60, 0.4, 0, 0.7) },
+};
+const bgMat = new THREE.ShaderMaterial({
+  uniforms: bgUniforms, vertexShader: bgVert, fragmentShader: bgFrag,
+  depthTest: false, depthWrite: false,
+});
+bgScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMat));
+
+function bgStripTexture(fn, name, alpha) {
+  const cv = document.createElement('canvas'); cv.width = BG_W; cv.height = BG_H;
+  const g = cv.getContext('2d');
+  g.setTransform(BG_SS, 0, 0, BG_SS_V, 0, 0);
+  if (!alpha) { g.fillStyle = '#000'; g.fillRect(0, 0, PW, PH); }
+  if (fn) fn(g, bgSeed(name + (alpha ? 'near' : 'far')));
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping;
+  t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = false;
+  return t;
+}
+let bgFarTex = null, bgNearTex = null, bgCur = null;
 function applyBackdrop(name) {
   if (!BACKDROPS[name]) name = 'midnight';
   sim.backdrop = name;
-  const bg = new THREE.CanvasTexture(backdropCanvas(BACKDROPS[name]));
-  bg.colorSpace = THREE.SRGBColorSpace;
-  // three multiplies texture.matrix into the background shader's uv, so the
-  // whole parallax costs one matrix update a frame and no geometry at all
-  bg.repeat.set(1 - BG_MARGIN * 2, 1 - BG_MARGIN * 2);
-  bg.offset.set(BG_MARGIN, BG_MARGIN);
-  // the old one is dead the moment it is replaced: swapping backdrops from the
-  // menu would otherwise leak a 512x512 texture per tap
-  if (scene.background && scene.background.isTexture) scene.background.dispose();
-  scene.background = bg;
+  const b = BACKDROPS[name];
+  if (bgFarTex) bgFarTex.dispose();
+  if (bgNearTex) bgNearTex.dispose();
+  bgFarTex = bgStripTexture((g, r) => { b.far(g, r); if (b.lift) bgLift(g, b.lift[0], b.lift[1]); }, name, false);
+  bgNearTex = bgStripTexture(b.near || (b.fg === null ? null
+    : (g, r) => bgForeground(g, b.fg ? b.fg[0] : '6,6,8', b.fg ? b.fg[1] : 0.92, r, b.fgSides)), name, true);
+  bgUniforms.uFar.value = bgFarTex;
+  bgUniforms.uNear.value = bgNearTex;
+  const L = b.lamps || [];
+  for (const [i, k, c] of [[0, 'uLampA', 'uLampAC'], [1, 'uLampB', 'uLampBC']]) {
+    const l = L[i];
+    if (!l) { bgUniforms[c].value.set(0, 0, 0, 0); continue; }
+    // painted at strip u; the world angle that puts it there is A0 - (u-0.5)*TAU
+    bgUniforms[k].value.set(BG_YAW0 - (l[0] - 0.5) * BG_TAU, l[1], l[2], l[3]);
+    const rgb = l[5].split(',').map(Number);
+    bgUniforms[c].value.set(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, l[4]);
+  }
+  bgUniforms.uFx.value.set(b.starfield || 0, b.discs || 0, b.grid || 0, b.caustic || 0);
+  bgUniforms.uFx2.value.set(b.sheen || 0, b.flicker || 0, b.embers ? b.embers[0] : 0, b.drift || 0);
+  bgUniforms.uFrame.value.x = b.vignette === undefined ? 0.60 : b.vignette;
+  bgUniforms.uFrame.value.y = b.shadow === undefined ? 0.4 : b.shadow;
+  // anything time-driven has to keep compositing while the app is awake;
+  // everything else settles the moment the camera does
+  b.animated = !!(b.flicker || b.embers || b.discs || b.starfield || b.caustic || b.drift);
+  bgCur = b;
+  scene.background = bgRT.texture;
+  bgSizeDirty = true; bgDirty = true;
 }
-
-// A backdrop that never moves reads as wallpaper stuck to the lens. A real one
-// is a place the lighter is standing in, so it has to shift when you move: the
-// image slides AGAINST the orbit, the way a far wall does. sin(yaw) rather than
-// yaw itself so a full turn comes smoothly back round instead of jumping at the
-// wrap. The drift on top is small and slow enough that you never catch it
-// moving, but the frame is never quite dead either.
+let bgSizeDirty = true;
+function bgResize() {
+  bgDirty = true;
+  const sz = renderer.getSize(new THREE.Vector2());
+  const w = Math.max(64, Math.min(576, Math.round(sz.x * 0.62)));
+  const h = Math.max(64, Math.min(768, Math.round(sz.y * 0.62)));
+  if (bgRT.width !== w || bgRT.height !== h) bgRT.setSize(w, h);
+  bgUniforms.uFrame.value.w = w / h;
+  // the RT covers the screen's field PLUS the margin the texture matrix pans
+  // within, so the pan never drags a clamped edge across the frame
+  const vf = THREE.MathUtils.degToRad(CFG.FOV) / (1 - 2 * BG_MARGIN);
+  bgUniforms.uTan.value.set(Math.tan(vf * 0.5) * camera.aspect, Math.tan(vf * 0.5));
+  bgSizeDirty = false;
+}
+// Called once per PRESENTED frame -- and then only if the frame would actually
+// differ. A backdrop with no ambient motion in it is a still image the moment
+// the camera stops, so a static camera on a static room re-composites NOTHING:
+// the render target already holds the right pixels. Fourteen of the twenty-one
+// are in that class, which is the difference between 'costs a pass every frame'
+// and 'costs a pass while you are moving'.
+let bgLastYaw = 1e9, bgLastPitch = 1e9, bgLastFlame = -1, bgDirty = true;
+function renderBackdrop(tSec) {
+  if (!scene.background || !bgCur) return;
+  const moved = Math.abs(cam.yaw - bgLastYaw) > 1e-4 || Math.abs(cam.pitch - bgLastPitch) > 1e-4
+    || Math.abs(smoothFlameLevel - bgLastFlame) > 2e-3;
+  if (!moved && !bgDirty && !bgCur.animated) return;
+  bgLastYaw = cam.yaw; bgLastPitch = cam.pitch; bgLastFlame = smoothFlameLevel; bgDirty = false;
+  if (bgSizeDirty) bgResize();
+  bgUniforms.uCam.value.set(cam.yaw, Math.sin(cam.pitch) * 0.32, tSec);
+  bgUniforms.uCamSC.value.set(Math.sin(cam.yaw), Math.cos(cam.yaw));
+  bgUniforms.uFrame.value.z = smoothFlameLevel;
+  const prev = renderer.getRenderTarget();
+  renderer.setRenderTarget(bgRT);
+  renderer.render(bgScene, bgCam);
+  renderer.setRenderTarget(prev);
+}
+// The texture matrix still carries a small share of the motion -- it is the
+// nearest layer of all, the one at the glass -- and it is the thing the suite
+// watches to prove the backdrop answers the orbit. Monotonic in yaw now, not
+// sin(yaw): half a turn used to land you back where you started.
 function updateBackdropMotion(tSec) {
   const bg = scene.background;
   if (!bg || !bg.isTexture) return;
-  const yaw = cam.yaw - BG_YAW0, pitch = cam.pitch;
-  const dx = Math.sin(yaw) * 0.62 + Math.sin(tSec * 0.043) * 0.10;
-  const dy = -Math.sin(pitch) * 0.72 + Math.sin(tSec * 0.031 + 2.1) * 0.08;
-  bg.offset.set(
-    BG_MARGIN * (1 + clamp(dx, -1, 1)),
-    BG_MARGIN * (1 + clamp(dy, -1, 1)),
-  );
+  const dx = clamp((cam.yaw - BG_YAW0) * 0.7, -1, 1);
+  const dy = clamp(-Math.sin(cam.pitch) * 0.8 + Math.sin(tSec * 0.031 + 2.1) * 0.06, -1, 1);
+  bg.repeat.set(1 - BG_MARGIN * 2, 1 - BG_MARGIN * 2);
+  bg.offset.set(BG_MARGIN * (1 + dx), BG_MARGIN * (1 + dy));
+  bgUniforms.uCrop.value.set(bg.offset.x, bg.offset.y, bg.repeat.x, bg.repeat.y);
 }
 
 // Composer with cheap low-res bloom (auto-disabled if fps sags).
@@ -6841,6 +7669,7 @@ function onResize() {
     m.uniforms.uRes.value.set(w * dpr, h * dpr);
   }
   computeFit();
+  bgSizeDirty = true;
   idleT = 0;
 }
 window.addEventListener('resize', onResize);
@@ -6960,6 +7789,7 @@ function loop(tms) {
       scene.overrideMaterial = null;
       camera.layers.enable(NOCC_LAYER);
     }
+    renderBackdrop(timeFreeze === null ? tms / 1000 : timeFreeze);
     if (bloomOn) composer.render(); else renderer.render(scene, camera);
     // second frame, not the first: the opening paint stays as quick as it was
     if (!volWarmed && frames > 0) warmVolumePrograms();
@@ -7022,6 +7852,7 @@ window.LIGHTER = {
   // so the guide's copy can be checked against the lists it describes
   get finishNames() { return FINISH_ORDER.slice(); },
   get backdropNames() { return BACKDROP_ORDER.slice(); },
+  bgU: bgUniforms, bgRT, BACKDROPS, renderBackdrop, bgScene, bgCam,
   get finishCount() { return FINISH_ORDER.length; },
   get flameCount() { return FLAME_ORDER.length; },
   get backdropCount() { return BACKDROP_ORDER.length; },
