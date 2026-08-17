@@ -1198,6 +1198,29 @@ check('no brand names anywhere user-visible', await L(
     `offset ${a.x.toFixed(3)}..${c.x.toFixed(3)} with repeat ${c.rep.toFixed(3)}`);
   await L('(LIGHTER.cam.yaw = 0.32, LIGHTER.sim.lid.dragging = false, 0)');
 }
+// The worker's cache is named after BUILD, so bumping it is the only thing that
+// evicts the previous deploy. It was the constant 'lighter-v1' for the app's
+// whole life, which made activate's purge a no-op on every release -- a stale
+// document could survive indefinitely, and did. index.html carries the same
+// string so the running build is identifiable; these two drifting apart would
+// put that guarantee back to sleep silently.
+{
+  const fs = (await import('fs')).default;
+  const path = (await import('path')).default;
+  // plain paths: this file shadows the global URL, so new URL(...) is not
+  // available here
+  const root = path.resolve(process.cwd(), '..');
+  const sw = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+  const idx = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const swB = (sw.match(/const BUILD = '([^']+)'/) || [])[1];
+  const idxB = (idx.match(/window\.__BUILD = '([^']+)'/) || [])[1];
+  check('the service worker names its cache after the build',
+    !!swB && sw.includes("'lighter-' + BUILD"), `BUILD=${swB}`);
+  check('and index.html declares the same build', !!idxB && idxB === swB,
+    `sw.js ${swB} vs index.html ${idxB}`);
+  check('the page reports the build it is running',
+    await L('window.__BUILD') === swB, `page says ${await L('window.__BUILD')}`);
+}
 check('affiliation disclaimer present', await L(
   'document.getElementById("guideLegal").textContent.includes("Not affiliated")'));
 check('fuel gauge tracks the tank', await L('document.getElementById("gFuel").style.width') === '37%');

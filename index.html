@@ -480,9 +480,27 @@
 <script>
   // Offline support for the home-screen app (network-first worker, never
   // stale when online). Registered only where a sw.js is actually served.
+  // Must match BUILD in sw.js. It names the worker's cache, so it is what
+  // evicts the previous deploy; a test fails if the two ever drift apart.
+  // Also the answer to "which build am I actually running", which took a round
+  // trip to establish the one time it mattered.
+  window.__BUILD = '2026-08-17c';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-    navigator.serviceWorker.register('./sw.js').catch(function () {});
+    navigator.serviceWorker.register('./sw.js').then(function (reg) {
+      // A worker already controlling the page keeps serving its own cache until
+      // it is replaced, so ask on every load and take the new one immediately.
+      reg.update();
+      reg.addEventListener('updatefound', function () {
+        var w = reg.installing;
+        if (!w) return;
+        w.addEventListener('statechange', function () {
+          // skipWaiting + clients.claim means the new worker is already in
+          // charge; reload once so the page it controls is the new one too.
+          if (w.state === 'activated' && navigator.serviceWorker.controller) location.reload();
+        });
+      });
+    }).catch(function () {});
   }
   // Boot failure fallback (old browsers without import maps, CDN unreachable).
   window.addEventListener('error', function () {
