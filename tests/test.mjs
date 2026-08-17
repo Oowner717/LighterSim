@@ -1237,6 +1237,86 @@ check('no brand names anywhere user-visible', await L(
   check('the page reports the build it is running',
     await L('window.__BUILD') === swB, `page says ${await L('window.__BUILD')}`);
 }
+// uFx3 packs (beam, fogbank, strip saturation) and saturation's neutral is 1,
+// not 0 -- but a THREE.Vector4 is born all zeroes. Any path that composites
+// before the first applyBackdrop, or any backdrop that forgets to write the
+// slot, renders the painted strip fully greyscale. The bug is invisible in
+// review (the line reads fine) and obvious on screen, which is the worst
+// combination; it costs two evaluates to rule out.
+{
+  const at = n => L(`(LIGHTER.setBackdrop(${JSON.stringify(n)}), LIGHTER.bgU.uFx3.value.toArray())`);
+  const plain = await at('midnight');       // declares no sat
+  const cut = await at('teal');             // declares sat: 0.58
+  check('a backdrop that asks for no desaturation gets none',
+    plain[2] === 1, `midnight uFx3.z=${plain[2]}`);
+  check('and one that asks for it gets exactly what it asked for',
+    Math.abs(cut[2] - 0.58) < 1e-6 && cut[2] > 0, `teal uFx3.z=${cut[2]}`);
+  // The analytic cone is drawn from lamp A, so a backdrop that switched it on
+  // without one would hang a cone off whatever the previous backdrop left in
+  // the uniform. VACUOUS AS WRITTEN -- all 21 backdrops currently declare
+  // lamps, so the filter has nothing to select and this passes for free. It is
+  // kept as a forward guard on the next backdrop somebody adds, and the
+  // predicate itself was checked against a doctored table (lamps deleted from
+  // softbox, beam set) to confirm it selects rather than silently returning [].
+  const spot = await at('spotlight');
+  check('the spotlight beam is on, and it has a lamp to hang off',
+    spot[0] > 0 && await L('LIGHTER.bgU.uLampAC.value.w') > 0, `beam=${spot[0]}`);
+  const beamless = await L(`Object.entries(LIGHTER.BACKDROPS)
+    .filter(([, b]) => b.beam && !(b.lamps && b.lamps.length)).map(([k]) => k)`);
+  check('no backdrop draws a beam without one', beamless.length === 0, beamless.join(','));
+  await L('LIGHTER.setBackdrop("midnight")');
+}
+// A duplicate key in an object literal is silent: the later one wins and the
+// earlier is dead code that reads as live. This has bitten twice -- a swatch
+// halo lost to a second `glow`, and a backdrop's ambient sheen lost to a second
+// `sheen` on a line further down. Cheap to check, invisible otherwise.
+{
+  const fs = (await import('fs')).default;
+  const path = (await import('path')).default;
+  const src = fs.readFileSync(path.join(path.resolve(process.cwd(), '..'), 'index.html'), 'utf8');
+  const dupes = [];
+  for (const tableName of ['BACKDROPS', 'FINISHES', 'FINISH_EXTRA', 'FLAME_COLS', 'FLAME_EXTRA']) {
+    const i = src.indexOf('const ' + tableName + ' = {');
+    if (i < 0) continue;
+    // walk the table's own braces so nested draw() bodies do not confuse it
+    let k = src.indexOf('{', i), d = 0, end = k;
+    for (; k < src.length; k++) {
+      if (src[k] === '{') d++;
+      else if (src[k] === '}') { d--; if (!d) { end = k; break; } }
+    }
+    const blk = src.slice(i, end);
+    const re = /\n  (\w+): \{/g;
+    let m;
+    while ((m = re.exec(blk))) {
+      let j = m.index + m[0].length - 1, dd = 0, stop = j;
+      for (; j < blk.length; j++) {
+        if (blk[j] === '{') dd++;
+        else if (blk[j] === '}') { dd--; if (!dd) { stop = j; break; } }
+      }
+      const body = blk.slice(m.index + m[0].length, stop);
+      // Depth, not indentation. A finish holds chrome:{...} and dark:{...},
+      // each with its own color/rough/metal -- those share names legitimately
+      // and are not duplicates of each other. Only keys at this object's OWN
+      // level count, so track braces and brackets while scanning.
+      const keys = [];
+      let dep = 0;
+      for (let q = 0; q < body.length; q++) {
+        const ch = body[q];
+        if (ch === '{' || ch === '[' || ch === '(') { dep++; continue; }
+        if (ch === '}' || ch === ']' || ch === ')') { dep--; continue; }
+        if (dep !== 0) continue;
+        if (ch === '/' && body[q + 1] === '/') { q = body.indexOf('\n', q); if (q < 0) break; continue; }
+        const rest = body.slice(q);
+        const km = /^(\w+)\s*:/.exec(rest);
+        if (km && (q === 0 || /[\s,{]/.test(body[q - 1]))) { keys.push(km[1]); q += km[0].length - 1; }
+      }
+      for (const k2 of new Set(keys)) {
+        if (keys.filter(x => x === k2).length > 1) dupes.push(`${tableName}.${m[1]}.${k2}`);
+      }
+    }
+  }
+  check('no entry declares the same key twice', dupes.length === 0, dupes.join(', '));
+}
 check('affiliation disclaimer present', await L(
   'document.getElementById("guideLegal").textContent.includes("Not affiliated")'));
 check('fuel gauge tracks the tank', await L('document.getElementById("gFuel").style.width') === '37%');
