@@ -1099,6 +1099,11 @@ check('no brand names anywhere user-visible', await L(
       const t = () => (LIGHTER.frames - f0 >= n) ? res() : requestAnimationFrame(t); t(); });
     window.__sil = async th => {
       LIGHTER.sim.lid.theta = th; LIGHTER.sim.lid.omega = 0;
+      // Pin the camera too. Once the backdrops gained ambient motion the loop
+      // presents every frame instead of being frozen by the idle gate, so the
+      // camera was still easing between captures and the mask moved ~150px at a
+      // FIXED angle -- the same order as the effect being measured.
+      LIGHTER.cam.yawVel = 0; LIGHTER.cam.pitchVel = 0;
       await window.__frames(3);
       const s = LIGHTER.scene, bg = s.background;
       s.background = null;
@@ -1118,11 +1123,22 @@ check('no brand names anywhere user-visible', await L(
     };
     window.__dis = (a, b) => { let o = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) o++; return o; };
     return 0; })()`);
+  // and settle: take each mask twice and keep going until two agree, so a
+  // frame caught mid-ease cannot be mistaken for a change of shape
+  await L(`(() => { window.__silStable = async th => {
+    let prev = await window.__sil(th);
+    for (let k = 0; k < 4; k++) {
+      const next = await window.__sil(th);
+      if (window.__dis(prev, next) === 0) return next;
+      prev = next;
+    }
+    return prev;
+  }; return 0; })()`);
   const swap = await L(`(async () => {
-    const a = await window.__sil(0.055), b = await window.__sil(0.065);
+    const a = await window.__silStable(0.055), b = await window.__silStable(0.065);
     return window.__dis(a, b); })()`);
   const spin = await L(`(async () => {
-    const a = await window.__sil(0.065), b = await window.__sil(0.075);
+    const a = await window.__silStable(0.065), b = await window.__silStable(0.075);
     return window.__dis(a, b); })()`);
   await L('(LIGHTER.sim.lid.dragging = false, 0)');
   // Relative to the control, because the lighter's size on screen depends on

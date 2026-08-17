@@ -484,7 +484,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-17d';
+  window.__BUILD = '2026-08-17e';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -1039,6 +1039,7 @@ function bgForeground(g, rgb, a, r, sides) {
 // past at depends on how close they are, and they go out of frame behind you.
 const BACKDROPS = {
   midnight: {
+    drift: 0.5,
     swatch: 'linear-gradient(160deg,#5a6b84 0%,#2b3444 45%,#0a0d14 100%)',
     lift: ['92,116,150', 0.2], shadow: 0.42,
     lamps: [[0.50, 0.30, 0.30, 0.42, 0.55, '150,180,225'],
@@ -1066,6 +1067,7 @@ const BACKDROPS = {
     },
   },
   noir: {
+    drift: 0.35,
     swatch: 'repeating-linear-gradient(12deg,#0a0a0b 0 5px,#b9b3a4 5px 9px)',
     lift: ['120,116,106', 0.17], shadow: 0.5,
     fg: ['3,3,4', 0.95],
@@ -1110,6 +1112,7 @@ const BACKDROPS = {
     },
   },
   slate: {
+    drift: 0.45,
     swatch: 'linear-gradient(150deg,#8496ab 0%,#3d4a5a 50%,#0d1218 100%)',
     lift: ['110,132,158', 0.120], shadow: 0.44,
     fg: ['8,10,13', 0.92],
@@ -1155,6 +1158,7 @@ const BACKDROPS = {
     },
   },
   steel: {
+    drift: 0.4,
     swatch: 'repeating-linear-gradient(90deg,#8d99a6 0 4px,#48525e 4px 9px)',
     lift: ['140,156,174', 0.110], shadow: 0.40,
     fg: ['9,11,13', 0.92],
@@ -1219,6 +1223,7 @@ const BACKDROPS = {
     },
   },
   oxblood: {
+    drift: 0.3, sheen: 0.30,
     swatch: 'linear-gradient(150deg,#8e2b3c 0%,#4a121d 50%,#160508 100%)',
     lift: ['128,40,54', 0.120], shadow: 0.40,
     fg: ['10,3,5', 0.94],
@@ -1258,6 +1263,7 @@ const BACKDROPS = {
     },
   },
   forest: {
+    drift: 0.55,
     swatch: 'linear-gradient(150deg,#9fc07a 0%,#2f5138 46%,#080f0b 100%)',
     lift: ['96,132,90', 0.130], shadow: 0.26,
     lamps: [[0.46, 0.10, 0.42, 0.30, 0.70, '226,246,190']],
@@ -1299,6 +1305,7 @@ const BACKDROPS = {
     },
   },
   indigo: {
+    drift: 0.5,
     swatch: 'linear-gradient(0deg,#0b0e1c 0%,#2b3474 55%,#6b7ad0 100%)',
     lift: ['74,92,168', 0.110], shadow: 0.42, windows: 1,
     fg: ['4,5,10', 0.95],
@@ -1325,6 +1332,7 @@ const BACKDROPS = {
     },
   },
   plum: {
+    drift: 0.45, sheen: 0.22,
     swatch: 'linear-gradient(150deg,#ff5ad0 0%,#4a2170 48%,#120a1c 100%)',
     lift: ['118,60,150', 0.16], shadow: 0.44,
     fg: ['8,4,12', 0.94],
@@ -1383,6 +1391,7 @@ const BACKDROPS = {
     },
   },
   sand: {
+    drift: 0.6,
     swatch: 'linear-gradient(0deg,#2a1b10 0%,#c98c4e 46%,#f2d9a8 100%)',
     lift: ['180,140,90', 0.100], shadow: 0.34,
     fg: ['22,14,8', 0.9],
@@ -1412,6 +1421,7 @@ const BACKDROPS = {
     },
   },
   ash: {
+    drift: 0.4,
     swatch: 'linear-gradient(160deg,#8e8e96 0%,#4a4a50 46%,#0f0f11 100%)',
     lift: ['150,150,158', 0.100], shadow: 0.44,
     fg: ['9,9,10', 0.92],
@@ -1437,6 +1447,7 @@ const BACKDROPS = {
     },
   },
   softbox: {
+    drift: 0.28,
     swatch: 'linear-gradient(135deg,#eef4fb 0%,#39404b 52%,#0d0f13 100%)',
     lift: ['150,164,186', 0.090], shadow: 0.46,
     lamps: [[0.50, 0.68, 0.24, 0.34, 0.55, '226,238,255'],
@@ -1464,6 +1475,7 @@ const BACKDROPS = {
     },
   },
   spotlight: {
+    drift: 0.3,
     swatch: 'radial-gradient(ellipse at 50% 62%, #ece2ce 0%, #14140f 62%, #07070a 100%)',
     lift: ['96,92,80', 0.050], shadow: 0.18,
     fg: ['3,3,4', 0.96],
@@ -1488,6 +1500,7 @@ const BACKDROPS = {
     },
   },
   blueprint: {
+    drift: 0.22,
     swatch: 'repeating-linear-gradient(0deg,#2a4a78 0 3px,#152238 3px 8px)',
     lift: ['70,110,160', 0.090], shadow: 0.30, grid: 1.0,
     fg: null,
@@ -1503,6 +1516,7 @@ const BACKDROPS = {
     },
   },
   horizon: {
+    drift: 0.5,
     swatch: 'linear-gradient(0deg,#1a1024 0%,#7a2f4a 34%,#d9743a 62%,#f2b25c 100%)',
     lift: ['160,90,80', 0.080], shadow: 0.34,
     lamps: [[0.568, 0.02, 0.015, 0.30, 1.60, '255,196,120']],
@@ -1573,6 +1587,7 @@ const BACKDROPS = {
     },
   },
   gels: {
+    drift: 0.7, sheen: 0.26,
     swatch: 'linear-gradient(90deg,#ff4096 0%,#0a0b10 50%,#3cc8ff 100%)',
     lift: ['90,80,140', 0.13], shadow: 0.42,
     fg: ['4,4,7', 0.94],
@@ -1632,6 +1647,7 @@ const BACKDROPS = {
     },
   },
   velvet: {
+    sheen: 0.42, drift: 0.25,
     swatch: 'radial-gradient(circle at 42% 38%, #c0264e 0%, #5a0e22 45%, #12050a 82%)',
     lift: ['120,26,52', 0.15], shadow: 0.26, sheen: 1.0,
     fg: ['8,2,5', 0.94],
@@ -1692,6 +1708,8 @@ uniform vec4  uLampA, uLampB;   // angle, d/R, height, size
 uniform vec4  uLampAC, uLampBC; // r,g,b, intensity
 uniform vec4  uFx;         // starfield, discs, grid, caustic
 uniform vec4  uFx2;        // sheen, flicker, embers, drift
+uniform float uGrain;      // target->canvas ratio, so grain is grain not blocks
+uniform float uLife;       // ambient motion, eased to 0 once the sim is idle
 uniform vec4  uFrame;      // vignette, shadow, flame level, aspect
 const float TAU = 6.2831853;
 const float VSPAN = 1.5707963;
@@ -1744,7 +1762,10 @@ void main(){
   float asp = uFrame.w;
   float ax = atan((vUv.x - 0.5) * 2.0 * uTan.x);
   float ay = atan((vUv.y - 0.5) * 2.0 * uTan.y);
+  // Ambient time, not wall time: it stops advancing as uLife eases out, so the
+  // drift comes to rest where it is instead of stopping dead mid-stride.
   float t = uCam.z;
+  float life = uLife;
 
   // A far wall slides the SAME way you step, because you are stepping past it.
   // u = 0.5 is whatever was painted behind the lighter at the resting yaw.
@@ -1784,7 +1805,7 @@ void main(){
       float live = step(h21(id+13.0), 0.10 + 0.34*cluster*cluster);
       float mag = pow(h21(id+31.0), 3.2);
       float d = length(f - (hh-0.5)*0.7);
-      float tw = 0.55 + 0.45*sin(t*(1.2+4.0*hh.x) + hh.y*40.0);
+      float tw = 0.55 + 0.45*sin(t*(1.2+4.0*hh.x) + hh.y*40.0) * life;
       vec3 tint = mix(vec3(0.72,0.80,1.0), vec3(1.0,0.84,0.62), h21(id+61.0));
       col += tint * live * mag * tw * smoothstep(0.30, 0.02, d) * (1.4 - float(L)*0.3) * uFx.x;
     }
@@ -1897,8 +1918,18 @@ void main(){
   }
   float vg = length((suv - vec2(0.5,0.5)) * vec2(asp, 1.0));
   col *= 1.0 - uFrame.x * smoothstep(0.10, 0.60, vg*vg*2.4);
-  // fine grain, or a wide ramp of one hue bands visibly on an OLED phone
-  col += (h21(floor(gl_FragCoord.xy)) - 0.5) * 0.020;
+  // Fine grain, or a wide ramp of one hue bands visibly on an OLED phone. Two
+  // corrections over the flat version, which read as compression blocks on
+  // ember and indigo rather than as film. It is hashed at TARGET resolution and
+  // then upscaled to the canvas, so its frequency has to be pre-divided by that
+  // ratio or every grain lands as a fat block; and film grain lives in the
+  // midtones -- a constant amplitude puts visible speckle in blacks, where real
+  // grain has almost none.
+  {
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    float amp = 0.024 * sqrt(clamp(lum, 0.0, 1.0));
+    col += (h21(floor(gl_FragCoord.xy * uGrain)) - 0.5) * amp;
+  }
   // A shoulder, because the background is the one thing in this app that never
   // goes through the tone mapper: without it every lamp is a flat clipped white
   // disc with a hard edge, which is exactly what a photograph never has.
@@ -1925,6 +1956,12 @@ const bgUniforms = {
   uLampAC: { value: new THREE.Vector4() }, uLampBC: { value: new THREE.Vector4() },
   uFx: { value: new THREE.Vector4() }, uFx2: { value: new THREE.Vector4() },
   uFrame: { value: new THREE.Vector4(0.60, 0.4, 0, 0.7) },
+  uGrain: { value: 1 },
+  // Ambient motion has to settle. Anything time-driven keeps the compositor
+  // running, and a backdrop that drifts forever spends the battery the idle
+  // heartbeat was built to save -- so life eases to 0 a few seconds after the
+  // sim goes idle and snaps back the moment anything happens.
+  uLife: { value: 1 },
 };
 const bgMat = new THREE.ShaderMaterial({
   uniforms: bgUniforms, vertexShader: bgVert, fragmentShader: bgFrag,
@@ -1985,6 +2022,10 @@ function bgResize() {
   const h = Math.max(64, Math.min(768, Math.round(sz.y * 0.62)));
   if (bgRT.width !== w || bgRT.height !== h) bgRT.setSize(w, h);
   bgUniforms.uFrame.value.w = w / h;
+  // One target pixel covers this many canvas pixels, so the grain's frequency
+  // is divided by it: hashing per TARGET pixel and then upscaling is what made
+  // it read as blocks rather than as grain.
+  bgUniforms.uGrain.value = Math.max(1, sz.y / h);
   // the RT covers the screen's field PLUS the margin the texture matrix pans
   // within, so the pan never drags a clamped edge across the frame
   const vf = THREE.MathUtils.degToRad(CFG.FOV) / (1 - 2 * BG_MARGIN);
@@ -1998,14 +2039,31 @@ function bgResize() {
 // are in that class, which is the difference between 'costs a pass every frame'
 // and 'costs a pass while you are moving'.
 let bgLastYaw = 1e9, bgLastPitch = 1e9, bgLastFlame = -1, bgDirty = true;
+// The ambient clock only advances while there is life in it, so a backdrop that
+// drifts does not keep the compositor running all night on a phone left awake.
+let bgLife = 1, bgClock = 0;
+function bgTick(dt) {
+  // Derived from idleT, not integrated towards it. Two things went wrong with
+  // integration. Easing off simIsIdle() directly plateaued near 0.5 forever,
+  // because that predicate flips on single frames -- a spark, a settling lid --
+  // and every flip snapped the life back to 1. Easing off the debounced idleT
+  // fixed that but crawled, because bgTick only runs on PRESENTED frames and
+  // the loop drops to a 500ms heartbeat exactly when it goes idle: it was
+  // integrating a 50ms dt twice a second. idleT is already a wall clock, so
+  // reading it is framerate-independent and needs no state. Full life until 3s
+  // of quiet, gone by 5s, and instantly back because idleT resets on activity.
+  bgLife = clamp01(1 - (idleT - 3) / 2);
+  bgClock += dt * bgLife;
+  bgUniforms.uLife.value = bgLife;
+}
 function renderBackdrop(tSec) {
   if (!scene.background || !bgCur) return;
   const moved = Math.abs(cam.yaw - bgLastYaw) > 1e-4 || Math.abs(cam.pitch - bgLastPitch) > 1e-4
     || Math.abs(smoothFlameLevel - bgLastFlame) > 2e-3;
-  if (!moved && !bgDirty && !bgCur.animated) return;
+  if (!moved && !bgDirty && !(bgCur.animated && bgLife > 0)) return;
   bgLastYaw = cam.yaw; bgLastPitch = cam.pitch; bgLastFlame = smoothFlameLevel; bgDirty = false;
   if (bgSizeDirty) bgResize();
-  bgUniforms.uCam.value.set(cam.yaw, Math.sin(cam.pitch) * 0.32, tSec);
+  bgUniforms.uCam.value.set(cam.yaw, Math.sin(cam.pitch) * 0.32, bgClock);
   bgUniforms.uCamSC.value.set(Math.sin(cam.yaw), Math.cos(cam.yaw));
   bgUniforms.uFrame.value.z = smoothFlameLevel;
   const prev = renderer.getRenderTarget();
@@ -7789,6 +7847,7 @@ function loop(tms) {
       scene.overrideMaterial = null;
       camera.layers.enable(NOCC_LAYER);
     }
+    bgTick(dt);
     renderBackdrop(timeFreeze === null ? tms / 1000 : timeFreeze);
     if (bloomOn) composer.render(); else renderer.render(scene, camera);
     // second frame, not the first: the opening paint stays as quick as it was
