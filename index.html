@@ -520,7 +520,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18d';
+  window.__BUILD = '2026-08-18e';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -975,10 +975,14 @@ const BACKDROPS = {
     stops: [[0.00, '#243352'], [0.42, '#121a2c'], [0.74, '#070b14'], [1.00, '#020308']],
     key: [0.56, 0.76, 0.52, '150,186,255', 0.22], vignette: 0.62,
   },
-  oxblood: {  // deep desaturated red: warm, and the only one with any colour in it
-    swatch: 'linear-gradient(180deg,#4d2029 0%,#331419 42%,#1b090c 74%,#080304 100%)',
-    stops: [[0.00, '#4d2029'], [0.42, '#331419'], [0.74, '#1b090c'], [1.00, '#080304']],
-    key: [0.46, 0.76, 0.62, '255,206,178', 0.26], vignette: 0.56,
+  oxblood: {  // deep red: warm, and the only one with real colour in it
+    swatch: 'linear-gradient(180deg,#b31824 0%,#7a0d14 42%,#3d0407 74%,#120102 100%)',
+    stops: [[0.00, '#b31824'], [0.42, '#7a0d14'], [0.74, '#3d0407'], [1.00, '#120102']],
+    // A red key at low intensity, not a cream one at high. Every added channel
+    // pulls a colour toward white, so the brighter and more neutral the key,
+    // the more grey it mixes into the hue -- which is what kept this one
+    // reading as dusty brown however red the stops underneath it were.
+    key: [0.46, 0.74, 0.58, '255,74,52', 0.16], vignette: 0.52,
   },
   noir: {     // near black, one hard key from the side: this is the flame's room
     swatch: 'linear-gradient(180deg,#2f3134 0%,#161719 40%,#08090a 72%,#020203 100%)',
