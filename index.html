@@ -95,16 +95,21 @@
     backdrop-filter: blur(10px) saturate(1.3); -webkit-backdrop-filter: blur(10px) saturate(1.3);
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.10);
   }
-  #styleBtn i { position: absolute; top: 7px; display: block; width: 10px; height: 20px; }
+  #styleBtn i { position: absolute; display: block; background-size: cover; }
+  /* the same two silhouettes as the sheet, so the control and the thing it
+     opens are recognisably one idea */
   #finishSwatch {
-    left: 7px; border-radius: 10px 0 0 10px;
-    background-color: #d9dee3; background-size: cover;
+    left: 7px; top: 9px; width: 11px; height: 18px; border-radius: 3px;
+    background-color: #d9dee3;
     box-shadow: inset 0 -2px 3px rgba(0, 0, 0, 0.4), inset 0 2px 2px rgba(255, 255, 255, 0.3);
   }
   #flameSwatch {
-    right: 7px; border-radius: 0 10px 10px 0;
+    right: 7px; top: 8px; width: 12px; height: 20px;
     background-color: #ff9a3c; color: #ff9a3c;
-    box-shadow: 0 0 9px currentColor;
+    clip-path: polygon(50% 0%, 61% 13%, 71% 31%, 79% 51%, 81% 67%, 75% 83%,
+                       63% 95%, 50% 100%, 37% 95%, 25% 83%, 19% 67%, 21% 51%,
+                       29% 31%, 39% 13%);
+    filter: drop-shadow(0 0 5px currentColor);
   }
   /* the circles stay small; the tap targets don't (44px platform minimum) */
   #infoBtn::after, #guideClose::after, #styleBtn::after, #styleClose::after {
@@ -244,23 +249,55 @@
     color: rgba(206, 216, 226, 0.55);
   }
   /* auto-fill, so the swatches reflow instead of overflowing a narrow phone */
-  .swgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 9px; }
+  .swgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 9px; }
   .sw {
     position: relative;
     border-radius: 14px;
     border: 1px solid rgba(170, 185, 200, 0.18);
     background: rgba(255, 255, 255, 0.03);
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
-    padding: 8px 2px 7px;
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px;
+    padding: 8px 2px 7px; min-height: 62px;
     color: rgba(208, 216, 224, 0.62);
     font-size: 9px; letter-spacing: 0.03em;
     transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
   }
+  /* Every icon is the SHAPE of the thing it picks, not a disc with that thing's
+     colour on it. Three identical rows of beads made the sheet read as one
+     undifferentiated grid; a case, a flame and a wall are three different
+     silhouettes and the eye sorts them before it reads a single caption. */
   .sw i {
-    display: block; width: 28px; height: 28px; border-radius: 50%;
-    background-size: cover;
+    position: relative; display: block;
+    width: 28px; height: 28px; border-radius: 50%;
+    background-size: cover; background-position: center;
+  }
+  /* the case: the lighter's own outline, with the lid seam and the hinge */
+  #swCase .sw i {
+    width: 23px; height: 30px; border-radius: 5px;
     box-shadow: inset 0 -3px 5px rgba(0, 0, 0, 0.42), inset 0 2px 3px rgba(255, 255, 255, 0.26),
-                0 1px 3px rgba(0, 0, 0, 0.4);
+                0 1px 3px rgba(0, 0, 0, 0.45);
+  }
+  #swCase .sw i::after {
+    content: ''; position: absolute; left: 0; right: 0; top: 9px; height: 2px;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(255, 255, 255, 0.22));
+    border-radius: 1px;
+  }
+  #swCase .sw i::before {
+    content: ''; position: absolute; left: -2px; top: 7px; width: 3px; height: 5px;
+    border-radius: 2px 0 0 2px; background: rgba(0, 0, 0, 0.5);
+  }
+  /* the flame: a teardrop with a point on top, lit from inside. Clipped rather
+     than rotated, so the gradient inside still runs hot at the base. */
+  #swFlame .sw i {
+    width: 24px; height: 31px; border-radius: 0;
+    clip-path: polygon(50% 0%, 61% 13%, 71% 31%, 79% 51%, 81% 67%, 75% 83%,
+                       63% 95%, 50% 100%, 37% 95%, 25% 83%, 19% 67%, 21% 51%,
+                       29% 31%, 39% 13%);
+    filter: drop-shadow(0 0 6px currentColor);
+  }
+  /* the background: a wall, so it is a panel and not a bead */
+  #swBack .sw i {
+    width: 34px; height: 25px; border-radius: 4px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.11), 0 1px 4px rgba(0, 0, 0, 0.5);
   }
   .sw:active { transform: scale(0.94); }
   .sw.on {
@@ -269,8 +306,7 @@
     color: rgba(255, 219, 178, 0.96);
     box-shadow: 0 0 0 1px rgba(255, 190, 110, 0.45), 0 3px 14px rgba(255, 150, 50, 0.16);
   }
-  /* the flame swatches are lit shapes, not discs, so they get a soft halo */
-  #swFlame .sw i { box-shadow: 0 0 9px currentColor; }
+
   #guide {
     position: fixed; inset: 0; z-index: 10;
     background: rgba(4, 6, 9, 0.55);
@@ -484,7 +520,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18c';
+  window.__BUILD = '2026-08-18d';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -917,37 +953,37 @@ const BACKDROPS = {
   studio: {   // neutral grey seamless, lit from above: the default
     swatch: 'linear-gradient(180deg,#e9edf1 0%,#c3cad2 42%,#8d949c 74%,#5b6169 100%)',
     stops: [[0.00, '#e9edf1'], [0.42, '#c3cad2'], [0.74, '#8d949c'], [1.00, '#5b6169']],
-    key: [0.50, 0.84, 0.62, '255,253,248', 0.26], shadow: 0.44, vignette: 0.42,
+    key: [0.50, 0.84, 0.62, '255,253,248', 0.26], vignette: 0.42,
   },
   bone: {     // warm off-white, high key, so a dark case reads as a silhouette
     swatch: 'linear-gradient(180deg,#f6efe4 0%,#e4d9c8 44%,#bcae9a 76%,#7f7466 100%)',
     stops: [[0.00, '#f6efe4'], [0.44, '#e4d9c8'], [0.76, '#bcae9a'], [1.00, '#7f7466']],
-    key: [0.42, 0.80, 0.70, '255,246,226', 0.22], shadow: 0.40, vignette: 0.38,
+    key: [0.42, 0.80, 0.70, '255,246,226', 0.22], vignette: 0.38,
   },
   slate: {    // cool blue-grey, the flattering one for chrome and steel
     swatch: 'linear-gradient(180deg,#aab7c6 0%,#7b8899 44%,#4a5462 74%,#252b34 100%)',
     stops: [[0.00, '#aab7c6'], [0.44, '#7b8899'], [0.74, '#4a5462'], [1.00, '#252b34']],
-    key: [0.58, 0.80, 0.60, '236,244,255', 0.24], shadow: 0.46, vignette: 0.46,
+    key: [0.58, 0.80, 0.60, '236,244,255', 0.24], vignette: 0.46,
   },
   sand: {     // warm tan, which is where brass and copper come alive
     swatch: 'linear-gradient(180deg,#d8c49c 0%,#b39c72 44%,#7a674a 74%,#3b3124 100%)',
     stops: [[0.00, '#d8c49c'], [0.44, '#b39c72'], [0.74, '#7a674a'], [1.00, '#3b3124']],
-    key: [0.44, 0.78, 0.64, '255,238,200', 0.24], shadow: 0.44, vignette: 0.44,
+    key: [0.44, 0.78, 0.64, '255,238,200', 0.24], vignette: 0.44,
   },
   midnight: { // deep blue, dark enough for the flame but not black
     swatch: 'linear-gradient(180deg,#33405c 0%,#1b2337 42%,#0c1019 74%,#04060b 100%)',
     stops: [[0.00, '#243352'], [0.42, '#121a2c'], [0.74, '#070b14'], [1.00, '#020308']],
-    key: [0.56, 0.76, 0.52, '150,186,255', 0.22], shadow: 0.46, vignette: 0.62,
+    key: [0.56, 0.76, 0.52, '150,186,255', 0.22], vignette: 0.62,
   },
   oxblood: {  // deep desaturated red: warm, and the only one with any colour in it
     swatch: 'linear-gradient(180deg,#4d2029 0%,#331419 42%,#1b090c 74%,#080304 100%)',
     stops: [[0.00, '#4d2029'], [0.42, '#331419'], [0.74, '#1b090c'], [1.00, '#080304']],
-    key: [0.46, 0.76, 0.62, '255,206,178', 0.26], shadow: 0.46, vignette: 0.56,
+    key: [0.46, 0.76, 0.62, '255,206,178', 0.26], vignette: 0.56,
   },
   noir: {     // near black, one hard key from the side: this is the flame's room
     swatch: 'linear-gradient(180deg,#2f3134 0%,#161719 40%,#08090a 72%,#020203 100%)',
     stops: [[0.00, '#2f3134'], [0.40, '#161719'], [0.72, '#08090a'], [1.00, '#020203']],
-    key: [0.20, 0.72, 0.34, '236,240,248', 0.70], shadow: 0.52, vignette: 0.66,
+    key: [0.20, 0.72, 0.34, '236,240,248', 0.70], vignette: 0.66,
   },
 };
 const BACKDROP_ORDER = Object.keys(BACKDROPS);
@@ -966,7 +1002,7 @@ varying vec2 vUv;
 uniform vec4  uStops[4];   // rgb, and where it sits measured DOWN from the top
 uniform vec4  uKey;        // x, y, size, intensity
 uniform vec3  uKeyC;
-uniform vec4  uFrame;      // vignette, contact shadow, flame level, aspect
+uniform vec4  uFrame;      // vignette, --, flame level, aspect
 uniform float uGrain;
 uniform float uTime;
 
@@ -997,14 +1033,6 @@ void main(){
     float fl = uFrame.z * (0.85 + 0.3*vnz(vec2(uTime*9.0, 3.0)));
     vec2 fd = (vUv - vec2(0.5, 0.60)) * vec2(asp*0.85, 1.0);
     col += vec3(0.85,0.42,0.13) * fl * 0.30 * exp(-dot(fd,fd)*3.4);
-  }
-  // the shadow the lighter drops, at its feet and nowhere else
-  float sh = uFrame.y;
-  if (sh > 0.0) {
-    vec2 s1 = (vUv - vec2(0.5, 0.142)) / vec2(0.33, 0.078);
-    col *= 1.0 - sh * exp(-dot(s1,s1));
-    vec2 s2 = (vUv - vec2(0.5, 0.142)) / vec2(0.62, 0.20);
-    col *= 1.0 - sh * 0.34 * exp(-dot(s2,s2));
   }
   float vg = length((vUv - vec2(0.5,0.5)) * vec2(asp, 1.0));
   col *= 1.0 - uFrame.x * smoothstep(0.10, 0.60, vg*vg*2.4);
@@ -1058,7 +1086,6 @@ function applyBackdrop(name) {
   const rgb = k[3].split(',').map(Number);
   bgUniforms.uKeyC.value.set(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
   bgUniforms.uFrame.value.x = b.vignette === undefined ? 0.55 : b.vignette;
-  bgUniforms.uFrame.value.y = b.shadow === undefined ? 0.40 : b.shadow;
   bgCur = b;
   scene.background = bgRT.texture;
   // Not a flag but a COUNTDOWN. A backdrop that never re-composites on its own
