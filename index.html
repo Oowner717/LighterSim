@@ -916,310 +916,243 @@ const BG_YAW0 = 0.32;      // the camera's resting yaw: scroll is measured from 
    is the one thing that looks the same at every magnification and therefore
    says nothing. Identity lives in SHAPES with edges. */
 
-const SCENE_FOREST = `
-// --- forest in the breeze --------------------------------------------------
-// Four bands of conifers at four depths. What makes this read as a wood rather
-// than as a pattern is the differences BETWEEN bands: the far ones are nearly
-// the colour of the air and barely move when you orbit, the near ones are
-// almost black and sweep past. Each tree bends from its own root on its own
-// phase, because a canopy swaying in unison reads as a flag.
-float treeBand(vec2 p, float seed, float ht0, float wd0, float sway, float t, float aa){
-  float m = 0.0;
-  float xi = floor(p.x);
-  for (int i = -2; i <= 2; i++){
-    float id = xi + float(i);
-    vec2 h = h22(vec2(id, seed));
-    float cx = id + 0.2 + h.x*0.6;
-    float ht = ht0 * (0.72 + h.y*0.52);
-    float wd = wd0 * (0.80 + h.x*0.40);
-    float k = p.y / ht;
-    float bend = sin(t*(0.5 + h.y*0.45) + id*2.3 + seed) * sway * k * k;
-    // Two forms, because a stand of identical triangles is a skyline and not a
-    // wood. A conifer tapers with shallow skirts cut into it; a broadleaf is a
-    // crown on a stem. Chosen per tree off its own hash, blended rather than
-    // branched so the loop stays uniform.
-    float taperC = pow(max(1.0 - k, 0.0), 0.85) * (0.86 + 0.14*fract(k*5.0));
-    float e = 1.0 - pow(clamp(k, 0.0, 1.35)*1.9 - 0.95, 2.0);
-    float taperB = sqrt(max(e, 0.0)) * 0.94;
-    float w = wd * mix(taperB, taperC, step(0.42, h.x));
-    w = max(w, wd*0.085 * step(k, 0.32));       // the stem, under the crown
-    float d = abs(p.x - cx - bend) - w;
-    m = max(m, edge(d, aa) * step(0.0, p.y) * step(p.y, ht));
+const SCENE_SUNSET = `
+// --- layered ridges at sunset ----------------------------------------------
+// Flat vector illustration: no texture, no gradient doing the work, just bands
+// of solid colour with a profile cut into the top of each. Depth is carried
+// entirely by VALUE -- each band steps toward the sky colour as it recedes --
+// which is why it survives any magnification and why it reads instantly.
+float ridge(float x, float f1, float f2, float ph){
+  return vnz(vec2(x*f1 + ph, 1.0))*0.62 + vnz(vec2(x*f2 + ph, 7.0))*0.28
+       + vnz(vec2(x*f2*2.7 + ph, 3.0))*0.10;
+}
+vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
+  // sky: deep at the top, and it does NOT reach white at the horizon -- the sun
+  // is the brightest thing in frame and has to stay that way
+  vec3 col = mix(vec3(0.97,0.45,0.10), vec3(0.34,0.05,0.13), smoothstep(0.34, 1.0, uv.y));
+  col = mix(col, vec3(1.00,0.76,0.26), smoothstep(0.56, 0.32, uv.y));
+  // The sun sits ON the far ridge line, and well off to one side: dead centre
+  // it is behind the lighter and the composition loses the one thing it is
+  // built around.
+  vec2 sp = vec2(0.155 + scr.x*0.030, 0.482);
+  float sd = length((uv - sp)*vec2(asp, 1.0));
+  col += vec3(1.00,0.72,0.26) * 0.42*exp(-sd*5.0);
+  col = mix(col, vec3(1.00,0.96,0.74), edge(sd - 0.072, fwidth(uv.y)*1.1));
+
+  // Five bands. Each one is nearer, darker and rougher than the last; the
+  // amplitudes fall with distance because a far range is a low silhouette.
+  float x0 = (uv.x - 0.5)*asp;
+  float aa = fwidth(uv.y)*1.1;
+  for (int i = 0; i < 5; i++){
+    float f = float(i);
+    float par = 0.020 + f*0.026;                 // nearer bands answer the pan more
+    float x = x0*(1.0 + f*0.55) + scr.x*par + f*8.3;
+    // amplitude FALLS toward the front: the nearest band is a shoulder you are
+    // standing on, not a row of peaks. Growing it made the whole foreground
+    // read as broken rock and buried the conifers in it.
+    float base = 0.500 - f*0.060;
+    float amp  = 0.046 - f*0.007;
+    float hgt  = base + amp*(ridge(x, 1.6 + f*0.9, 4.1 + f*2.2, f*3.7) - 0.5)*2.0;
+    // colour walks from a pale hazy orange at the back to near-black at the front
+    vec3 band = mix(vec3(0.96,0.53,0.16), vec3(0.20,0.035,0.06), pow(f/4.0, 0.80));
+    col = mix(col, band, edge(uv.y - hgt, aa));
   }
+  // conifers along the front band, in the same ink as it
+  // One space for the trees, horizontally: TX. Mixing screen uv and tree units
+  // in the same comparison is what made the first pass draw spikes.
+  // Rooted on the second band, not the front one, and inked darker than either.
+  // Standing on the front band in the front band's own colour they were
+  // invisible -- only the one tree tall enough to break the skyline showed.
+  float TX = x0*15.0 + scr.x*0.16 + 31.0;
+  float ti = floor(TX);
+  float aat = fwidth(TX)*1.2;
+  for (int k = -2; k <= 2; k++){
+    float id = ti + float(k);
+    vec2 h = h22(vec2(id, 5.0));
+    float live = step(h21(vec2(id, 11.0)), 0.66);
+    float cx = id + 0.15 + h.x*0.7;
+    float ht = 0.045 + h.y*0.062;
+    float y = uv.y - 0.259;
+    float k2 = y / ht;
+    float taper = pow(max(1.0 - k2, 0.0), 0.80) * (0.86 + 0.14*fract(k2*5.0));
+    float w = (0.115 + h.x*0.065) * taper;
+    w = max(w, 0.018 * step(k2, 0.26));
+    // the FRONT band's own ink: a treeline is that band's silhouette, so it has
+    // to be dark against the lighter ranges behind it, not a colour of its own
+    col = mix(col, vec3(0.185,0.031,0.056),
+              live * edge(abs(TX - cx) - w, aat) * step(0.0, y) * step(y, ht));
+  }
+  // the ground the lighter stands on
+  col = mix(col, vec3(0.09,0.02,0.05), smoothstep(0.245, 0.235, uv.y));
+  return col;
+}
+`;
+
+const SCENE_NEON = `
+// --- synthwave skyline ------------------------------------------------------
+// Everything here is emissive: the blocks are dark and only their WINDOWS and
+// their edges carry light, which is what separates this from a purple city.
+// The horizon band, the mirrored reflection under it and the perspective floor
+// are the three things that say 'synthwave' rather than 'night'.
+// Returns colour AND coverage. Accumulating into a black vec3 and adding the
+// result meant the dark block faces contributed nothing -- the sky showed
+// straight through them and only the windows survived, as bars hanging in mid
+// air. An opaque thing has to be composited, not summed.
+vec4 blocks(vec2 uv, float horizon, float asp, vec2 scr, float aa){
+  vec3 c = vec3(0.0); float cov = 0.0;
+  for (int L = 0; L < 2; L++){
+    float fl = float(L);
+    float bx = (uv.x - 0.5)*asp*(14.0 - fl*5.0) + scr.x*(0.30 + fl*0.26) + fl*17.0;
+    float bi = floor(bx), bf = fract(bx);
+    float top = horizon + (0.12 + fl*0.11)*(0.30 + 0.70*h21(vec2(bi, 3.0 + fl)));
+    float inB = edge(max(abs(bf - 0.5) - 0.40, uv.y - top), aa) * step(horizon, uv.y);
+    vec3 face = mix(vec3(0.050,0.016,0.100), vec3(0.020,0.007,0.052), fl);
+    // window grid, on the block's own columns: small and dense, some lit
+    vec2 wp = vec2(bx*5.0, uv.y*150.0);
+    vec2 wid = floor(wp), wf = fract(wp);
+    float won = step(h21(wid + 41.0 + fl), 0.34);
+    float wq = edge(max(abs(wf.x - 0.5) - 0.22, abs(wf.y - 0.5) - 0.26), fwidth(wp.y)*0.9);
+    face += mix(vec3(0.30,0.95,1.00), vec3(1.00,0.30,0.86), h21(wid + 77.0))
+          * won * wq * (0.40 + 0.60*h21(wid + 13.0));
+    // the lit edge down the near side and along the cap
+    vec3 rim = h21(vec2(bi, 21.0)) < 0.5 ? vec3(1.00,0.16,0.72) : vec3(0.18,0.92,1.00);
+    face += rim * (edge(abs(bf - 0.11) - 0.010, aa) + edge(abs(uv.y - top) - 0.0035, aa)) * 1.6;
+    c = mix(c, face, inB);
+    cov = max(cov, inB);
+  }
+  return vec4(c, cov);
+}
+vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
+  const float HZ = 0.335;
+  float aa = fwidth(uv.y)*1.1;
+  vec3 col = mix(vec3(0.075,0.020,0.170), vec3(0.020,0.006,0.070), smoothstep(0.34, 1.0, uv.y));
+  // stars, above the skyline only
+  vec2 sp2 = uv*vec2(asp*90.0, 90.0);
+  vec2 sid = floor(sp2);
+  float star = step(h21(sid + 5.0), 0.020) * edge(length(fract(sp2) - 0.5) - 0.16, 0.14);
+  col += vec3(0.85,0.80,1.00) * star * smoothstep(0.52, 0.80, uv.y);
+  // the band the sun would be behind
+  col += vec3(1.00,0.22,0.62) * 0.40*exp(-abs(uv.y - HZ)*13.0);
+  col += vec3(0.30,0.90,1.00) * 0.16*exp(-abs(uv.y - HZ)*4.0);
+
+  // the city, and its reflection: mirrored about the horizon, dimmer, and cut
+  // by scan lines so it reads as a surface rather than as a second skyline
+  vec4 city = blocks(uv, HZ, asp, scr, aa);
+  vec2 mir = vec2(uv.x, HZ - (uv.y - HZ)*0.86);
+  vec4 refl = blocks(mir, HZ, asp, scr, aa);
+  float below = step(uv.y, HZ);
+  float scan = 0.45 + 0.55*step(0.42, fract(uv.y*130.0));
+  col = mix(col, city.rgb, city.a * (1.0 - below));
+  col = mix(col, refl.rgb, refl.a * below * 0.40 * scan * smoothstep(0.0, HZ, uv.y));
+
+  // the floor grid, receding to the horizon
+  float py = HZ - uv.y;
+  if (py > 0.002){
+    float w = 0.055 / py;
+    vec2 gp = vec2((uv.x - 0.5)*asp*w*2.4 + scr.x*0.10, w);
+    vec2 gg = abs(fract(gp) - 0.5);
+    vec2 fw = fwidth(gp)*1.3 + 0.0012;
+    float line = 1.0 - min(smoothstep(0.0, fw.x, gg.x), smoothstep(0.0, fw.y, gg.y));
+    col += vec3(1.00,0.20,0.70) * line * smoothstep(0.0, 0.06, py) * smoothstep(2.2, 0.3, w) * 0.85;
+  }
+  col += vec3(1.00,0.24,0.66) * edge(abs(uv.y - HZ) - 0.0016, aa) * 0.9;
+  return col;
+}
+`;
+
+const SCENE_PIXEL = `
+// --- a platform level, on a real pixel grid --------------------------------
+// The point of this one is that it is PIXEL art, not vector art that happens
+// to look retro: every coordinate is snapped to the grid before anything is
+// drawn, and every edge is a step() rather than a smoothstep. Anti-aliasing
+// here would be exactly wrong -- the staircase IS the style.
+float pxRect(vec2 p, vec2 a, vec2 b){
+  return step(a.x, p.x)*step(p.x, b.x)*step(a.y, p.y)*step(p.y, b.y);
+}
+// the classic rounded clump, used for BOTH the bushes and the clouds -- which
+// is what the original did, and why they read as the same drawing in two hues
+float clump(vec2 p, vec2 o, float s){
+  vec2 q = p - o;
+  float m = pxRect(q, vec2(-30.0*s, 0.0), vec2(30.0*s, 12.0*s));
+  m = max(m, pxRect(q, vec2(-19.0*s, 0.0), vec2(19.0*s, 22.0*s)));
+  m = max(m, pxRect(q, vec2(-8.0*s, 0.0), vec2(8.0*s, 31.0*s)));
   return m;
 }
 vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
-  float g = 0.20;                                   // where the floor is
-  vec3 sky = mix(vec3(0.74,0.79,0.62), vec3(0.24,0.40,0.40), smoothstep(0.05, 0.95, uv.y));
-  vec3 col = sky;
-  // the sun, low and well off to one side, and a long way away -- so it hardly
-  // answers the orbit at all, which is what puts it at a distance
-  vec2 sp = vec2(0.24 - scr.x*0.010, 0.42);
-  float sd = length((uv - sp)*vec2(asp,1.0));
-  col += vec3(1.0,0.93,0.70) * (0.34*exp(-sd*sd*44.0) + 0.20*exp(-sd*2.6));
-  // shafts down through the canopy, breathing slowly
-  float shx = uv.x*3.4 + (1.0-uv.y)*2.2 + scr.x*0.05 + sin(t*0.09)*0.20;
-  float shaft = pow(max(sin(shx*2.2), 0.0), 6.0) * smoothstep(0.12, 0.85, uv.y);
-  col += vec3(0.96,0.99,0.74) * shaft * 0.14 * (0.7 + 0.3*sin(t*0.23));
+  // Pixels down the frame. At 168 the tiles were huge and only a corner of the
+  // level was in shot; at 300 the frame holds about 15 by 19 tiles, which is
+  // very close to what the machines these are drawn from actually showed.
+  const float SC = 300.0;
+  // snap first: everything below works in whole pixels
+  vec2 p = floor(vec2((uv.x - 0.5)*asp + scr.x*0.016, uv.y) * SC);
+  float gy = 32.0;                        // two whole tiles of ground
 
-  // Trees are one world unit apart, so a band's HORIZONTAL SPAN is how many of
-  // them stand in the frame. This is the number the first pass got wrong by an
-  // order of magnitude -- at a span of four you get four trees a hundred pixels
-  // wide each, which reads as a skyline, not a wood.
-  // One scale per band, used on BOTH axes. The first pass scaled x and y
-  // independently, which made a world unit 122px wide and 500px tall, so every
-  // tree came out four times too narrow -- a field of needles. With x already
-  // carrying asp, reusing K on y is exactly what makes a unit square.
-  float px = fwidth(uv.x) * asp;
-  // the far ridge: barely darker than the air it stands in, and overlapping
-  // enough that it reads as one mass with a bumpy top
-  vec2 p1 = vec2((uv.x-0.5)*asp*30.0 + scr.x*0.16, (uv.y-g)*30.0);
-  col = mix(col, mix(sky, vec3(0.33,0.43,0.37), 0.74), treeBand(p1, 3.1, 2.46, 0.56, 0.16, t, px*27.0));
-  vec2 p2 = vec2((uv.x-0.5)*asp*18.0 + scr.x*0.34 + 7.0, (uv.y-g)*18.0);
-  col = mix(col, vec3(0.145,0.240,0.190), treeBand(p2, 8.7, 2.62, 0.50, 0.16, t, px*16.0));
-
-  // birds, between the middle distance and the near trees so they pass behind
-  // something. Two strokes and a flap is all a bird is at this range.
+  vec3 col = vec3(0.361,0.580,0.988);     // the sky, and it is a FLAT fill
+  // hills: a stepped silhouette, two sizes, with the darker shading blocks
   for (int i = 0; i < 3; i++){
     float fi = float(i);
-    float per = 23.0 + fi*11.0;
-    float ph = fract((t + fi*8.5)/per);
-    vec2 bp = vec2(-0.12 + ph*1.30, 0.70 + fi*0.075 + sin(ph*7.0 + fi*2.0)*0.045);
-    vec2 q = (uv - bp)*vec2(asp,1.0)/0.0075;
-    float fl = 0.30 + 0.70*abs(sin(t*(5.0+fi*1.3) + fi*2.0));
-    float d = min(sdSeg(q, vec2(0.0,0.0), vec2(-1.0, fl)), sdSeg(q, vec2(0.0,0.0), vec2(1.0, fl)));
-    col = mix(col, vec3(0.09,0.12,0.10), edge(d - 0.10, 0.13)*0.9);
+    float ox = -96.0 + fi*104.0;
+    float s = (i == 1) ? 1.0 : 0.62;
+    vec2 q = p - vec2(ox, gy);
+    float m = pxRect(q, vec2(-64.0*s, 0.0), vec2(64.0*s, 16.0*s));
+    m = max(m, pxRect(q, vec2(-46.0*s, 0.0), vec2(46.0*s, 32.0*s)));
+    m = max(m, pxRect(q, vec2(-28.0*s, 0.0), vec2(28.0*s, 48.0*s)));
+    m = max(m, pxRect(q, vec2(-10.0*s, 0.0), vec2(10.0*s, 60.0*s)));
+    col = mix(col, vec3(0.000,0.657,0.000), m);
+    // the two dark eyes and the mouth every one of these hills has
+    float e = pxRect(q, vec2(-20.0*s, 12.0*s), vec2(-12.0*s, 22.0*s))
+            + pxRect(q, vec2(10.0*s, 12.0*s), vec2(18.0*s, 22.0*s))
+            + pxRect(q, vec2(-8.0*s, 6.0*s), vec2(6.0*s, 12.0*s));
+    col = mix(col, vec3(0.000,0.420,0.000), min(e, 1.0)*m);
   }
+  // bushes on the ground, clouds in the sky: the same clump, two colours
+  col = mix(col, vec3(0.000,0.657,0.000), clump(p, vec2(44.0, gy), 0.95));
+  col = mix(col, vec3(0.000,0.657,0.000), clump(p, vec2(-118.0, gy), 0.70));
+  col = mix(col, vec3(1.0,1.0,1.0), clump(p, vec2(-92.0, 232.0), 0.80));
+  col = mix(col, vec3(1.0,1.0,1.0), clump(p, vec2(96.0, 258.0), 0.62));
+  col = mix(col, vec3(1.0,1.0,1.0), clump(p, vec2(-8.0, 276.0), 0.52));
 
-  vec2 p3 = vec2((uv.x-0.5)*asp*9.0 + scr.x*0.62 + 19.0, (uv.y-g)*9.0);
-  col = mix(col, vec3(0.062,0.120,0.092), treeBand(p3, 15.3, 2.70, 0.48, 0.17, t, px*8.0));
-
-  // leaves coming down, turning edge-on as they fall
-  vec2 lp = vec2(uv.x*5.0 + scr.x*0.5, uv.y*3.0 - t*0.055);
-  vec2 lid = floor(lp), lf = fract(lp) - 0.5;
-  vec2 lh = h22(lid);
-  float live = step(h21(lid + 19.0), 0.16);
-  float wob = sin(t*1.5 + lh.x*36.0)*0.26;
-  vec2 lq = (lf - (lh-0.5)*0.6 - vec2(wob, 0.0)) * vec2(1.0, 1.0 + 1.6*abs(sin(t*2.2 + lh.y*20.0)));
-  col = mix(col, vec3(0.70,0.50,0.18),
-            live * edge(length(lq) - 0.048, 0.022) * smoothstep(0.16, 0.44, uv.y));
-
-  // the nearest trunks: close enough that you only ever see bark, not a tree
-  vec2 p4 = vec2((uv.x-0.5)*asp*3.0 + scr.x*1.05 + 41.0, uv.y);
-  float xi4 = floor(p4.x);
-  for (int i = -1; i <= 1; i++){
-    float id = xi4 + float(i);
-    vec2 h = h22(vec2(id, 27.0));
-    float live4 = step(h21(vec2(id, 3.0)), 0.45);
-    float cx = id + 0.15 + h.x*0.7;
-    float w = 0.10 + h.y*0.09;
-    float bend = sin(t*0.42 + id*1.7)*0.030*uv.y;
-    float d = abs(p4.x - cx - bend) - w;
-    float m = edge(d, px*3.0) * live4;
-    // bark: a lit side and a dark side, or a near trunk is a black bar
-    float lit = smoothstep(-w, w, p4.x - cx - bend);
-    vec3 bark = mix(vec3(0.020,0.030,0.022), vec3(0.10,0.11,0.075), lit*0.8);
-    bark *= 0.8 + 0.4*vnz(vec2(p4.x*60.0, uv.y*22.0));
-    col = mix(col, bark, m);
+  // a pipe
+  {
+    vec2 q = p - vec2(112.0, gy);
+    float body = pxRect(q, vec2(-14.0, 0.0), vec2(14.0, 40.0));
+    float lip  = pxRect(q, vec2(-19.0, 40.0), vec2(19.0, 54.0));
+    float m = max(body, lip);
+    col = mix(col, vec3(0.000,0.657,0.000), m);
+    col = mix(col, vec3(0.500,0.940,0.500), m*pxRect(q, vec2(-11.0, 0.0), vec2(-6.0, 54.0)));
+    col = mix(col, vec3(0.000,0.420,0.000), m*step(9.0, q.x));
   }
-
-  // the floor, with litter on it. Only a hint: the lighter stands here.
-  // The floor. Its top edge is not straight -- undergrowth breaks it up --
-  // because a ruled horizontal line across the frame is the single strongest
-  // tell that a scene was assembled out of bands.
-  float scrub = 0.012*vnz(vec2(uv.x*asp*26.0 + scr.x*1.05, 3.0))
-              + 0.006*vnz(vec2(uv.x*asp*70.0 + scr.x*1.05, 9.0));
-  float gm = smoothstep(g + scrub + 0.006, g + scrub - 0.006, uv.y);
-  vec3 flr = mix(vec3(0.115,0.108,0.066), vec3(0.030,0.036,0.024), smoothstep(g, 0.0, uv.y));
-  flr *= 0.82 + 0.36*vnz(vec2(uv.x*34.0 + scr.x*0.9, uv.y*44.0));
-  col = mix(col, flr, gm);
-  return col;
-}
-`;
-
-const SCENE_CITY = `
-// --- the city from a high window, at night ---------------------------------
-// A night sky over a city is BRIGHTER than the city: sodium light bounces off
-// the cloud and the blocks sit against it as near-black cutouts. Built the
-// other way round -- walls a few levels off the sky -- the skyline is simply
-// invisible, which is the same mistake that made the old forest's far trunks
-// disappear into the wall behind them.
-vec3 cityAt(vec2 uv, float t, vec2 scr, float asp, float aa){
-  // A night sky over a city is BRIGHTER than the city -- sodium light bounces
-  // off the cloud and the blocks sit against it as near-black cutouts. Built
-  // the other way round, with walls a few levels off the sky, the skyline is
-  // invisible and the glass on top has nothing to refract but a flat field.
-  vec3 col = mix(vec3(0.145,0.120,0.135), vec3(0.010,0.014,0.032), smoothstep(0.06, 0.80, uv.y));
-  col += vec3(0.16,0.10,0.05) * smoothstep(0.44, 0.02, uv.y);
-  for (int L = 0; L < 2; L++){
-    float fl = float(L);
-    float bx = uv.x*asp*(1.5 + fl*1.2) + scr.x*(0.18 + fl*0.16) + fl*13.0;
-    float bi = floor(bx);
-    float roof = (0.32 + fl*0.12) + (0.26 - fl*0.11)*h21(vec2(bi, 3.0 + fl));
-    float wall = smoothstep(roof + 0.002, roof - 0.002, uv.y);
-    vec3 wc = mix(vec3(0.020,0.021,0.034), vec3(0.006,0.007,0.015), fl);
-    wc *= 0.70 + 0.60*h21(vec2(bi, 9.0));
-    col = mix(col, wc, wall);
-    // lit windows on that block's own storey grid. Small: a window is a chip
-    // of light, and at thirty pixels they read as floor tiles.
-    vec2 wp = vec2(bx*(22.0 + fl*14.0), uv.y*(46.0 + fl*22.0));
-    vec2 wid = floor(wp), wf = fract(wp);
-    float won = step(h21(wid + 41.0 + fl), 0.20) * wall;
-    float wq = edge(max(abs(wf.x - 0.5) - 0.17, abs(wf.y - 0.5) - 0.22), aa*(46.0 + fl*22.0)*0.8);
-    vec3 lit = h21(wid + 77.0) < 0.76 ? vec3(1.00,0.78,0.42) : vec3(0.58,0.78,1.00);
-    col += lit * won * wq * (0.18 + 0.42*h21(wid + 13.0)) * (1.0 - fl*0.4);
+  // floating blocks: two question blocks and a run of bricks
+  for (int i = 0; i < 6; i++){
+    float fi = float(i);
+    vec2 o = vec2(-92.0 + fi*16.0, 232.0);
+    vec2 q = p - o;
+    float in16 = pxRect(q, vec2(0.0, 0.0), vec2(15.0, 15.0));
+    float isQ = step(abs(fi - 1.0), 0.5) + step(abs(fi - 4.0), 0.5);
+    // brick: mortar courses, offset every other row
+    // step(7.0, mod(x,16.0)) is true for NINE of sixteen values, not one: the
+    // mortar came out half the wall and the brick read as a checkerboard.
+    float bmY = step(7.0, mod(q.y, 8.0));
+    float bmX = step(15.0, mod(q.x + step(8.0, mod(q.y, 16.0))*8.0, 16.0));
+    vec3 brick = mix(vec3(0.788,0.400,0.078), vec3(0.0,0.0,0.0), max(bmY, bmX)*0.9);
+    // question block: a lit face, a dark border and the mark
+    vec3 qb = vec3(0.906,0.616,0.086);
+    float bord = 1.0 - pxRect(q, vec2(2.0, 2.0), vec2(13.0, 13.0));
+    qb = mix(qb, vec3(0.420,0.196,0.020), bord);
+    float mark = pxRect(q, vec2(6.0, 9.0), vec2(9.0, 11.0))
+               + pxRect(q, vec2(9.0, 7.0), vec2(11.0, 9.0))
+               + pxRect(q, vec2(7.0, 5.0), vec2(9.0, 7.0))
+               + pxRect(q, vec2(7.0, 2.0), vec2(9.0, 3.0));
+    qb = mix(qb, vec3(1.0,1.0,1.0), min(mark, 1.0));
+    col = mix(col, mix(brick, qb, min(isQ, 1.0)), in16);
   }
-  // the street: soft out-of-focus lights, low in frame. The falloff has to do
-  // ALL the masking -- a smoothstep cut across a wide gaussian gave every glow
-  // a ruled horizontal top edge and turned them into rectangles.
-  vec2 bp = vec2(uv.x*asp*1.15 + scr.x*0.30, uv.y*1.15);
-  for (int L = 0; L < 2; L++){
-    float sc = 4.4 + float(L)*4.0;
-    vec2 gp = bp*sc + vec2(float(L)*0.43, float(L)*0.71);
-    vec2 id = floor(gp), f = fract(gp) - 0.5;
-    vec2 hh = h22(id);
-    float live = step(h21(id + 3.0), 0.26);
-    // A glow is evaluated only inside its OWN hash cell, so it gets clipped at
-    // the cell boundary: at r=0.30 the falloff is still 6% there and every
-    // light came out as a hard-edged rectangle. Keeping r well under the
-    // half-cell puts the falloff below a level of 255 before it is cut.
-    float r = 0.07 + 0.11*hh.x*hh.x;
-    float d = length(f - (hh - 0.5)*0.5);
-    float hue = h21(id + 9.0);
-    vec3 tint = hue < 0.50 ? vec3(1.00,0.70,0.32)
-              : (hue < 0.76 ? vec3(0.40,0.64,1.00)
-              : (hue < 0.91 ? vec3(1.00,0.36,0.42) : vec3(0.44,1.00,0.72)));
-    float br = 0.6 + 0.4*sin(t*(0.25 + 0.5*hh.y) + hh.x*20.0);
-    col += tint * live * (0.34 + 0.66*hh.y) * br * exp(-d*d/(r*r))
-         * smoothstep(0.46, 0.04, uv.y) * (1.5 - float(L)*0.5);
+  // the ground: the same brick, all the way across
+  {
+    float on = step(p.y, gy - 1.0);
+    float bmY = step(7.0, mod(p.y, 8.0));
+    float bmX = step(15.0, mod(p.x + step(8.0, mod(p.y, 16.0))*8.0, 16.0));
+    col = mix(col, mix(vec3(0.788,0.400,0.078), vec3(0.0,0.0,0.0), max(bmY, bmX)*0.9), on);
   }
-  return col;
-}
-vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
-  return cityAt(uv, t, scr, asp, fwidth(uv.y));
-}
-`;
-
-const SCENE_ARCADE = `
-// --- a platformer, playing itself ------------------------------------------
-// The level is a FUNCTION OF WORLD X, not a stored thing: which cells are gaps,
-// which carry a coin, where the runner is and whether it is airborne all fall
-// out of the same hash. That is what makes it endless, seekable, and free --
-// and it is why the runner's jumps land: it is not reacting to the terrain, it
-// and the terrain are the same expression.
-//
-// Collection needs no state either. A coin is drawn only while the runner has
-// not reached it, so passing one IS collecting it.
-float aGap(float i){
-  float a = step(h21(vec2(i, 7.0)), 0.24);
-  float b = step(h21(vec2(i - 1.0, 7.0)), 0.24);
-  return a * (1.0 - b);                 // never two in a row: that is unjumpable
-}
-float aCoin(float i){ return step(h21(vec2(i, 19.0)), 0.34) * (1.0 - aGap(i)); }
-float aJump(float wx){
-  float j = 0.0, ci = floor(wx);
-  for (int k = -2; k <= 2; k++){
-    float i = ci + float(k);
-    float u = (wx - (i + 0.5)) / 1.35;
-    j = max(j, aGap(i) * max(0.0, 1.0 - u*u));
-  }
-  return j;
-}
-vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
-  const float K = 26.0;                 // world units across the frame
-  const float G = 0.24;                 // where the ground line sits
-  const float RX = 0.155;               // the runner holds this column
-  float wx = t*4.4 + scr.x*1.9;         // it plays on its own AND answers the orbit
-  // The level is indexed from the CENTRE of the frame, so the runner -- which
-  // holds a column off to the left -- stands at a different world x from the
-  // one the scroll names. Using wx for the jumps and the collecting had it
-  // leaping over solid ground and eating coins three units early.
-  float rwx = wx + (RX - 0.5)*asp*K;
-  float px = fwidth(uv.x)*asp*K*0.9;
-
-  // dusk, because the whole thing is silhouette and silhouette needs a bright sky
-  vec3 col = mix(vec3(0.98,0.60,0.26), vec3(0.10,0.05,0.19), smoothstep(0.14, 0.92, uv.y));
-  col = mix(col, vec3(1.00,0.86,0.48), smoothstep(0.40, 0.16, uv.y));
-  vec2 sp = vec2(0.74 - scr.x*0.006, 0.36);
-  float sd = length((uv - sp)*vec2(asp,1.0));
-  col += vec3(1.0,0.62,0.26) * 0.34*exp(-sd*4.2);
-  col = mix(col, vec3(1.0,0.94,0.68), edge(sd - 0.062, fwidth(uv.y)*1.2));
-
-  // two ridges behind, at their own rates
-  for (int L = 0; L < 2; L++){
-    float fl = float(L);
-    float hx = (uv.x - 0.5)*asp*(6.0 - fl*2.4) + wx*(0.05 + fl*0.07) + fl*11.0;
-    float hy = (0.30 + fl*0.05)
-             + (0.10 - fl*0.03)*vnz(vec2(hx*0.55, 2.0))
-             + (0.04 - fl*0.01)*vnz(vec2(hx*1.7, 8.0));
-    col = mix(col, mix(vec3(0.30,0.12,0.30), vec3(0.15,0.06,0.21), fl),
-              smoothstep(hy + 0.004, hy - 0.004, uv.y));
-  }
-
-  // --- the level ---
-  vec2 p = vec2((uv.x - 0.5)*asp*K + wx, (uv.y - G)*K);
-  float ci = floor(p.x);
-  vec3 ink = vec3(0.045,0.020,0.070);
-
-  // ground, cell by cell, with the gaps missing
-  float ground = 0.0, plat = 0.0;
-  for (int k = -1; k <= 1; k++){
-    float i = ci + float(k);
-    float solid = 1.0 - aGap(i);
-    // overlap by one pixel: two cells anti-aliased to their exact shared
-    // boundary leave a lighter seam between them, and a run of those reads as
-    // a picket fence rather than as ground
-    float inCell = edge(abs(p.x - i - 0.5) - (0.5 + px), px);
-    ground = max(ground, solid * inCell * edge(p.y, px));
-    // a ledge above, every so often, to give the eye somewhere else to go
-    float pl = step(h21(vec2(i, 31.0)), 0.16) * solid;
-    float pd = max(abs(p.x - i - 0.5) - 1.0, abs(p.y - 2.9) - 0.16);
-    plat = max(plat, pl * edge(pd, px));
-  }
-  col = mix(col, ink*1.5, plat);
-  col = mix(col, ink, ground);
-  // a lit rim on the ground, or the silhouette has no top edge
-  col = mix(col, vec3(0.86,0.44,0.34), ground * edge(abs(p.y + 0.055) - 0.055, px));
-
-  // coins, spinning, and gone the moment the runner is level with them
-  for (int k = -1; k <= 4; k++){
-    float i = ci + float(k);
-    float live = aCoin(i) * step(rwx, i + 0.45);
-    float cy = 2.0 + 0.16*sin(t*2.2 + i);
-    vec2 cq = vec2(p.x - i - 0.5, p.y - cy);
-    float w = 0.10 + 0.20*abs(cos(t*3.0 + i*1.7));
-    float cd = length(cq / vec2(w, 0.30)) - 1.0;
-    col = mix(col, vec3(1.00,0.82,0.26), live * edge(cd*w, px));
-    col += vec3(1.00,0.66,0.18) * live * 0.30 * exp(-dot(cq,cq)*7.0);
-  }
-
-  // --- the runner ---
-  float j = aJump(rwx);
-  float ry = j*2.0;                      // world units off the ground
-  vec2 r = vec2((uv.x - RX)*asp*K, (uv.y - G)*K - ry);
-  float run = rwx*3.4;
-  float air = step(0.02, j);
-  // legs: scissoring on the ground, tucked in the air
-  float la = mix(sin(run), 0.55, air), lb = mix(sin(run + 3.14159), 0.15, air);
-  float legY = mix(0.0, 0.30, air);
-  float d = min(sdSeg(r, vec2(0.0, 0.50), vec2(la*0.34, legY)),
-                sdSeg(r, vec2(0.0, 0.50), vec2(lb*0.34, legY)));
-  d = min(d, sdSeg(r, vec2(0.0, 0.48), vec2(0.0, 1.05)));            // body
-  // arms swing opposite the legs
-  d = min(d, sdSeg(r, vec2(0.0, 0.98), vec2(-la*0.30, mix(0.62, 1.20, air))));
-  d = min(d, sdSeg(r, vec2(0.0, 0.98), vec2(-lb*0.30, mix(0.62, 1.20, air))));
-  d = min(d, length(r - vec2(0.03, 1.30)) - 0.20);                    // head
-  float body = edge(d - 0.085, px);
-  col = mix(col, ink*0.55, body);
-  col = mix(col, vec3(0.94,0.56,0.34), body * edge(abs(r.x + 0.12) - 0.045, px*1.6));
-
-  // dust off the heels, only while running
-  vec2 dq = vec2(r.x + 0.45 + fract(run*0.5)*0.5, r.y - 0.12);
-  col = mix(col, vec3(0.55,0.32,0.40),
-            (1.0 - air) * edge(length(dq) - 0.09, 0.05) * (1.0 - fract(run*0.5)) * 0.6);
-
-  // the ground the LIGHTER stands on is nearer than any of it
-  col = mix(col, ink*0.35, smoothstep(0.085, 0.055, uv.y));
   return col;
 }
 `;
@@ -1253,17 +1186,17 @@ const BACKDROPS = {
     key: [0.56, 0.78, 0.66, '176,206,255', 0.30],
     shadow: 0.46, vignette: 0.58,
   },
-  forest: {
-    swatch: 'linear-gradient(180deg,#8fb27a 0%,#3d6a52 38%,#16281c 72%,#0a1008 100%)',
-    scene: SCENE_FOREST, shadow: 0.34, vignette: 0.46,
+  sunset: {
+    swatch: 'linear-gradient(180deg,#ff9e2a 0%,#e8541f 38%,#8d1a2c 70%,#180209 100%)',
+    scene: SCENE_SUNSET, shadow: 0.34, vignette: 0.44,
   },
-  city: {
-    swatch: 'radial-gradient(circle at 30% 62%, #ffb45a 0 7%, #24304c 38%, #05070d 80%)',
-    scene: SCENE_CITY, shadow: 0.28, vignette: 0.60,
+  neon: {
+    swatch: 'linear-gradient(180deg,#1a0640 0%,#5a1580 42%,#ff2fa0 62%,#12042e 100%)',
+    scene: SCENE_NEON, shadow: 0.30, vignette: 0.52,
   },
-  arcade: {
-    swatch: 'linear-gradient(180deg,#f6b954 0%,#e0653f 44%,#4a2350 74%,#0d0512 100%)',
-    scene: SCENE_ARCADE, shadow: 0.30, vignette: 0.44,
+  pixel: {
+    swatch: 'linear-gradient(180deg,#5c94fc 0%,#5c94fc 62%,#00a800 62%,#c96608 78%,#c96608 100%)',
+    scene: SCENE_PIXEL, shadow: 0.26, vignette: 0.30,
   },
 };
 const BACKDROP_ORDER = Object.keys(BACKDROPS);
@@ -1444,9 +1377,11 @@ function applyBackdrop(name) {
   bgUniforms.uKeyC.value.set(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
   bgUniforms.uFrame.value.x = b.vignette === undefined ? 0.55 : b.vignette;
   bgUniforms.uFrame.value.y = b.shadow === undefined ? 0.40 : b.shadow;
-  // A plain wall is a still image the moment the camera stops; a scene never
-  // is. That single flag is what decides whether the compositor runs at rest.
-  b.animated = !!b.scene;
+  // Nothing is time-driven any more: the backdrops are compositions held still,
+  // so every one of them -- wall or scene -- is a finished image once the pan
+  // has come home. The pan's own easing is picked up by the `moved` test in
+  // renderBackdrop, so a resting frame re-composites NOTHING at all.
+  b.animated = false;
   bgCur = b;
   scene.background = bgRT.texture;
   // Not a flag: a COUNTDOWN. A scene stops re-compositing once the idle clock
@@ -1490,21 +1425,47 @@ function bgTick(dt) {
   bgLife = clamp01(1 - (idleT - 3) / 2);
   bgClock += dt * bgLife;
   bgUniforms.uLife.value = bgLife;
+  // A finger on the glass is what holds the pan out; dragging the lid counts,
+  // because that is input too. Out fast enough to feel connected to the drag,
+  // home slower so the return reads as the frame settling rather than snapping.
+  const hold = pointers.size > 0 || sim.lid.dragging;
+  const want = hold ? clamp((cam.yaw - BG_YAW0) * BG_PAN_K, -BG_PAN_LIM, BG_PAN_LIM) : 0;
+  const wantY = hold ? clamp(-Math.sin(cam.pitch) * 0.42, -0.22, 0.22) : 0;
+  const k = 1 - Math.exp(-dt * (hold ? 11 : 4.5));
+  bgPan += (want - bgPan) * k;
+  bgPanY += (wantY - bgPanY) * k;
+  // An exponential ease is asymptotic: it would creep toward the resting
+  // composition forever and never arrive, and a frame that never arrives never
+  // stops re-compositing. Below a fifth of a percent of the limit there is
+  // nothing left to see, so it is put home exactly.
+  if (!hold) {
+    if (Math.abs(bgPan) < 0.004) bgPan = 0;
+    if (Math.abs(bgPanY) < 0.004) bgPanY = 0;
+  }
 }
 // How far a scene scrolls per radian of orbit. The frame spans roughly three
 // world units at the nearest band, so at 3.0 with a 0.6 parallax the near
 // trees track at a bit over half the camera's own rate: enough to read as
 // walking past them, not so much that they whip.
-const BG_SCROLL = 3.0;
+// The backdrops are COMPOSITIONS -- a sun in a particular place, a skyline, a
+// level screen -- so the frame cannot be allowed to wander off them. The pan
+// follows the orbit only while there is a finger down, only as far as this
+// clamp, and eases back to the resting composition the moment you let go.
+const BG_PAN_K = 1.10;      // scene units per radian of orbit
+const BG_PAN_LIM = 0.62;    // and never further than this, in scene units
+let bgPan = 0, bgPanY = 0;
 function renderBackdrop(tSec) {
   if (!scene.background || !bgCur) return;
-  const moved = Math.abs(cam.yaw - bgLastYaw) > 1e-4 || Math.abs(cam.pitch - bgLastPitch) > 1e-4
+  // Watch the PAN, not the yaw: the pan keeps easing home after the orbit has
+  // stopped, and a frame that stopped compositing then would freeze the
+  // backdrop mid-return.
+  const moved = Math.abs(bgPan - bgLastYaw) > 2e-5 || Math.abs(bgPanY - bgLastPitch) > 2e-5
     || Math.abs(smoothFlameLevel - bgLastFlame) > 2e-3;
   if (!moved && bgHot <= 0 && !(bgCur.animated && bgLife > 0)) return;
-  bgLastYaw = cam.yaw; bgLastPitch = cam.pitch; bgLastFlame = smoothFlameLevel;
+  bgLastYaw = bgPan; bgLastPitch = bgPanY; bgLastFlame = smoothFlameLevel;
   if (bgHot > 0) bgHot--;
   if (bgSizeDirty) bgResize();
-  bgUniforms.uCam.value.set((cam.yaw - BG_YAW0) * BG_SCROLL, Math.sin(cam.pitch) * 0.32, bgClock);
+  bgUniforms.uCam.value.set(bgPan, bgPanY, bgClock);
   bgUniforms.uFrame.value.z = smoothFlameLevel;
   const prev = renderer.getRenderTarget();
   renderer.setRenderTarget(bgRT);
@@ -1518,8 +1479,9 @@ function renderBackdrop(tSec) {
 function updateBackdropMotion(tSec) {
   const bg = scene.background;
   if (!bg || !bg.isTexture) return;
-  const dx = clamp((cam.yaw - BG_YAW0) * 0.7, -1, 1);
-  const dy = clamp(-Math.sin(cam.pitch) * 0.8 + Math.sin(tSec * 0.031 + 2.1) * 0.06, -1, 1);
+  // the crop rides the same clamped pan, so the whole frame comes home together
+  const dx = clamp(bgPan / BG_PAN_LIM, -1, 1);
+  const dy = clamp(bgPanY / 0.22, -1, 1);
   bg.repeat.set(1 - BG_MARGIN * 2, 1 - BG_MARGIN * 2);
   bg.offset.set(BG_MARGIN * (1 + dx), BG_MARGIN * (1 + dy));
   bgUniforms.uCrop.value.set(bg.offset.x, bg.offset.y, bg.repeat.x, bg.repeat.y);
@@ -7352,6 +7314,10 @@ window.LIGHTER = {
   get finishNames() { return FINISH_ORDER.slice(); },
   get backdropNames() { return BACKDROP_ORDER.slice(); },
   bgU: bgUniforms, bgRT, BACKDROPS, renderBackdrop, bgScene, bgCam,
+  // the clamped pan, so the suite can prove it tracks input, stops at the
+  // limit, and comes home when the input stops
+  get bgPan() { return bgPan; }, get bgPanY() { return bgPanY; },
+  get bgPanLimit() { return BG_PAN_LIM; },
   get finishCount() { return FINISH_ORDER.length; },
   get flameCount() { return FLAME_ORDER.length; },
   get backdropCount() { return BACKDROP_ORDER.length; },

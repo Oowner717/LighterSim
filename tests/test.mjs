@@ -692,8 +692,8 @@ await settleLid(false);
   check('the picked swatch is the marked one',
     await L('document.querySelector("#swCase .sw.on span").textContent') === 'crimson');
 
-  await pick('swBack', 'forest');
-  check('picking a backdrop applies it', await L('LIGHTER.backdrop') === 'forest');
+  await pick('swBack', 'sunset');
+  check('picking a backdrop applies it', await L('LIGHTER.backdrop') === 'sunset');
   check('the backdrop is a live texture', await L('!!LIGHTER.scene.background') === true);
 
   await pick('swFlame', 'sunset');                       // a two-hue combination
@@ -1256,14 +1256,38 @@ check('no brand names anywhere user-visible', await L(
   check('there are exactly four plain walls', plain.length === 4, plain.join(','));
   check('and at least one scene', scenes.length >= 1, scenes.join(','));
 
-  // The claim under test, on pixels: hold the camera dead still, composite
-  // twice, and see whether the frame changed. A scene must move on its own or
-  // it is a static texture with extra steps -- which is exactly the complaint
-  // this whole rebuild answers. A plain wall must NOT, or the compositor runs
-  // all night on a phone left awake.
-  const twice = n => L(`(async () => {
+  // The backdrops are COMPOSITIONS -- a sun in a particular place, a skyline, a
+  // level screen -- so the frame must not be able to wander off them. Three
+  // things have to hold: the pan answers input, it stops at a hard limit no
+  // matter how far you keep turning, and it comes home when you let go.
+  const panAt = (yaw, hold) => L(`(async () => {
+    LIGHTER.sim.lid.dragging = ${hold};
+    LIGHTER.cam.yaw = ${yaw}; LIGHTER.cam.yawVel = 0;
+    const f0 = LIGHTER.frames;
+    await new Promise(r => { const w = () =>
+      (LIGHTER.frames - f0 > 34) ? r() : requestAnimationFrame(w); w(); });
+    return LIGHTER.bgPan;
+  })()`);
+  const lim = await L('LIGHTER.bgPanLimit');
+  const near = await panAt(0.32 + 0.15, true);
+  const far = await panAt(0.32 + 3.0, true);
+  const back = await panAt(0.32 - 3.0, true);
+  check('the pan answers the orbit while a finger is down',
+    Math.abs(near) > 0.02, `pan ${near.toFixed(3)} at 0.15 rad`);
+  check('and stops dead at its limit however far you keep turning',
+    Math.abs(far - lim) < 1e-3 && Math.abs(back + lim) < 1e-3,
+    `+3rad -> ${far.toFixed(3)}, -3rad -> ${back.toFixed(3)}, limit ${lim}`);
+  const released = await panAt(0.32 + 3.0, false);
+  check('and comes home the moment the input stops',
+    Math.abs(released) < 0.02, `pan ${released.toFixed(3)} after release`);
+  await L('(LIGHTER.cam.yaw = 0.32, 0)');
+
+  // Nothing is time-driven now, so a resting frame must re-composite NOTHING:
+  // that is the whole battery guarantee, and it applies to scenes as well as
+  // walls. Measured on the render target with the camera pinned.
+  const stillness = n => L(`(async () => {
     LIGHTER.setBackdrop(${JSON.stringify('N')}.replace('N', ${JSON.stringify(n)}));
-    LIGHTER.sim.lid.dragging = true;                 // pin the camera
+    LIGHTER.sim.lid.dragging = false;
     LIGHTER.cam.yaw = 0.32; LIGHTER.cam.yawVel = 0;
     LIGHTER.cam.pitch = 0; LIGHTER.cam.pitchVel = 0;
     const grab = () => {
@@ -1271,25 +1295,19 @@ check('no brand names anywhere user-visible', await L(
       LIGHTER.renderer.readRenderTargetPixels(r, 0, 0, r.width, r.height, buf);
       return buf;
     };
-    const f0 = LIGHTER.frames;
-    await new Promise(r => { const w = () =>
-      (LIGHTER.frames - f0 > 4) ? r() : requestAnimationFrame(w); w(); });
-    const a = grab();
-    const f1 = LIGHTER.frames;
-    await new Promise(r => { const w = () =>
-      (LIGHTER.frames - f1 > 30) ? r() : requestAnimationFrame(w); w(); });
-    const b = grab();
+    const wait = k => new Promise(r => { const f0 = LIGHTER.frames;
+      const w = () => (LIGHTER.frames - f0 > k) ? r() : requestAnimationFrame(w); w(); });
+    await wait(20); const a = grab(); await wait(20); const b = grab();
     let d = 0;
     for (let i = 0; i < a.length; i += 4) d += Math.abs(a[i] - b[i]);
-    LIGHTER.sim.lid.dragging = false;
     return d / (a.length / 4);
   })()`);
-  const movedScene = await twice(scenes[0]);
-  const movedPlain = await twice(plain[0]);
-  check(`a scene keeps moving with the camera held still (${scenes[0]})`,
-    movedScene > 0.5, `mean channel delta ${movedScene.toFixed(3)}`);
-  check(`and a plain wall does not (${plain[0]})`,
-    movedPlain < 0.05, `mean channel delta ${movedPlain.toFixed(3)}`);
+  const sceneStill = await stillness(scenes[0]);
+  const wallStill = await stillness(plain[0]);
+  check(`a scene at rest is a finished image (${scenes[0]})`,
+    sceneStill < 0.05, `mean channel delta ${sceneStill.toFixed(3)}`);
+  check(`and so is a plain wall (${plain[0]})`,
+    wallStill < 0.05, `mean channel delta ${wallStill.toFixed(3)}`);
   await L('LIGHTER.setBackdrop("midnight")');
 }
 // A duplicate key in an object literal is silent: the later one wins and the
