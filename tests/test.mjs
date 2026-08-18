@@ -692,8 +692,8 @@ await settleLid(false);
   check('the picked swatch is the marked one',
     await L('document.querySelector("#swCase .sw.on span").textContent') === 'crimson');
 
-  await pick('swBack', 'sunset');
-  check('picking a backdrop applies it', await L('LIGHTER.backdrop') === 'sunset');
+  await pick('swBack', 'noir');
+  check('picking a backdrop applies it', await L('LIGHTER.backdrop') === 'noir');
   check('the backdrop is a live texture', await L('!!LIGHTER.scene.background') === true);
 
   await pick('swFlame', 'sunset');                       // a two-hue combination
@@ -1194,29 +1194,6 @@ check('no brand names anywhere user-visible', await L(
     dirty.length === 0,
     dirty.length ? `crosses the skin at ${dirty.length} angles (${dirty[0].toFixed(2)}..${dirty[dirty.length - 1].toFixed(2)})` : '');
 }
-// The backdrop is a place the lighter stands in, not wallpaper on the lens: it
-// has to slide against the orbit. Checked on the texture transform and then on
-// actual pixels in a strip of frame the lighter never reaches.
-{
-  const at = y => L(`(async () => {
-    LIGHTER.sim.lid.dragging = true;
-    LIGHTER.cam.yaw = ${y}; LIGHTER.cam.yawVel = 0;
-    const f0 = LIGHTER.frames;
-    await new Promise(r => { const t = () =>
-      (LIGHTER.frames - f0 >= 3) ? r() : requestAnimationFrame(t); t(); });
-    const b = LIGHTER.scene.background;
-    return { x: b.offset.x, rep: b.repeat.x };
-  })()`);
-  const a = await at(-1.0), b = await at(0.32), c = await at(1.6);
-  check('the backdrop slides against the orbit',
-    a.x < b.x - 0.01 && b.x < c.x - 0.01,
-    `offset ${a.x.toFixed(3)} / ${b.x.toFixed(3)} / ${c.x.toFixed(3)}`);
-  // and it must never pan past its own margin, or the clamped edge pixels smear
-  check('and never pans past the image it has to spare',
-    a.x >= 0 && c.x + c.rep <= 1.0001,
-    `offset ${a.x.toFixed(3)}..${c.x.toFixed(3)} with repeat ${c.rep.toFixed(3)}`);
-  await L('(LIGHTER.cam.yaw = 0.32, LIGHTER.sim.lid.dragging = false, 0)');
-}
 // The worker's cache is named after BUILD, so bumping it is the only thing that
 // evicts the previous deploy. It was the constant 'lighter-v1' for the app's
 // whole life, which made activate's purge a no-op on every release -- a stale
@@ -1240,56 +1217,22 @@ check('no brand names anywhere user-visible', await L(
   check('the page reports the build it is running',
     await L('window.__BUILD') === swB, `page says ${await L('window.__BUILD')}`);
 }
-// Every backdrop is one of exactly two kinds and the difference is not
-// cosmetic: a plain wall is a still image the moment the camera stops and must
-// re-composite NOTHING, which is the whole battery guarantee; a scene is never
-// still. An entry that declares neither renders as the fallback ramp and looks
-// like a bug nobody filed.
+// Every backdrop is a plain wall: four colour stops and a key. There are no
+// scenes any more, nothing is time-driven, and nothing pans -- so a resting
+// frame must re-composite NOTHING at all, which is the whole battery
+// guarantee. Both halves are checked here: the shape of the data, and then
+// the actual pixels with the camera left alone.
 {
-  const kinds = await L(`Object.entries(LIGHTER.BACKDROPS).map(([k, b]) =>
-    [k, !!b.scene, !!(b.stops && b.stops.length === 4)])`);
-  const bad = kinds.filter(([, sc, st]) => sc === st).map(([k]) => k);
-  check('every backdrop is either a painted scene or a plain wall, not both or neither',
-    bad.length === 0, bad.join(','));
-  const plain = kinds.filter(([, sc]) => !sc).map(([k]) => k);
-  const scenes = kinds.filter(([, sc]) => sc).map(([k]) => k);
-  check('there are exactly four plain walls', plain.length === 4, plain.join(','));
-  check('and at least one scene', scenes.length >= 1, scenes.join(','));
+  const bad = await L(`Object.entries(LIGHTER.BACKDROPS)
+    .filter(([, b]) => !(b.stops && b.stops.length === 4 && b.key && b.key.length === 5))
+    .map(([k]) => k)`);
+  check('every backdrop is four stops and a key', bad.length === 0, bad.join(','));
+  const moving = await L(`Object.entries(LIGHTER.BACKDROPS)
+    .filter(([, b]) => b.scene || b.animated || b.drift || b.flicker).map(([k]) => k)`);
+  check('and none of them declares anything that moves', moving.length === 0, moving.join(','));
 
-  // The backdrops are COMPOSITIONS -- a sun in a particular place, a skyline, a
-  // level screen -- so the frame must not be able to wander off them. Three
-  // things have to hold: the pan answers input, it stops at a hard limit no
-  // matter how far you keep turning, and it comes home when you let go.
-  const panAt = (yaw, hold) => L(`(async () => {
-    LIGHTER.sim.lid.dragging = ${hold};
-    LIGHTER.cam.yaw = ${yaw}; LIGHTER.cam.yawVel = 0;
-    const f0 = LIGHTER.frames;
-    await new Promise(r => { const w = () =>
-      (LIGHTER.frames - f0 > 34) ? r() : requestAnimationFrame(w); w(); });
-    return LIGHTER.bgPan;
-  })()`);
-  const lim = await L('LIGHTER.bgPanLimit');
-  const near = await panAt(0.32 + 0.15, true);
-  const far = await panAt(0.32 + 3.0, true);
-  const back = await panAt(0.32 - 3.0, true);
-  check('the pan answers the orbit while a finger is down',
-    Math.abs(near) > 0.02, `pan ${near.toFixed(3)} at 0.15 rad`);
-  check('and stops dead at its limit however far you keep turning',
-    Math.abs(far - lim) < 1e-3 && Math.abs(back + lim) < 1e-3,
-    `+3rad -> ${far.toFixed(3)}, -3rad -> ${back.toFixed(3)}, limit ${lim}`);
-  const released = await panAt(0.32 + 3.0, false);
-  check('and comes home the moment the input stops',
-    Math.abs(released) < 0.02, `pan ${released.toFixed(3)} after release`);
-  await L('(LIGHTER.cam.yaw = 0.32, 0)');
-
-  // Nothing is time-driven now, so a resting frame must re-composite NOTHING:
-  // that is the whole battery guarantee, and it applies to scenes as well as
-  // walls. Measured on the render target with the camera pinned.
   const stillness = n => L(`(async () => {
     LIGHTER.setBackdrop(${JSON.stringify('N')}.replace('N', ${JSON.stringify(n)}));
-    LIGHTER.sim.lid.dragging = false;
-    LIGHTER.cam.yaw = 0.32; LIGHTER.cam.yawVel = 0;
-    LIGHTER.cam.pitch = 0; LIGHTER.cam.pitchVel = 0;
     const grab = () => {
       const r = LIGHTER.bgRT, buf = new Uint8Array(r.width * r.height * 4);
       LIGHTER.renderer.readRenderTargetPixels(r, 0, 0, r.width, r.height, buf);
@@ -1297,18 +1240,15 @@ check('no brand names anywhere user-visible', await L(
     };
     const wait = k => new Promise(r => { const f0 = LIGHTER.frames;
       const w = () => (LIGHTER.frames - f0 > k) ? r() : requestAnimationFrame(w); w(); });
-    await wait(20); const a = grab(); await wait(20); const b = grab();
+    await wait(20); const a = grab(); await wait(25); const b = grab();
     let d = 0;
     for (let i = 0; i < a.length; i += 4) d += Math.abs(a[i] - b[i]);
     return d / (a.length / 4);
   })()`);
-  const sceneStill = await stillness(scenes[0]);
-  const wallStill = await stillness(plain[0]);
-  check(`a scene at rest is a finished image (${scenes[0]})`,
-    sceneStill < 0.05, `mean channel delta ${sceneStill.toFixed(3)}`);
-  check(`and so is a plain wall (${plain[0]})`,
-    wallStill < 0.05, `mean channel delta ${wallStill.toFixed(3)}`);
-  await L('LIGHTER.setBackdrop("midnight")');
+  const s1 = await stillness('studio'), s2 = await stillness('noir');
+  check('an unlit backdrop is a finished image and re-composites nothing',
+    s1 < 0.02 && s2 < 0.02, `studio ${s1.toFixed(3)}, noir ${s2.toFixed(3)}`);
+  await L('LIGHTER.setBackdrop("studio")');
 }
 // A duplicate key in an object literal is silent: the later one wins and the
 // earlier is dead code that reads as live. This has bitten twice -- a swatch

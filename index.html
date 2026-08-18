@@ -484,7 +484,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18b';
+  window.__BUILD = '2026-08-18c';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -896,421 +896,126 @@ function radialCanvas(size, stops, inner = 0) {
 //
 // The composite lands in a render target and THAT is scene.background, so the
 // rest of the app is unchanged: still one texture, still one background draw.
-// How far the backdrop may slide, as a fraction of the frame. The composite is
-// shown at 1/(1 + 2*MARGIN) scale so there is always this much image parked off
-// each edge to pan into.
-const BG_MARGIN = 0.085;
-const BG_YAW0 = 0.32;      // the camera's resting yaw: scroll is measured from it
-
-/* ---- the scenes ----------------------------------------------------------
-   Each is a GLSL function of the form
-
-     vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp)
-
-   uv is the frame (0..1, y up), t is the ambient clock -- which STOPS when the
-   sim goes idle, so nothing here keeps a phone awake -- scr.x is how far the
-   orbit has scrolled the world in scene units, and asp corrects for the shape
-   of the frame so nothing goes oval on a wide screen.
-
-   The rule the old backdrops broke: no smooth ramps carrying identity. A ramp
-   is the one thing that looks the same at every magnification and therefore
-   says nothing. Identity lives in SHAPES with edges. */
-
-const SCENE_SUNSET = `
-// --- layered ridges at sunset ----------------------------------------------
-// Flat vector illustration: no texture, no gradient doing the work, just bands
-// of solid colour with a profile cut into the top of each. Depth is carried
-// entirely by VALUE -- each band steps toward the sky colour as it recedes --
-// which is why it survives any magnification and why it reads instantly.
-float ridge(float x, float f1, float f2, float ph){
-  return vnz(vec2(x*f1 + ph, 1.0))*0.62 + vnz(vec2(x*f2 + ph, 7.0))*0.28
-       + vnz(vec2(x*f2*2.7 + ph, 3.0))*0.10;
-}
-vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
-  // sky: deep at the top, and it does NOT reach white at the horizon -- the sun
-  // is the brightest thing in frame and has to stay that way
-  vec3 col = mix(vec3(0.97,0.45,0.10), vec3(0.34,0.05,0.13), smoothstep(0.34, 1.0, uv.y));
-  col = mix(col, vec3(1.00,0.76,0.26), smoothstep(0.56, 0.32, uv.y));
-  // The sun sits ON the far ridge line, and well off to one side: dead centre
-  // it is behind the lighter and the composition loses the one thing it is
-  // built around.
-  vec2 sp = vec2(0.155 + scr.x*0.030, 0.482);
-  float sd = length((uv - sp)*vec2(asp, 1.0));
-  col += vec3(1.00,0.72,0.26) * 0.42*exp(-sd*5.0);
-  col = mix(col, vec3(1.00,0.96,0.74), edge(sd - 0.072, fwidth(uv.y)*1.1));
-
-  // Five bands. Each one is nearer, darker and rougher than the last; the
-  // amplitudes fall with distance because a far range is a low silhouette.
-  float x0 = (uv.x - 0.5)*asp;
-  float aa = fwidth(uv.y)*1.1;
-  for (int i = 0; i < 5; i++){
-    float f = float(i);
-    float par = 0.020 + f*0.026;                 // nearer bands answer the pan more
-    float x = x0*(1.0 + f*0.55) + scr.x*par + f*8.3;
-    // amplitude FALLS toward the front: the nearest band is a shoulder you are
-    // standing on, not a row of peaks. Growing it made the whole foreground
-    // read as broken rock and buried the conifers in it.
-    float base = 0.500 - f*0.060;
-    float amp  = 0.046 - f*0.007;
-    float hgt  = base + amp*(ridge(x, 1.6 + f*0.9, 4.1 + f*2.2, f*3.7) - 0.5)*2.0;
-    // colour walks from a pale hazy orange at the back to near-black at the front
-    vec3 band = mix(vec3(0.96,0.53,0.16), vec3(0.20,0.035,0.06), pow(f/4.0, 0.80));
-    col = mix(col, band, edge(uv.y - hgt, aa));
-  }
-  // conifers along the front band, in the same ink as it
-  // One space for the trees, horizontally: TX. Mixing screen uv and tree units
-  // in the same comparison is what made the first pass draw spikes.
-  // Rooted on the second band, not the front one, and inked darker than either.
-  // Standing on the front band in the front band's own colour they were
-  // invisible -- only the one tree tall enough to break the skyline showed.
-  float TX = x0*15.0 + scr.x*0.16 + 31.0;
-  float ti = floor(TX);
-  float aat = fwidth(TX)*1.2;
-  for (int k = -2; k <= 2; k++){
-    float id = ti + float(k);
-    vec2 h = h22(vec2(id, 5.0));
-    float live = step(h21(vec2(id, 11.0)), 0.66);
-    float cx = id + 0.15 + h.x*0.7;
-    float ht = 0.045 + h.y*0.062;
-    float y = uv.y - 0.259;
-    float k2 = y / ht;
-    float taper = pow(max(1.0 - k2, 0.0), 0.80) * (0.86 + 0.14*fract(k2*5.0));
-    float w = (0.115 + h.x*0.065) * taper;
-    w = max(w, 0.018 * step(k2, 0.26));
-    // the FRONT band's own ink: a treeline is that band's silhouette, so it has
-    // to be dark against the lighter ranges behind it, not a colour of its own
-    col = mix(col, vec3(0.185,0.031,0.056),
-              live * edge(abs(TX - cx) - w, aat) * step(0.0, y) * step(y, ht));
-  }
-  // the ground the lighter stands on
-  col = mix(col, vec3(0.09,0.02,0.05), smoothstep(0.245, 0.235, uv.y));
-  return col;
-}
-`;
-
-const SCENE_NEON = `
-// --- synthwave skyline ------------------------------------------------------
-// Everything here is emissive: the blocks are dark and only their WINDOWS and
-// their edges carry light, which is what separates this from a purple city.
-// The horizon band, the mirrored reflection under it and the perspective floor
-// are the three things that say 'synthwave' rather than 'night'.
-// Returns colour AND coverage. Accumulating into a black vec3 and adding the
-// result meant the dark block faces contributed nothing -- the sky showed
-// straight through them and only the windows survived, as bars hanging in mid
-// air. An opaque thing has to be composited, not summed.
-vec4 blocks(vec2 uv, float horizon, float asp, vec2 scr, float aa){
-  vec3 c = vec3(0.0); float cov = 0.0;
-  for (int L = 0; L < 2; L++){
-    float fl = float(L);
-    float bx = (uv.x - 0.5)*asp*(14.0 - fl*5.0) + scr.x*(0.30 + fl*0.26) + fl*17.0;
-    float bi = floor(bx), bf = fract(bx);
-    float top = horizon + (0.12 + fl*0.11)*(0.30 + 0.70*h21(vec2(bi, 3.0 + fl)));
-    float inB = edge(max(abs(bf - 0.5) - 0.40, uv.y - top), aa) * step(horizon, uv.y);
-    vec3 face = mix(vec3(0.050,0.016,0.100), vec3(0.020,0.007,0.052), fl);
-    // window grid, on the block's own columns: small and dense, some lit
-    vec2 wp = vec2(bx*5.0, uv.y*150.0);
-    vec2 wid = floor(wp), wf = fract(wp);
-    float won = step(h21(wid + 41.0 + fl), 0.34);
-    float wq = edge(max(abs(wf.x - 0.5) - 0.22, abs(wf.y - 0.5) - 0.26), fwidth(wp.y)*0.9);
-    face += mix(vec3(0.30,0.95,1.00), vec3(1.00,0.30,0.86), h21(wid + 77.0))
-          * won * wq * (0.40 + 0.60*h21(wid + 13.0));
-    // the lit edge down the near side and along the cap
-    vec3 rim = h21(vec2(bi, 21.0)) < 0.5 ? vec3(1.00,0.16,0.72) : vec3(0.18,0.92,1.00);
-    face += rim * (edge(abs(bf - 0.11) - 0.010, aa) + edge(abs(uv.y - top) - 0.0035, aa)) * 1.6;
-    c = mix(c, face, inB);
-    cov = max(cov, inB);
-  }
-  return vec4(c, cov);
-}
-vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
-  const float HZ = 0.335;
-  float aa = fwidth(uv.y)*1.1;
-  vec3 col = mix(vec3(0.075,0.020,0.170), vec3(0.020,0.006,0.070), smoothstep(0.34, 1.0, uv.y));
-  // stars, above the skyline only
-  vec2 sp2 = uv*vec2(asp*90.0, 90.0);
-  vec2 sid = floor(sp2);
-  float star = step(h21(sid + 5.0), 0.020) * edge(length(fract(sp2) - 0.5) - 0.16, 0.14);
-  col += vec3(0.85,0.80,1.00) * star * smoothstep(0.52, 0.80, uv.y);
-  // the band the sun would be behind
-  col += vec3(1.00,0.22,0.62) * 0.40*exp(-abs(uv.y - HZ)*13.0);
-  col += vec3(0.30,0.90,1.00) * 0.16*exp(-abs(uv.y - HZ)*4.0);
-
-  // the city, and its reflection: mirrored about the horizon, dimmer, and cut
-  // by scan lines so it reads as a surface rather than as a second skyline
-  vec4 city = blocks(uv, HZ, asp, scr, aa);
-  vec2 mir = vec2(uv.x, HZ - (uv.y - HZ)*0.86);
-  vec4 refl = blocks(mir, HZ, asp, scr, aa);
-  float below = step(uv.y, HZ);
-  float scan = 0.45 + 0.55*step(0.42, fract(uv.y*130.0));
-  col = mix(col, city.rgb, city.a * (1.0 - below));
-  col = mix(col, refl.rgb, refl.a * below * 0.40 * scan * smoothstep(0.0, HZ, uv.y));
-
-  // the floor grid, receding to the horizon
-  float py = HZ - uv.y;
-  if (py > 0.002){
-    float w = 0.055 / py;
-    vec2 gp = vec2((uv.x - 0.5)*asp*w*2.4 + scr.x*0.10, w);
-    vec2 gg = abs(fract(gp) - 0.5);
-    vec2 fw = fwidth(gp)*1.3 + 0.0012;
-    float line = 1.0 - min(smoothstep(0.0, fw.x, gg.x), smoothstep(0.0, fw.y, gg.y));
-    col += vec3(1.00,0.20,0.70) * line * smoothstep(0.0, 0.06, py) * smoothstep(2.2, 0.3, w) * 0.85;
-  }
-  col += vec3(1.00,0.24,0.66) * edge(abs(uv.y - HZ) - 0.0016, aa) * 0.9;
-  return col;
-}
-`;
-
-const SCENE_PIXEL = `
-// --- a platform level, on a real pixel grid --------------------------------
-// The point of this one is that it is PIXEL art, not vector art that happens
-// to look retro: every coordinate is snapped to the grid before anything is
-// drawn, and every edge is a step() rather than a smoothstep. Anti-aliasing
-// here would be exactly wrong -- the staircase IS the style.
-float pxRect(vec2 p, vec2 a, vec2 b){
-  return step(a.x, p.x)*step(p.x, b.x)*step(a.y, p.y)*step(p.y, b.y);
-}
-// the classic rounded clump, used for BOTH the bushes and the clouds -- which
-// is what the original did, and why they read as the same drawing in two hues
-float clump(vec2 p, vec2 o, float s){
-  vec2 q = p - o;
-  float m = pxRect(q, vec2(-30.0*s, 0.0), vec2(30.0*s, 12.0*s));
-  m = max(m, pxRect(q, vec2(-19.0*s, 0.0), vec2(19.0*s, 22.0*s)));
-  m = max(m, pxRect(q, vec2(-8.0*s, 0.0), vec2(8.0*s, 31.0*s)));
-  return m;
-}
-vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
-  // Pixels down the frame. At 168 the tiles were huge and only a corner of the
-  // level was in shot; at 300 the frame holds about 15 by 19 tiles, which is
-  // very close to what the machines these are drawn from actually showed.
-  const float SC = 300.0;
-  // snap first: everything below works in whole pixels
-  vec2 p = floor(vec2((uv.x - 0.5)*asp + scr.x*0.016, uv.y) * SC);
-  float gy = 32.0;                        // two whole tiles of ground
-
-  vec3 col = vec3(0.361,0.580,0.988);     // the sky, and it is a FLAT fill
-  // hills: a stepped silhouette, two sizes, with the darker shading blocks
-  for (int i = 0; i < 3; i++){
-    float fi = float(i);
-    float ox = -96.0 + fi*104.0;
-    float s = (i == 1) ? 1.0 : 0.62;
-    vec2 q = p - vec2(ox, gy);
-    float m = pxRect(q, vec2(-64.0*s, 0.0), vec2(64.0*s, 16.0*s));
-    m = max(m, pxRect(q, vec2(-46.0*s, 0.0), vec2(46.0*s, 32.0*s)));
-    m = max(m, pxRect(q, vec2(-28.0*s, 0.0), vec2(28.0*s, 48.0*s)));
-    m = max(m, pxRect(q, vec2(-10.0*s, 0.0), vec2(10.0*s, 60.0*s)));
-    col = mix(col, vec3(0.000,0.657,0.000), m);
-    // the two dark eyes and the mouth every one of these hills has
-    float e = pxRect(q, vec2(-20.0*s, 12.0*s), vec2(-12.0*s, 22.0*s))
-            + pxRect(q, vec2(10.0*s, 12.0*s), vec2(18.0*s, 22.0*s))
-            + pxRect(q, vec2(-8.0*s, 6.0*s), vec2(6.0*s, 12.0*s));
-    col = mix(col, vec3(0.000,0.420,0.000), min(e, 1.0)*m);
-  }
-  // bushes on the ground, clouds in the sky: the same clump, two colours
-  col = mix(col, vec3(0.000,0.657,0.000), clump(p, vec2(44.0, gy), 0.95));
-  col = mix(col, vec3(0.000,0.657,0.000), clump(p, vec2(-118.0, gy), 0.70));
-  col = mix(col, vec3(1.0,1.0,1.0), clump(p, vec2(-92.0, 232.0), 0.80));
-  col = mix(col, vec3(1.0,1.0,1.0), clump(p, vec2(96.0, 258.0), 0.62));
-  col = mix(col, vec3(1.0,1.0,1.0), clump(p, vec2(-8.0, 276.0), 0.52));
-
-  // a pipe
-  {
-    vec2 q = p - vec2(112.0, gy);
-    float body = pxRect(q, vec2(-14.0, 0.0), vec2(14.0, 40.0));
-    float lip  = pxRect(q, vec2(-19.0, 40.0), vec2(19.0, 54.0));
-    float m = max(body, lip);
-    col = mix(col, vec3(0.000,0.657,0.000), m);
-    col = mix(col, vec3(0.500,0.940,0.500), m*pxRect(q, vec2(-11.0, 0.0), vec2(-6.0, 54.0)));
-    col = mix(col, vec3(0.000,0.420,0.000), m*step(9.0, q.x));
-  }
-  // floating blocks: two question blocks and a run of bricks
-  for (int i = 0; i < 6; i++){
-    float fi = float(i);
-    vec2 o = vec2(-92.0 + fi*16.0, 232.0);
-    vec2 q = p - o;
-    float in16 = pxRect(q, vec2(0.0, 0.0), vec2(15.0, 15.0));
-    float isQ = step(abs(fi - 1.0), 0.5) + step(abs(fi - 4.0), 0.5);
-    // brick: mortar courses, offset every other row
-    // step(7.0, mod(x,16.0)) is true for NINE of sixteen values, not one: the
-    // mortar came out half the wall and the brick read as a checkerboard.
-    float bmY = step(7.0, mod(q.y, 8.0));
-    float bmX = step(15.0, mod(q.x + step(8.0, mod(q.y, 16.0))*8.0, 16.0));
-    vec3 brick = mix(vec3(0.788,0.400,0.078), vec3(0.0,0.0,0.0), max(bmY, bmX)*0.9);
-    // question block: a lit face, a dark border and the mark
-    vec3 qb = vec3(0.906,0.616,0.086);
-    float bord = 1.0 - pxRect(q, vec2(2.0, 2.0), vec2(13.0, 13.0));
-    qb = mix(qb, vec3(0.420,0.196,0.020), bord);
-    float mark = pxRect(q, vec2(6.0, 9.0), vec2(9.0, 11.0))
-               + pxRect(q, vec2(9.0, 7.0), vec2(11.0, 9.0))
-               + pxRect(q, vec2(7.0, 5.0), vec2(9.0, 7.0))
-               + pxRect(q, vec2(7.0, 2.0), vec2(9.0, 3.0));
-    qb = mix(qb, vec3(1.0,1.0,1.0), min(mark, 1.0));
-    col = mix(col, mix(brick, qb, min(isQ, 1.0)), in16);
-  }
-  // the ground: the same brick, all the way across
-  {
-    float on = step(p.y, gy - 1.0);
-    float bmY = step(7.0, mod(p.y, 8.0));
-    float bmX = step(15.0, mod(p.x + step(8.0, mod(p.y, 16.0))*8.0, 16.0));
-    col = mix(col, mix(vec3(0.788,0.400,0.078), vec3(0.0,0.0,0.0), max(bmY, bmX)*0.9), on);
-  }
-  return col;
-}
-`;
-
 /* ---- the backdrops -------------------------------------------------------
-   Four plain walls, then the scenes. A plain wall declares four colour stops
-   measured DOWN from the top of the frame plus one key light; a scene declares
-   the GLSL above and nothing else. */
+   Seven plain walls and nothing else. No scenes, no scroll, no ambient motion
+   and no pan: the frame is fixed and the backdrop is a finished image the
+   moment it is chosen.
+
+   Three rebuilds got here. A cylindrical strip sampled by view angle, then
+   animated scenes drawn as shapes in a shader, then flat illustration held
+   still. Each one was more machinery than the last and none of them earned it:
+   what the app is actually for is looking at the lighter, and a backdrop's job
+   is to give the metal something to be bright against. So the whole apparatus
+   is gone and what is left is a vertical ramp and one key light -- which is
+   what a photographer would have put behind it in the first place.
+
+   Each entry is four colour stops measured DOWN from the top of the frame,
+   plus a key: x, y, size, colour, intensity. They are chosen to give the case
+   finishes something to work against -- three that a dark case reads on, three
+   that a pale one does, and one near-black for the flame. */
 const BACKDROPS = {
-  studio: {
+  studio: {   // neutral grey seamless, lit from above: the default
     swatch: 'linear-gradient(180deg,#e9edf1 0%,#c3cad2 42%,#8d949c 74%,#5b6169 100%)',
     stops: [[0.00, '#e9edf1'], [0.42, '#c3cad2'], [0.74, '#8d949c'], [1.00, '#5b6169']],
-    key: [0.50, 0.84, 0.62, '255,253,248', 0.26],
-    shadow: 0.44, vignette: 0.42,
+    key: [0.50, 0.84, 0.62, '255,253,248', 0.26], shadow: 0.44, vignette: 0.42,
   },
-  bone: {
-    swatch: 'linear-gradient(180deg,#f4ece0 0%,#e2d6c4 44%,#b9ab97 76%,#7d7263 100%)',
-    stops: [[0.00, '#f4ece0'], [0.44, '#e2d6c4'], [0.76, '#b9ab97'], [1.00, '#7d7263']],
-    key: [0.42, 0.80, 0.70, '255,246,226', 0.22],
-    shadow: 0.40, vignette: 0.38,
+  bone: {     // warm off-white, high key, so a dark case reads as a silhouette
+    swatch: 'linear-gradient(180deg,#f6efe4 0%,#e4d9c8 44%,#bcae9a 76%,#7f7466 100%)',
+    stops: [[0.00, '#f6efe4'], [0.44, '#e4d9c8'], [0.76, '#bcae9a'], [1.00, '#7f7466']],
+    key: [0.42, 0.80, 0.70, '255,246,226', 0.22], shadow: 0.40, vignette: 0.38,
   },
-  noir: {
+  slate: {    // cool blue-grey, the flattering one for chrome and steel
+    swatch: 'linear-gradient(180deg,#aab7c6 0%,#7b8899 44%,#4a5462 74%,#252b34 100%)',
+    stops: [[0.00, '#aab7c6'], [0.44, '#7b8899'], [0.74, '#4a5462'], [1.00, '#252b34']],
+    key: [0.58, 0.80, 0.60, '236,244,255', 0.24], shadow: 0.46, vignette: 0.46,
+  },
+  sand: {     // warm tan, which is where brass and copper come alive
+    swatch: 'linear-gradient(180deg,#d8c49c 0%,#b39c72 44%,#7a674a 74%,#3b3124 100%)',
+    stops: [[0.00, '#d8c49c'], [0.44, '#b39c72'], [0.74, '#7a674a'], [1.00, '#3b3124']],
+    key: [0.44, 0.78, 0.64, '255,238,200', 0.24], shadow: 0.44, vignette: 0.44,
+  },
+  midnight: { // deep blue, dark enough for the flame but not black
+    swatch: 'linear-gradient(180deg,#33405c 0%,#1b2337 42%,#0c1019 74%,#04060b 100%)',
+    stops: [[0.00, '#243352'], [0.42, '#121a2c'], [0.74, '#070b14'], [1.00, '#020308']],
+    key: [0.56, 0.76, 0.52, '150,186,255', 0.22], shadow: 0.46, vignette: 0.62,
+  },
+  oxblood: {  // deep desaturated red: warm, and the only one with any colour in it
+    swatch: 'linear-gradient(180deg,#4d2029 0%,#331419 42%,#1b090c 74%,#080304 100%)',
+    stops: [[0.00, '#4d2029'], [0.42, '#331419'], [0.74, '#1b090c'], [1.00, '#080304']],
+    key: [0.46, 0.76, 0.62, '255,206,178', 0.26], shadow: 0.46, vignette: 0.56,
+  },
+  noir: {     // near black, one hard key from the side: this is the flame's room
     swatch: 'linear-gradient(180deg,#2f3134 0%,#161719 40%,#08090a 72%,#020203 100%)',
     stops: [[0.00, '#2f3134'], [0.40, '#161719'], [0.72, '#08090a'], [1.00, '#020203']],
-    key: [0.20, 0.72, 0.34, '236,240,248', 0.70],
-    shadow: 0.52, vignette: 0.66,
-  },
-  midnight: {
-    swatch: 'linear-gradient(180deg,#33405c 0%,#1b2337 42%,#0c1019 74%,#04060b 100%)',
-    stops: [[0.00, '#33405c'], [0.42, '#1b2337'], [0.74, '#0c1019'], [1.00, '#04060b']],
-    key: [0.56, 0.78, 0.66, '176,206,255', 0.30],
-    shadow: 0.46, vignette: 0.58,
-  },
-  sunset: {
-    swatch: 'linear-gradient(180deg,#ff9e2a 0%,#e8541f 38%,#8d1a2c 70%,#180209 100%)',
-    scene: SCENE_SUNSET, shadow: 0.34, vignette: 0.44,
-  },
-  neon: {
-    swatch: 'linear-gradient(180deg,#1a0640 0%,#5a1580 42%,#ff2fa0 62%,#12042e 100%)',
-    scene: SCENE_NEON, shadow: 0.30, vignette: 0.52,
-  },
-  pixel: {
-    swatch: 'linear-gradient(180deg,#5c94fc 0%,#5c94fc 62%,#00a800 62%,#c96608 78%,#c96608 100%)',
-    scene: SCENE_PIXEL, shadow: 0.26, vignette: 0.30,
+    key: [0.20, 0.72, 0.34, '236,240,248', 0.70], shadow: 0.52, vignette: 0.66,
   },
 };
 const BACKDROP_ORDER = Object.keys(BACKDROPS);
 
 /* ---- the compositor ------------------------------------------------------
-   Every backdrop is now SHAPES IN A SHADER. Nothing is painted to a canvas and
-   nothing is sampled off a cylinder.
-
-   The old system painted a 2048x512 strip covering 360 by 90 degrees and
-   sampled it by view angle. Only about 34 by 41 of those degrees are ever on
-   screen, so what reached the canvas was a 193x117 crop blown up nearly five
-   times. A soft gradient survives that; anything with an edge in it does not,
-   which is why every attempt at a photographic room came out as mush and cost
-   hours of tuning to look merely acceptable.
-
-   Flat graphic art has the opposite property: a flat shape magnified is still
-   a flat shape. So a scene is a GLSL function -- resolution independent at any
-   zoom, animated for free, and costing no texture memory at all. Orbiting
-   scrolls the scene sideways rather than rotating a cylinder, which is also
-   what makes parallax one multiply per layer.
-
-   One program per scene, compiled on first use and cached, because only one is
-   ever on screen. All four plain walls share a single program. */
+   One program, one draw, and it runs only when something about it changes --
+   which, now that nothing moves, means when you pick a different backdrop, when
+   the canvas resizes, or when the flame's light on the wall changes. A resting
+   frame composites nothing at all. */
 const bgVert = `varying vec2 vUv;
 void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
-const BG_PRELUDE = `
+const bgFrag = `
 precision highp float;
 varying vec2 vUv;
-uniform vec3  uCam;      // scroll x (world units), scroll y, ambient time
-uniform vec4  uCrop;     // offset.x, offset.y, repeat.x, repeat.y
-uniform vec4  uFrame;    // vignette, contact shadow, flame level, aspect
-uniform vec4  uStops[4]; // plain wall: rgb, and where it sits measured DOWN from the top
-uniform vec4  uKey;      // plain wall key light: x, y, size, intensity
+uniform vec4  uStops[4];   // rgb, and where it sits measured DOWN from the top
+uniform vec4  uKey;        // x, y, size, intensity
 uniform vec3  uKeyC;
+uniform vec4  uFrame;      // vignette, contact shadow, flame level, aspect
 uniform float uGrain;
-uniform float uLife;     // 1 while the sim is awake, eased to 0 once it is not
-const float TAU = 6.2831853;
+uniform float uTime;
 
-float h11(float p){ return fract(sin(p*127.1)*43758.5453); }
 float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); }
-vec2  h22(vec2 p){ return fract(sin(vec2(dot(p,vec2(127.1,311.7)), dot(p,vec2(269.5,183.3))))*43758.5453); }
 float vnz(vec2 p){
   vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
   return mix(mix(h21(i), h21(i+vec2(1,0)), f.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), f.x), f.y);
 }
-float sdSeg(vec2 p, vec2 a, vec2 b){
-  vec2 pa = p - a, ba = b - a;
-  return length(pa - ba * clamp(dot(pa,ba)/dot(ba,ba), 0.0, 1.0));
-}
-// Flat art lives or dies on its edges. Every shape in every scene resolves
-// through this rather than through step(), so a silhouette stays clean at any
-// zoom instead of crawling with stair steps -- which is the entire reason this
-// approach beats a painted strip.
-float edge(float d, float w){ return smoothstep(w, -w, d); }
-`;
-
-// The four plain walls. No detail on purpose: these are for when you want to
-// look at the lighter and nothing else, so all the work is in the ramp being
-// smooth and the key having a falloff you would believe.
-const BG_PLAIN = `
-vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
-  float p = 1.0 - uv.y;
-  vec3 c = uStops[0].rgb;
-  c = mix(c, uStops[1].rgb, smoothstep(uStops[0].a, uStops[1].a, p));
-  c = mix(c, uStops[2].rgb, smoothstep(uStops[1].a, uStops[2].a, p));
-  c = mix(c, uStops[3].rgb, smoothstep(uStops[2].a, uStops[3].a, p));
-  vec2 d = (uv - uKey.xy) * vec2(asp, 1.0) / max(uKey.z, 0.001);
-  float r = length(d);
-  c += uKeyC * uKey.w * (0.55*exp(-r*r*1.7) + 0.45*exp(-r*1.15));
-  // a very small amount of tooth: a wide ramp of one hue bands visibly on an
-  // OLED phone, and the dither at the end of main() alone does not cover it
-  c *= 1.0 + (vnz(uv*vec2(210.0, 90.0)) - 0.5)*0.05;
-  return c;
-}
-`;
-
-const BG_MAIN = `
 void main(){
-  // The crop the texture matrix will take out of this frame. The vignette and
-  // the lighter's contact shadow are nailed to THAT, so they stay under the
-  // lighter while the world slides beneath them.
-  vec2 suv = (vUv - uCrop.xy) / uCrop.zw;
   float asp = uFrame.w;
-  vec3 col = sceneCol(vUv, uCam.z, uCam.xy, asp);
+  float p = 1.0 - vUv.y;
+  vec3 col = uStops[0].rgb;
+  col = mix(col, uStops[1].rgb, smoothstep(uStops[0].a, uStops[1].a, p));
+  col = mix(col, uStops[2].rgb, smoothstep(uStops[1].a, uStops[2].a, p));
+  col = mix(col, uStops[3].rgb, smoothstep(uStops[2].a, uStops[3].a, p));
+  // the key: a bright core with a long tail, which is what stops it reading as
+  // a painted blob
+  vec2 d = (vUv - uKey.xy) * vec2(asp, 1.0) / max(uKey.z, 0.001);
+  float r = length(d);
+  col += uKeyC * uKey.w * (0.55*exp(-r*r*1.7) + 0.45*exp(-r*1.15));
+  // a little tooth, or a wide ramp of one hue bands visibly on an OLED phone
+  col *= 1.0 + (vnz(vUv*vec2(210.0, 90.0)) - 0.5)*0.05;
 
-  // the light the LIGHTER throws back into the scene. Always on, every
-  // backdrop: it is the one thing in frame that proves the flame is a light
-  // source and not a sprite.
+  // The light the LIGHTER throws back onto the wall. The one thing here that
+  // is not static, and it belongs to the flame rather than to the backdrop:
+  // without it the flame is a sprite pasted over a picture.
   if (uFrame.z > 0.0) {
-    float fl = uFrame.z * (0.85 + 0.3*vnz(vec2(uCam.z*9.0, 3.0)));
-    vec2 d = (suv - vec2(0.5, 0.60)) * vec2(asp*0.85, 1.0);
-    col += vec3(0.85,0.42,0.13) * fl * 0.30 * exp(-dot(d,d)*3.4);
+    float fl = uFrame.z * (0.85 + 0.3*vnz(vec2(uTime*9.0, 3.0)));
+    vec2 fd = (vUv - vec2(0.5, 0.60)) * vec2(asp*0.85, 1.0);
+    col += vec3(0.85,0.42,0.13) * fl * 0.30 * exp(-dot(fd,fd)*3.4);
   }
-  // the shadow the lighter drops, at the lighter's feet and NOWHERE else
+  // the shadow the lighter drops, at its feet and nowhere else
   float sh = uFrame.y;
   if (sh > 0.0) {
-    vec2 d = (suv - vec2(0.5, 0.142)) / vec2(0.33, 0.078);
-    col *= 1.0 - sh * exp(-dot(d,d));
-    vec2 d2 = (suv - vec2(0.5, 0.142)) / vec2(0.62, 0.20);
-    col *= 1.0 - sh * 0.34 * exp(-dot(d2,d2));
+    vec2 s1 = (vUv - vec2(0.5, 0.142)) / vec2(0.33, 0.078);
+    col *= 1.0 - sh * exp(-dot(s1,s1));
+    vec2 s2 = (vUv - vec2(0.5, 0.142)) / vec2(0.62, 0.20);
+    col *= 1.0 - sh * 0.34 * exp(-dot(s2,s2));
   }
-  float vg = length((suv - vec2(0.5,0.5)) * vec2(asp, 1.0));
+  float vg = length((vUv - vec2(0.5,0.5)) * vec2(asp, 1.0));
   col *= 1.0 - uFrame.x * smoothstep(0.10, 0.60, vg*vg*2.4);
   // Film grain, hashed at TARGET resolution and pre-divided by the upscale
-  // ratio so it lands as grain and not as blocks, and amplitude-shaped by
-  // luminance because real grain has almost none in the blacks.
+  // ratio so it lands as grain and not as blocks, and shaped by luminance
+  // because real grain has almost none in the blacks.
   {
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    float amp = 0.024 * sqrt(clamp(lum, 0.0, 1.0));
-    col += (h21(floor(gl_FragCoord.xy * uGrain)) - 0.5) * amp;
+    col += (h21(floor(gl_FragCoord.xy * uGrain)) - 0.5) * 0.024 * sqrt(clamp(lum, 0.0, 1.0));
   }
-  // A shoulder, because the background never goes through the tone mapper:
-  // without it every light is a flat clipped disc with a hard edge.
+  // a shoulder, because the background never goes through the tone mapper
   col = mix(col, 1.0 - exp(-col*1.25), 0.34);
   gl_FragColor = vec4(max(col, 0.0), 1.0);
 }`;
@@ -1324,78 +1029,45 @@ bgRT.texture.generateMipmaps = false;
 const bgScene = new THREE.Scene();
 const bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const bgUniforms = {
-  uCam: { value: new THREE.Vector3() },
-  uCrop: { value: new THREE.Vector4(BG_MARGIN, BG_MARGIN, 1 - 2 * BG_MARGIN, 1 - 2 * BG_MARGIN) },
-  uFrame: { value: new THREE.Vector4(0.55, 0.40, 0, 0.7) },
   uStops: { value: [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
   uKey: { value: new THREE.Vector4(0.5, 0.8, 0.6, 0) },
   uKeyC: { value: new THREE.Vector3(1, 1, 1) },
+  uFrame: { value: new THREE.Vector4(0.55, 0.40, 0, 0.7) },
   uGrain: { value: 1 },
-  // Ambient motion has to settle. Anything time-driven keeps the compositor
-  // running, and a scene that plays forever spends the battery the idle
-  // heartbeat was built to save -- so life eases to 0 a few seconds after the
-  // sim goes idle and snaps back the moment anything happens.
-  uLife: { value: 1 },
+  uTime: { value: 0 },
 };
-const bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
-bgScene.add(bgMesh);
+const bgMat = new THREE.ShaderMaterial({
+  uniforms: bgUniforms, vertexShader: bgVert, fragmentShader: bgFrag,
+  depthTest: false, depthWrite: false,
+});
+bgScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMat));
 
-// One program per scene, built the first time that scene is chosen and kept.
-// The uniforms object is SHARED by reference across all of them, so switching
-// backdrop swaps a material and writes a few floats -- there is no texture to
-// upload any more, which is what used to make a menu tap cost 8MB.
-const bgProgs = new Map();
-function bgProgram(name, b) {
-  const key = b.scene ? name : 'plain';
-  let m = bgProgs.get(key);
-  if (!m) {
-    m = new THREE.ShaderMaterial({
-      uniforms: bgUniforms, vertexShader: bgVert,
-      fragmentShader: BG_PRELUDE + (b.scene || BG_PLAIN) + BG_MAIN,
-      depthTest: false, depthWrite: false,
-    });
-    bgProgs.set(key, m);
-  }
-  return m;
-}
-const BG_PLAIN_FALLBACK = [[0, '#2a2f38'], [0.4, '#1a1e25'], [0.75, '#0e1116'], [1, '#05070a']];
-let bgCur = null;
+const _bgCol = new THREE.Color();
+let bgCur = null, bgSizeDirty = true;
 function applyBackdrop(name) {
   if (!BACKDROPS[name]) name = 'studio';
   sim.backdrop = name;
   const b = BACKDROPS[name];
-  bgMesh.material = bgProgram(name, b);
-  const st = b.stops || BG_PLAIN_FALLBACK;
   for (let i = 0; i < 4; i++) {
-    const s = st[Math.min(i, st.length - 1)];
-    _bgCol.set(s[1]);
-    bgUniforms.uStops.value[i].set(_bgCol.r, _bgCol.g, _bgCol.b, s[0]);
+    const st = b.stops[Math.min(i, b.stops.length - 1)];
+    _bgCol.set(st[1]);
+    bgUniforms.uStops.value[i].set(_bgCol.r, _bgCol.g, _bgCol.b, st[0]);
   }
-  const k = b.key || [0.5, 0.8, 0.6, '255,255,255', 0];
+  const k = b.key;
   bgUniforms.uKey.value.set(k[0], k[1], k[2], k[4]);
   const rgb = k[3].split(',').map(Number);
   bgUniforms.uKeyC.value.set(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
   bgUniforms.uFrame.value.x = b.vignette === undefined ? 0.55 : b.vignette;
   bgUniforms.uFrame.value.y = b.shadow === undefined ? 0.40 : b.shadow;
-  // Nothing is time-driven any more: the backdrops are compositions held still,
-  // so every one of them -- wall or scene -- is a finished image once the pan
-  // has come home. The pan's own easing is picked up by the `moved` test in
-  // renderBackdrop, so a resting frame re-composites NOTHING at all.
-  b.animated = false;
   bgCur = b;
   scene.background = bgRT.texture;
-  // Not a flag: a COUNTDOWN. A scene stops re-compositing once the idle clock
-  // takes its life to zero, so if the one composite a boolean guarantees lands
-  // on a frame that does not take -- a resize in flight, a program still
-  // warming, a swap that raced the paint -- the target keeps the PREVIOUS
-  // backdrop and never recovers. That failure is silent, looks exactly like a
-  // broken shader, and cost most of a session to chase: the same build would
-  // render the new scene on two runs out of three and the old one on the
-  // third. Four frames is cheap and makes the switch unconditional.
+  // Not a flag but a COUNTDOWN. A backdrop that never re-composites on its own
+  // gets exactly the frames this buys it, and if the single frame a boolean
+  // would have granted did not take -- a resize in flight, a swap that raced
+  // the paint -- the target would keep the previous backdrop and never
+  // recover. That failure is silent and looks exactly like a broken shader.
   bgSizeDirty = true; bgHot = 4;
 }
-const _bgCol = new THREE.Color();
-let bgSizeDirty = true;
 function bgResize() {
   bgHot = Math.max(bgHot, 2);
   const sz = renderer.getSize(new THREE.Vector2());
@@ -1403,90 +1075,30 @@ function bgResize() {
   const h = Math.max(64, Math.min(768, Math.round(sz.y * 0.62)));
   if (bgRT.width !== w || bgRT.height !== h) bgRT.setSize(w, h);
   bgUniforms.uFrame.value.w = w / h;
-  // One target pixel covers this many canvas pixels, so the grain's frequency
-  // is divided by it: hashing per TARGET pixel and then upscaling read as
-  // blocks rather than as grain.
+  // one target pixel covers this many canvas pixels, so the grain's frequency
+  // is divided by it: hashing per TARGET pixel and upscaling read as blocks
   bgUniforms.uGrain.value = Math.max(1, sz.y / h);
   bgSizeDirty = false;
 }
-// Called once per PRESENTED frame -- and then only if the frame would actually
-// differ. The four plain walls re-composite NOTHING once the camera stops: the
-// render target already holds the right pixels.
-let bgLastYaw = 1e9, bgLastPitch = 1e9, bgLastFlame = -1, bgHot = 4;
-let bgLife = 1, bgClock = 0;
+let bgLastFlame = -1, bgHot = 4, bgClock = 0;
 function bgTick(dt) {
-  // Derived from idleT, not integrated towards it. Easing off simIsIdle()
-  // directly plateaued near 0.5 forever, because that predicate flips on
-  // single frames and every flip snapped the life back to 1; easing off the
-  // debounced idleT fixed that but crawled, because bgTick only runs on
-  // PRESENTED frames and the loop drops to a 500ms heartbeat exactly when it
-  // goes idle. idleT is already a wall clock, so reading it is
-  // framerate-independent and needs no state.
-  bgLife = clamp01(1 - (idleT - 3) / 2);
-  bgClock += dt * bgLife;
-  bgUniforms.uLife.value = bgLife;
-  // A finger on the glass is what holds the pan out; dragging the lid counts,
-  // because that is input too. Out fast enough to feel connected to the drag,
-  // home slower so the return reads as the frame settling rather than snapping.
-  const hold = pointers.size > 0 || sim.lid.dragging;
-  const want = hold ? clamp((cam.yaw - BG_YAW0) * BG_PAN_K, -BG_PAN_LIM, BG_PAN_LIM) : 0;
-  const wantY = hold ? clamp(-Math.sin(cam.pitch) * 0.42, -0.22, 0.22) : 0;
-  const k = 1 - Math.exp(-dt * (hold ? 11 : 4.5));
-  bgPan += (want - bgPan) * k;
-  bgPanY += (wantY - bgPanY) * k;
-  // An exponential ease is asymptotic: it would creep toward the resting
-  // composition forever and never arrive, and a frame that never arrives never
-  // stops re-compositing. Below a fifth of a percent of the limit there is
-  // nothing left to see, so it is put home exactly.
-  if (!hold) {
-    if (Math.abs(bgPan) < 0.004) bgPan = 0;
-    if (Math.abs(bgPanY) < 0.004) bgPanY = 0;
-  }
+  // the clock only advances while the flame is throwing light, because that is
+  // the only thing left that time changes
+  if (smoothFlameLevel > 0) bgClock += dt;
 }
-// How far a scene scrolls per radian of orbit. The frame spans roughly three
-// world units at the nearest band, so at 3.0 with a 0.6 parallax the near
-// trees track at a bit over half the camera's own rate: enough to read as
-// walking past them, not so much that they whip.
-// The backdrops are COMPOSITIONS -- a sun in a particular place, a skyline, a
-// level screen -- so the frame cannot be allowed to wander off them. The pan
-// follows the orbit only while there is a finger down, only as far as this
-// clamp, and eases back to the resting composition the moment you let go.
-const BG_PAN_K = 1.10;      // scene units per radian of orbit
-const BG_PAN_LIM = 0.62;    // and never further than this, in scene units
-let bgPan = 0, bgPanY = 0;
-function renderBackdrop(tSec) {
+function renderBackdrop() {
   if (!scene.background || !bgCur) return;
-  // Watch the PAN, not the yaw: the pan keeps easing home after the orbit has
-  // stopped, and a frame that stopped compositing then would freeze the
-  // backdrop mid-return.
-  const moved = Math.abs(bgPan - bgLastYaw) > 2e-5 || Math.abs(bgPanY - bgLastPitch) > 2e-5
-    || Math.abs(smoothFlameLevel - bgLastFlame) > 2e-3;
-  if (!moved && bgHot <= 0 && !(bgCur.animated && bgLife > 0)) return;
-  bgLastYaw = bgPan; bgLastPitch = bgPanY; bgLastFlame = smoothFlameLevel;
+  if (bgHot <= 0 && Math.abs(smoothFlameLevel - bgLastFlame) < 2e-3) return;
+  bgLastFlame = smoothFlameLevel;
   if (bgHot > 0) bgHot--;
   if (bgSizeDirty) bgResize();
-  bgUniforms.uCam.value.set(bgPan, bgPanY, bgClock);
   bgUniforms.uFrame.value.z = smoothFlameLevel;
+  bgUniforms.uTime.value = bgClock;
   const prev = renderer.getRenderTarget();
   renderer.setRenderTarget(bgRT);
   renderer.render(bgScene, bgCam);
   renderer.setRenderTarget(prev);
 }
-// The texture matrix carries the nearest share of the motion -- the layer at
-// the glass -- and it is the thing the suite watches to prove the backdrop
-// answers the orbit. Monotonic in yaw, not sin(yaw): half a turn used to land
-// you back where you started.
-function updateBackdropMotion(tSec) {
-  const bg = scene.background;
-  if (!bg || !bg.isTexture) return;
-  // the crop rides the same clamped pan, so the whole frame comes home together
-  const dx = clamp(bgPan / BG_PAN_LIM, -1, 1);
-  const dy = clamp(bgPanY / 0.22, -1, 1);
-  bg.repeat.set(1 - BG_MARGIN * 2, 1 - BG_MARGIN * 2);
-  bg.offset.set(BG_MARGIN * (1 + dx), BG_MARGIN * (1 + dy));
-  bgUniforms.uCrop.value.set(bg.offset.x, bg.offset.y, bg.repeat.x, bg.repeat.y);
-}
-
 // Composer with cheap low-res bloom (auto-disabled if fps sags).
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -5438,7 +5050,6 @@ function updateFrame(dt, tSec) {
       bendHandle.children[1].quaternion.copy(camera.quaternion);   // ring faces you
     }
   }
-  updateBackdropMotion(tSec);
   // solid lid while shut (seamless shading); hollow shell once it cracks open
   // Nothing about the lid swaps any more: lidMesh is its only outer surface and
   // lidShellG its only interior, both always on. The interior is fully occluded
@@ -7250,7 +6861,7 @@ function loop(tms) {
       camera.layers.enable(NOCC_LAYER);
     }
     bgTick(dt);
-    renderBackdrop(timeFreeze === null ? tms / 1000 : timeFreeze);
+    renderBackdrop();
     if (bloomOn) composer.render(); else renderer.render(scene, camera);
     // second frame, not the first: the opening paint stays as quick as it was
     if (!volWarmed && frames > 0) warmVolumePrograms();
@@ -7314,10 +6925,6 @@ window.LIGHTER = {
   get finishNames() { return FINISH_ORDER.slice(); },
   get backdropNames() { return BACKDROP_ORDER.slice(); },
   bgU: bgUniforms, bgRT, BACKDROPS, renderBackdrop, bgScene, bgCam,
-  // the clamped pan, so the suite can prove it tracks input, stops at the
-  // limit, and comes home when the input stops
-  get bgPan() { return bgPan; }, get bgPanY() { return bgPanY; },
-  get bgPanLimit() { return BG_PAN_LIM; },
   get finishCount() { return FINISH_ORDER.length; },
   get flameCount() { return FLAME_ORDER.length; },
   get backdropCount() { return BACKDROP_ORDER.length; },
