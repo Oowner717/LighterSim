@@ -515,7 +515,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18f';
+  window.__BUILD = '2026-08-18g';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -1059,7 +1059,7 @@ const bgUniforms = {
   uStops: { value: [new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4(), new THREE.Vector4()] },
   uKey: { value: new THREE.Vector4(0.5, 0.8, 0.6, 0) },
   uKeyC: { value: new THREE.Vector3(1, 1, 1) },
-  uFrame: { value: new THREE.Vector4(0.55, 0.40, 0, 0.7) },
+  uFrame: { value: new THREE.Vector4(0.55, 0, 0, 0.7) },   // .y freed when the floor shadow went
   uGrain: { value: 1 },
   uTime: { value: 0 },
 };
@@ -1069,7 +1069,7 @@ const bgMat = new THREE.ShaderMaterial({
 });
 bgScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMat));
 
-const _bgCol = new THREE.Color();
+const _bgCol = new THREE.Color(), _bgSize = new THREE.Vector2();
 let bgCur = null, bgSizeDirty = true;
 function applyBackdrop(name) {
   if (!BACKDROPS[name]) name = 'studio';
@@ -1096,7 +1096,7 @@ function applyBackdrop(name) {
 }
 function bgResize() {
   bgHot = Math.max(bgHot, 2);
-  const sz = renderer.getSize(new THREE.Vector2());
+  const sz = renderer.getSize(_bgSize);
   const w = Math.max(64, Math.min(576, Math.round(sz.x * 0.62)));
   const h = Math.max(64, Math.min(768, Math.round(sz.y * 0.62)));
   if (bgRT.width !== w || bgRT.height !== h) bgRT.setSize(w, h);
@@ -3153,6 +3153,82 @@ const albedoMap = kind => ALBEDO_CACHE[kind] || (ALBEDO_CACHE[kind] = albedoTex(
 const PATTERN_CACHE = {};
 const patternMap = kind => PATTERN_CACHE[kind] || (PATTERN_CACHE[kind] = patternTex(kind));
 
+const caseHex = k => '#' + FINISHES[k].chrome.color.toString(16).padStart(6, '0');
+// The swatch is cut from the SAME canvas the case wears, not from a hand-written
+// CSS gradient standing in for it. Those approximations drifted from what they
+// were describing as the finishes were reworked -- rust's was a brown-to-grey
+// radial that looked nothing like the pitted oxide the lighter actually gets --
+// and a picker that lies about what it picks is worse than no picture at all.
+//
+// Three sources, matching the three ways a finish gets its look:
+//   corrode  the oxide's own albedo, which IS its colour
+//   tint     the painted albedo, likewise
+//   map      a roughness pattern with no colour of its own, so it multiplies
+//            over the finish's base metal
+// Cropped rather than fitted: shrinking a 256px map into 48 leaves knurl and
+// weave as grey mush, and the point of the icon is the texture.
+// Cutting these is NOT cheap -- a corrode map is a 512px warped-fBm field, an
+// albedo map is a painted 256px canvas, and there are twenty-four finishes.
+// Doing it inline where the buttons are built cost 1.6 SECONDS of blocked main
+// thread before the first frame, out of a 1.9s load. So the buttons go up
+// immediately wearing the finish's base metal and the real texture is cut in
+// during idle time, one finish per slice. A single slice can still be 70ms --
+// these are not divisible -- but idle is exactly where that belongs, and the
+// sheet is not on screen at boot for any of it to be visible in.
+const swQueue = [];
+let swPumping = false;
+function pumpSwatches(deadline) {
+  swPumping = false;
+  const one = swQueue.shift();
+  if (one) one[1].style.background = caseSwatchURL(one[0]);
+  // keep going while the browser says there is room, but never start a second
+  // finish on a slice that has already spent its budget
+  while (swQueue.length && deadline && deadline.timeRemaining() > 12) {
+    const nx = swQueue.shift();
+    nx[1].style.background = caseSwatchURL(nx[0]);
+  }
+  if (swQueue.length) scheduleSwatches();
+}
+function scheduleSwatches() {
+  if (swPumping || !swQueue.length) return;
+  swPumping = true;
+  if (window.requestIdleCallback) requestIdleCallback(pumpSwatches, { timeout: 3000 });
+  else setTimeout(() => pumpSwatches(null), 80);
+}
+const SWATCH_CACHE = {};
+function caseSwatchURL(key) {
+  if (SWATCH_CACHE[key]) return SWATCH_CACHE[key];
+  const p = FINISHES[key].chrome, S = 56;
+  const cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const g = cv.getContext('2d');
+  g.fillStyle = caseHex(key); g.fillRect(0, 0, S, S);
+  // A pattern finish gets its base laid down a little dark. Overlay against a
+  // near-white metal behaves like screen and can only go lighter, so the
+  // brightest finishes -- sunburst, deco -- had nowhere to put their relief and
+  // came out as blank chips. Dropping the base gives the pattern room to cut.
+  if (!FINISHES[key].chrome.corrode && !FINISHES[key].chrome.tint
+      && typeof FINISHES[key].chrome.map === 'string') {
+    g.fillStyle = 'rgba(0,0,0,0.26)'; g.fillRect(0, 0, S, S);
+  }
+  const col = p.corrode ? corrodedMap(p.corrode) : (p.tint ? albedoMap(p.tint) : null);
+  const src = col ? col.albedo.image
+    : (typeof p.map === 'string' ? patternMap(p.map).rough.image
+      : (p.map === true && brushed ? brushed.image : null));
+  if (src && src.width) {
+    const c = Math.max(20, Math.round(src.width * 0.26));   // the crop
+    const o = Math.round((src.width - c) * 0.5);
+    // An albedo IS the colour and replaces the fill. A roughness map is not a
+    // colour at all -- it is centred on mid grey -- so it goes on in overlay,
+    // which leaves the metal's own value alone and imposes only the pattern's
+    // contrast. Multiplying it instead halved the metal, and screening the
+    // value back on top washed the pale finishes to white.
+    if (!col) { g.globalCompositeOperation = 'overlay'; g.globalAlpha = 0.9; }
+    g.drawImage(src, o, o, c, c, 0, 0, S, S);
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+  }
+  return (SWATCH_CACHE[key] = `url("${cv.toDataURL()}")`);
+}
+
 /* ============================== CASE FINISHES ============================== */
 const FINISHES = {
   chrome: {
@@ -3181,37 +3257,31 @@ const FINISHES = {
 // can hint at its texture instead of showing as a flat colour.
 const FINISH_EXTRA = {
   copper: {
-    swatch: '#c87540',
     chrome: { color: 0xc87540, rough: 0.46, map: true, metal: 1.0, env: 1.0 },
     dark: { color: 0xa85f32, rough: 0.32, map: true, metal: 1.0, env: 1.0 },
     insert: 0x8a5f3d, inner: 0xa06038,
   },
   rosegold: {
-    swatch: '#e0a08c',
     chrome: { color: 0xe0a08c, rough: 0.42, map: true, metal: 1.0, env: 1.05 },
     dark: { color: 0xc2836f, rough: 0.30, map: true, metal: 1.0, env: 1.0 },
     insert: 0x93705f, inner: 0xbb826e,
   },
   gold: {
-    swatch: 'repeating-linear-gradient(45deg, #f0c95a 0 3px, #d8b143 3px 6px)',
     chrome: { color: 0xf0c95a, rough: 0.52, map: 'diamond', metal: 1.0, env: 1.15 },
     dark: { color: 0xd0a83c, rough: 0.42, map: 'diamond', metal: 1.0, env: 1.05 },
     insert: 0x9a854a, inner: 0xc7a545,
   },
   obsidian: {
-    swatch: 'radial-gradient(circle at 32% 30%, #3c4249 0%, #14171a 70%)',
     chrome: { color: 0x555e69, rough: 1.0, map: 'engine', metal: 0.70, env: 1.25 },
     dark: { color: 0x424953, rough: 1.0, map: 'engine', metal: 0.75, env: 1.15 },
     insert: 0x4a4f55, inner: 0x40454b,
   },
   titanium: {
-    swatch: 'radial-gradient(circle at 34% 30%, #a6adb5 0%, #5f666d 72%)',
     chrome: { color: 0x8d949c, rough: 0.62, map: 'hex', metal: 1.0, env: 1.05 },
     dark: { color: 0x737a82, rough: 0.38, map: 'hex', metal: 1.0, env: 1.0 },
     insert: 0x666c73, inner: 0x878e96,
   },
   damascus: {
-    swatch: 'repeating-linear-gradient(0deg, #a6aeb8 0 3px, #6f7780 3px 6px)',
     // damascus is a COLOUR pattern, not a relief one: two steels etch to
     // different depths and leave light and dark bands. It was bound to a
     // roughness map alone, so it had none of that and read as a diamond knurl.
@@ -3220,25 +3290,21 @@ const FINISH_EXTRA = {
     insert: 0x6d747c, inner: 0x8d959e,
   },
   carbon: {
-    swatch: 'repeating-linear-gradient(90deg, #30343a 0 3px, #16181b 3px 6px)',
     chrome: { color: 0x3d4249, rough: 0.66, map: 'weave', metal: 0.45, env: 0.9 },
     dark: { color: 0x2e3238, rough: 0.56, map: 'weave', metal: 0.5, env: 0.85 },
     insert: 0x4b5158, inner: 0x3a3e43,
   },
   crimson: {
-    swatch: 'radial-gradient(circle at 34% 30%, #c0454f 0%, #6d1620 72%)',
     chrome: { color: 0x9e2b36, rough: 1.0, map: 'hammer', metal: 0.75, env: 0.85 },
     dark: { color: 0x7d1f28, rough: 1.0, map: 'hammer', metal: 0.8, env: 0.9 },
     insert: 0x6a4046, inner: 0x8a3a42,
   },
   navy: {
-    swatch: 'repeating-linear-gradient(45deg, #2e3b5c 0 3px, #1d2740 3px 6px)',
     chrome: { color: 0x27324e, rough: 0.60, map: 'herring', metal: 0.75, env: 0.9 },
     dark: { color: 0x1c2540, rough: 0.48, map: 'herring', metal: 0.8, env: 0.95 },
     insert: 0x4a5470, inner: 0x394664,
   },
   forest: {
-    swatch: 'repeating-linear-gradient(45deg, #2c5340 0 3px, #16301f 3px 6px)',
     chrome: { color: 0x224534, rough: 0.60, map: 'cross', metal: 0.78, env: 0.9 },
     dark: { color: 0x183326, rough: 0.48, map: 'cross', metal: 0.82, env: 0.95 },
     insert: 0x47614f, inner: 0x33513e,
@@ -3248,61 +3314,51 @@ const FINISH_EXTRA = {
   // they all read as one idea at different frequencies. These are non-metals or
   // part-oxidised metals, so metalness drops and the key light does the work.
   patina: {
-    swatch: 'radial-gradient(circle at 34% 32%, #8fbfa0 0%, #6a4630 72%)',
     chrome: { color: 0xffffff, rough: 1.0, corrode: 'patina', metal: 1.0, env: 1.05, nscale: 1.0 },
     dark: { color: 0xe8e8e8, rough: 1.0, corrode: 'patina', metal: 1.0, env: 1.05, nscale: 1.0 },
     insert: 0x6d7a68, inner: 0x5f6b58,
   },
   tortoise: {
-    swatch: 'radial-gradient(circle at 36% 30%, #d29a4c 0%, #3a1a08 74%)',
     chrome: { color: 0xffffff, rough: 1.0, tint: 'tortoise', metal: 0.0, env: 0.9 },
     dark: { color: 0xe0e0e0, rough: 1.0, tint: 'tortoise', metal: 0.0, env: 0.95 },
     insert: 0x7a5a34, inner: 0x6b4a28,
   },
   marble: {
-    swatch: 'radial-gradient(circle at 36% 30%, #f2f0ea 0%, #a8a8ad 76%)',
     chrome: { color: 0xffffff, rough: 1.0, tint: 'marble', metal: 0.0, env: 1.0 },
     dark: { color: 0xdedede, rough: 1.0, tint: 'marble', metal: 0.0, env: 1.0 },
     insert: 0x8e8e94, inner: 0xb4b4ba,
   },
   rust: {
-    swatch: 'radial-gradient(circle at 34% 32%, #a5613a 0%, #4a4d50 76%)',
     chrome: { color: 0xffffff, rough: 1.0, corrode: 'rust', metal: 1.0, env: 1.0, nscale: 1.0 },
     dark: { color: 0xe4e4e4, rough: 1.0, corrode: 'rust', metal: 1.0, env: 1.0, nscale: 1.0 },
     insert: 0x6b5a4c, inner: 0x5c4c40,
   },
   camo: {
-    swatch: 'repeating-linear-gradient(38deg, #4a5140 0 5px, #2f3527 5px 9px, #6b7359 9px 13px)',
     chrome: { color: 0xffffff, rough: 1.0, tint: 'camo', metal: 0.12, env: 0.65 },
     dark: { color: 0xdcdcdc, rough: 1.0, tint: 'camo', metal: 0.15, env: 0.7 },
     insert: 0x5a604f, inner: 0x4b5142,
   },
   fireblue: {
-    swatch: 'linear-gradient(0deg,#8d9199 0%,#c07a34 32%,#8e4a72 52%,#3f4fa8 74%,#2e7fb8 100%)',
     chrome: { color: 0xffffff, rough: 0.24, tint: 'fireblue', metal: 1.0, env: 1.2 },
     dark: { color: 0xe6e6e6, rough: 0.18, tint: 'fireblue', metal: 1.0, env: 1.1 },
     insert: 0x5a6270, inner: 0x6b7386,
   },
   meteorite: {
-    swatch: 'repeating-linear-gradient(60deg,#e0e4ea 0 3px,#6e737a 3px 7px,#2e3238 7px 10px)',
     chrome: { color: 0xffffff, rough: 1.0, tint: 'meteorite', metal: 1.0, env: 1.15 },
     dark: { color: 0xdcdcdc, rough: 1.0, tint: 'meteorite', metal: 1.0, env: 1.05 },
     insert: 0x666b72, inner: 0x878d95,
   },
   livery: {
-    swatch: 'linear-gradient(90deg,#1b1d21 0 30%,#d8dde3 30% 42%,#c2333a 42% 58%,#d8dde3 58% 70%,#1b1d21 70%)',
     chrome: { color: 0xffffff, rough: 0.30, tint: 'livery', metal: 0.25, env: 0.95 },
     dark: { color: 0xe0e0e0, rough: 0.24, tint: 'livery', metal: 0.3, env: 1.0 },
     insert: 0x5c6066, inner: 0x4d5157,
   },
   sunburst: {
-    swatch: 'repeating-conic-gradient(from 186deg at 50% 104%, #eef2f7 0deg 3deg, #767c85 3deg 6deg)',
     chrome: { color: 0xcdd3da, rough: 0.52, map: 'sunburst', metal: 1.0, env: 1.15, nscale: 1.0 },
     dark: { color: 0xa8aeb6, rough: 0.42, map: 'sunburst', metal: 1.0, env: 1.05, nscale: 1.0 },
     insert: 0x6e747c, inner: 0x9096a0,
   },
   deco: {
-    swatch: 'linear-gradient(0deg,#aeb5bd 0 47%,#ffffff 47% 53%,#3a4048 53% 100%)',
     chrome: { color: 0xdfe4ea, rough: 0.62, map: 'deco', metal: 1.0, env: 1.15, nscale: 0.25 },
     dark: { color: 0xb8bec6, rough: 0.5, map: 'deco', metal: 1.0, env: 1.05, nscale: 0.25 },
     insert: 0x717780, inner: 0x969ca6,
@@ -3389,12 +3445,13 @@ function applyFinish(name) {
   // the main-screen swatch button wears the current finish
   const sw = document.getElementById('finishSwatch');
   if (sw) {
-    const hex = '#' + fp.chrome.color.toString(16).padStart(6, '0');
-    // designs declare a gradient; plain metals stay a solid colour so the
-    // existing "swatch wears the finish" check still reads a backgroundColor
-    sw.style.background = '';
-    if (fp.swatch && fp.swatch.indexOf('gradient') >= 0) sw.style.background = fp.swatch;
-    else sw.style.backgroundColor = fp.swatch || hex;
+    // The same picture the sheet shows. It used to wear a separate CSS gradient
+    // per finish, which meant the button and the sheet could disagree about
+    // what a finish looks like -- and after the sheet started cutting from the
+    // real material, they did. Cheap here: this finish's maps were just built
+    // by the code above, so the cut is a canvas draw and nothing more.
+    sw.style.backgroundColor = '';
+    sw.style.background = caseSwatchURL(name);
   }
 }
 // no longer bound to a tap -- the appearance sheet replaced cycling -- but kept
@@ -6517,55 +6574,8 @@ function buildSwatches(hostId, group, keys, css, halo, label, pick) {
     swBtns[group].push({ key, el: btn });
   }
 }
-const caseHex = k => '#' + FINISHES[k].chrome.color.toString(16).padStart(6, '0');
-// The swatch is cut from the SAME canvas the case wears, not from a hand-written
-// CSS gradient standing in for it. Those approximations drifted from what they
-// were describing as the finishes were reworked -- rust's was a brown-to-grey
-// radial that looked nothing like the pitted oxide the lighter actually gets --
-// and a picker that lies about what it picks is worse than no picture at all.
-//
-// Three sources, matching the three ways a finish gets its look:
-//   corrode  the oxide's own albedo, which IS its colour
-//   tint     the painted albedo, likewise
-//   map      a roughness pattern with no colour of its own, so it multiplies
-//            over the finish's base metal
-// Cropped rather than fitted: shrinking a 256px map into 48 leaves knurl and
-// weave as grey mush, and the point of the icon is the texture.
-const SWATCH_CACHE = {};
-function caseSwatchURL(key) {
-  if (SWATCH_CACHE[key]) return SWATCH_CACHE[key];
-  const p = FINISHES[key].chrome, S = 56;
-  const cv = document.createElement('canvas'); cv.width = cv.height = S;
-  const g = cv.getContext('2d');
-  g.fillStyle = caseHex(key); g.fillRect(0, 0, S, S);
-  // A pattern finish gets its base laid down a little dark. Overlay against a
-  // near-white metal behaves like screen and can only go lighter, so the
-  // brightest finishes -- sunburst, deco -- had nowhere to put their relief and
-  // came out as blank chips. Dropping the base gives the pattern room to cut.
-  if (!FINISHES[key].chrome.corrode && !FINISHES[key].chrome.tint
-      && typeof FINISHES[key].chrome.map === 'string') {
-    g.fillStyle = 'rgba(0,0,0,0.26)'; g.fillRect(0, 0, S, S);
-  }
-  const col = p.corrode ? corrodedMap(p.corrode) : (p.tint ? albedoMap(p.tint) : null);
-  const src = col ? col.albedo.image
-    : (typeof p.map === 'string' ? patternMap(p.map).rough.image
-      : (p.map === true && brushed ? brushed.image : null));
-  if (src && src.width) {
-    const c = Math.max(20, Math.round(src.width * 0.26));   // the crop
-    const o = Math.round((src.width - c) * 0.5);
-    // An albedo IS the colour and replaces the fill. A roughness map is not a
-    // colour at all -- it is centred on mid grey -- so it goes on in overlay,
-    // which leaves the metal's own value alone and imposes only the pattern's
-    // contrast. Multiplying it instead halved the metal, and screening the
-    // value back on top washed the pale finishes to white.
-    if (!col) { g.globalCompositeOperation = 'overlay'; g.globalAlpha = 0.9; }
-    g.drawImage(src, o, o, c, c, 0, 0, S, S);
-    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
-  }
-  return (SWATCH_CACHE[key] = `url("${cv.toDataURL()}")`);
-}
 buildSwatches('swCase', 'case', FINISH_ORDER,
-  caseSwatchURL, caseHex, k => k, k => {
+  caseHex, caseHex, k => k, k => {
     applyFinish(k);
     sim.finishFlash = 1;
     sim.disc.finish = true;
@@ -6583,6 +6593,8 @@ buildSwatches('swBack', 'back', BACKDROP_ORDER,
     applyBackdrop(k);
     buzz(12);
   });
+for (const b of swBtns.case) swQueue.push([b.key, b.el.querySelector('i')]);
+scheduleSwatches();
 function openStyle() {
   stylePanel.classList.remove('drag', 'snap');
   dragId = null; dragLive = false; dragDy = 0;   // never inherit a stuck gesture
@@ -6992,11 +7004,8 @@ window.LIGHTER = {
     const a = _v1.set(0, 1, 0).applyQuaternion(flameVol.quaternion);
     return THREE.MathUtils.radToDeg(Math.acos(clamp(a.dot(flameDir), -1, 1)));
   },
-  get flameDirArr() { return flameDir.toArray(); },
   // so the guide's copy can be checked against the lists it describes
-  get finishNames() { return FINISH_ORDER.slice(); },
-  get backdropNames() { return BACKDROP_ORDER.slice(); },
-  bgU: bgUniforms, bgRT, BACKDROPS, renderBackdrop, bgScene, bgCam,
+  bgRT, BACKDROPS, renderBackdrop,
   get finishCount() { return FINISH_ORDER.length; },
   get flameCount() { return FLAME_ORDER.length; },
   get backdropCount() { return BACKDROP_ORDER.length; },
@@ -7006,7 +7015,6 @@ window.LIGHTER = {
   get fps() { return fpsEma; },
   get bloomOn() { return bloomOn; },
   setBloom: on => { bloomOn = !!on; },   // profiling: attribute frame time to the pass
-  freezeTime: t => { timeFreeze = t; },  // A/B renders: same phase in both builds
   setPrepass: on => { prepassOn = !!on; },
 
   get fuel() { return sim.fuel; },
@@ -7069,7 +7077,6 @@ window.LIGHTER = {
   lidPivot: () => toScreen(lidG.getWorldPosition(_v1), {}),
   lidPoint: th => lidPointScreen(th ?? sim.lid.theta, {}),
   classifyAt: (x, y) => classify(x, y),
-  get holdZone() { return caseHold ? 'refill' : null; },
   jerk: () => Actions.jerk(),
   shake: () => Actions.shake(),
   strike: v => Actions.strike(v ?? 3),

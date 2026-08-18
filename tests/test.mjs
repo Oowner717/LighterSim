@@ -1568,7 +1568,19 @@ check('fuel level persists across reload', Math.abs(await L('LIGHTER.fuel') - 0.
   `fuel=${await L('LIGHTER.fuel')}`);
 check('finish persists across reload',
   await L('LIGHTER.finish') === 'brass' && await L('LIGHTER.mats.chrome.color.getHexString()') === 'd6a84f'
-  && await L('document.getElementById("finishSwatch").style.backgroundColor') === 'rgb(214, 168, 79)');
+  // The corner swatch used to be a flat colour and was checked as one. It now
+  // carries the same cut of the real material the sheet shows, so what makes
+  // it meaningful is that it CHANGES with the finish -- a fixed string would
+  // just pin whatever the current texture happens to hash to.
+  && (await L('document.getElementById("finishSwatch").style.background')).indexOf('url(') === 0);
+{
+  const at = f => L(`(LIGHTER.setFinish(${JSON.stringify('N')}.replace('N', ${JSON.stringify(f)})),
+    document.getElementById('finishSwatch').style.background)`);
+  const a = await at('brass'), b = await at('rust'), c = await at('brass');
+  check('the corner swatch wears the finish it reports',
+    a !== b && a === c && a.indexOf('url(') === 0,
+    `brass ${a.length}B, rust ${b.length}B, same on return: ${a === c}`);
+}
 check('flame colour persists across reload',
   await L('LIGHTER.flameCol') === 'emerald' && await L('LIGHTER.flameLightHex') === '57e084');
 
