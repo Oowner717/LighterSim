@@ -515,7 +515,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18g';
+  window.__BUILD = '2026-08-18h';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -2031,32 +2031,12 @@ const svcParts = {};
   });
 }
 
-{ // faint cool sheen suggests a studio floor even with everything out
-  const t = new THREE.CanvasTexture(radialCanvas(256, [
-    [0, 'rgba(88,108,132,0.15)'], [0.55, 'rgba(70,86,106,0.06)'], [1, 'rgba(60,74,92,0)'],
-  ]));
-  t.colorSpace = THREE.SRGBColorSpace;
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(11, 11), new THREE.MeshBasicMaterial({
-    map: t, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-  }));
-  m.rotation.x = -Math.PI / 2;
-  m.position.y = -0.71;
-  m.renderOrder = -2;
-  scene.add(m);
-}
-// contact shadow (lifts and fades with the squeeze-pop hop)
-const shadowMesh = (() => {
-  const t = new THREE.CanvasTexture(radialCanvas(256, [
-    [0, 'rgba(0,0,0,0.55)'], [0.6, 'rgba(0,0,0,0.25)'], [1, 'rgba(0,0,0,0)'],
-  ]));
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(9.5, 9.5),
-    new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false }));
-  m.rotation.x = -Math.PI / 2;
-  m.position.y = -0.7;
-  m.renderOrder = -1;
-  scene.add(m);
-  return m;
-})();
+// There is no floor. The lighter hangs in front of a wall, so both of the
+// quads that used to lie flat under it -- a black radial contact shadow and an
+// additive sheen "suggesting a studio floor" -- were drawing contact with a
+// surface that does not exist. What they actually looked like was a smudge on
+// the backdrop, which is what they were: a plane at y = -0.7 seen almost
+// edge-on. Nothing replaces them.
 
 /* ============================== SIM STATE ============================== */
 const OUT = 'OUT', LIT = 'LIT', EMBER = 'EMBER';
@@ -4564,9 +4544,9 @@ function makeFlameMaterial(withFx) { return new THREE.ShaderMaterial({
 const matFlamePlain = makeFlameMaterial(false);
 const matFlameFx = makeFlameMaterial(true);
 const flameVol = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), matFlamePlain);
-// the ground quads, the contact shadow, the handle and the particles are all
-// transparent helpers: none of them should shadow the flame in the prepass
-for (const o of [shadowMesh, bendHandle]) noOcclude(o);
+// the handle and the particles are transparent helpers: neither should shadow
+// the flame in the prepass
+noOcclude(bendHandle);
 bendHandle.traverse(noOcclude);
 flameVol.renderOrder = 10;
 flameVol.frustumCulled = false;
@@ -5570,8 +5550,6 @@ function updateFrame(dt, tSec) {
     matWickTip.emissiveIntensity = Math.max(0, matWickTip.emissiveIntensity - 6 * dt);
   }
   smoothFlameLevel = lerp(smoothFlameLevel, level, 1 - Math.exp(-8 * dt));
-  shadowMesh.material.opacity = 1 / (1 + sim.hop.y * 1.2);
-  shadowMesh.scale.setScalar(1 + sim.hop.y * 0.12);
 
   // burn loop audio
   if (Audio.ctx) {
