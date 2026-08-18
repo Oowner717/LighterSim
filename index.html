@@ -95,21 +95,16 @@
     backdrop-filter: blur(10px) saturate(1.3); -webkit-backdrop-filter: blur(10px) saturate(1.3);
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.10);
   }
-  #styleBtn i { position: absolute; display: block; background-size: cover; }
-  /* the same two silhouettes as the sheet, so the control and the thing it
-     opens are recognisably one idea */
+  #styleBtn i { position: absolute; top: 7px; display: block; width: 10px; height: 20px; }
   #finishSwatch {
-    left: 7px; top: 9px; width: 11px; height: 18px; border-radius: 3px;
-    background-color: #d9dee3;
+    left: 7px; border-radius: 10px 0 0 10px;
+    background-color: #d9dee3; background-size: cover;
     box-shadow: inset 0 -2px 3px rgba(0, 0, 0, 0.4), inset 0 2px 2px rgba(255, 255, 255, 0.3);
   }
   #flameSwatch {
-    right: 7px; top: 8px; width: 12px; height: 20px;
+    right: 7px; border-radius: 0 10px 10px 0;
     background-color: #ff9a3c; color: #ff9a3c;
-    clip-path: polygon(50% 0%, 61% 13%, 71% 31%, 79% 51%, 81% 67%, 75% 83%,
-                       63% 95%, 50% 100%, 37% 95%, 25% 83%, 19% 67%, 21% 51%,
-                       29% 31%, 39% 13%);
-    filter: drop-shadow(0 0 5px currentColor);
+    box-shadow: 0 0 9px currentColor;
   }
   /* the circles stay small; the tap targets don't (44px platform minimum) */
   #infoBtn::after, #guideClose::after, #styleBtn::after, #styleClose::after {
@@ -520,7 +515,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18e';
+  window.__BUILD = '2026-08-18f';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -6505,7 +6500,7 @@ function buildSwatches(hostId, group, keys, css, halo, label, pick) {
     btn.setAttribute('aria-label', label(key));
     const dot = document.createElement('i');
     const paint = css(key);
-    if (paint.indexOf('gradient') >= 0) dot.style.background = paint;
+    if (paint.indexOf('gradient') >= 0 || paint.indexOf('url(') === 0) dot.style.background = paint;
     else dot.style.backgroundColor = paint;
     dot.style.color = halo(key);   // drives the glow; a gradient leaves currentColor unset
     const cap = document.createElement('span');
@@ -6523,8 +6518,54 @@ function buildSwatches(hostId, group, keys, css, halo, label, pick) {
   }
 }
 const caseHex = k => '#' + FINISHES[k].chrome.color.toString(16).padStart(6, '0');
+// The swatch is cut from the SAME canvas the case wears, not from a hand-written
+// CSS gradient standing in for it. Those approximations drifted from what they
+// were describing as the finishes were reworked -- rust's was a brown-to-grey
+// radial that looked nothing like the pitted oxide the lighter actually gets --
+// and a picker that lies about what it picks is worse than no picture at all.
+//
+// Three sources, matching the three ways a finish gets its look:
+//   corrode  the oxide's own albedo, which IS its colour
+//   tint     the painted albedo, likewise
+//   map      a roughness pattern with no colour of its own, so it multiplies
+//            over the finish's base metal
+// Cropped rather than fitted: shrinking a 256px map into 48 leaves knurl and
+// weave as grey mush, and the point of the icon is the texture.
+const SWATCH_CACHE = {};
+function caseSwatchURL(key) {
+  if (SWATCH_CACHE[key]) return SWATCH_CACHE[key];
+  const p = FINISHES[key].chrome, S = 56;
+  const cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const g = cv.getContext('2d');
+  g.fillStyle = caseHex(key); g.fillRect(0, 0, S, S);
+  // A pattern finish gets its base laid down a little dark. Overlay against a
+  // near-white metal behaves like screen and can only go lighter, so the
+  // brightest finishes -- sunburst, deco -- had nowhere to put their relief and
+  // came out as blank chips. Dropping the base gives the pattern room to cut.
+  if (!FINISHES[key].chrome.corrode && !FINISHES[key].chrome.tint
+      && typeof FINISHES[key].chrome.map === 'string') {
+    g.fillStyle = 'rgba(0,0,0,0.26)'; g.fillRect(0, 0, S, S);
+  }
+  const col = p.corrode ? corrodedMap(p.corrode) : (p.tint ? albedoMap(p.tint) : null);
+  const src = col ? col.albedo.image
+    : (typeof p.map === 'string' ? patternMap(p.map).rough.image
+      : (p.map === true && brushed ? brushed.image : null));
+  if (src && src.width) {
+    const c = Math.max(20, Math.round(src.width * 0.26));   // the crop
+    const o = Math.round((src.width - c) * 0.5);
+    // An albedo IS the colour and replaces the fill. A roughness map is not a
+    // colour at all -- it is centred on mid grey -- so it goes on in overlay,
+    // which leaves the metal's own value alone and imposes only the pattern's
+    // contrast. Multiplying it instead halved the metal, and screening the
+    // value back on top washed the pale finishes to white.
+    if (!col) { g.globalCompositeOperation = 'overlay'; g.globalAlpha = 0.9; }
+    g.drawImage(src, o, o, c, c, 0, 0, S, S);
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+  }
+  return (SWATCH_CACHE[key] = `url("${cv.toDataURL()}")`);
+}
 buildSwatches('swCase', 'case', FINISH_ORDER,
-  k => FINISHES[k].swatch || caseHex(k), caseHex, k => k, k => {
+  caseSwatchURL, caseHex, k => k, k => {
     applyFinish(k);
     sim.finishFlash = 1;
     sim.disc.finish = true;
