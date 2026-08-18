@@ -484,7 +484,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18a';
+  window.__BUILD = '2026-08-18b';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -1037,6 +1037,193 @@ vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
 }
 `;
 
+const SCENE_CITY = `
+// --- the city from a high window, at night ---------------------------------
+// A night sky over a city is BRIGHTER than the city: sodium light bounces off
+// the cloud and the blocks sit against it as near-black cutouts. Built the
+// other way round -- walls a few levels off the sky -- the skyline is simply
+// invisible, which is the same mistake that made the old forest's far trunks
+// disappear into the wall behind them.
+vec3 cityAt(vec2 uv, float t, vec2 scr, float asp, float aa){
+  // A night sky over a city is BRIGHTER than the city -- sodium light bounces
+  // off the cloud and the blocks sit against it as near-black cutouts. Built
+  // the other way round, with walls a few levels off the sky, the skyline is
+  // invisible and the glass on top has nothing to refract but a flat field.
+  vec3 col = mix(vec3(0.145,0.120,0.135), vec3(0.010,0.014,0.032), smoothstep(0.06, 0.80, uv.y));
+  col += vec3(0.16,0.10,0.05) * smoothstep(0.44, 0.02, uv.y);
+  for (int L = 0; L < 2; L++){
+    float fl = float(L);
+    float bx = uv.x*asp*(1.5 + fl*1.2) + scr.x*(0.18 + fl*0.16) + fl*13.0;
+    float bi = floor(bx);
+    float roof = (0.32 + fl*0.12) + (0.26 - fl*0.11)*h21(vec2(bi, 3.0 + fl));
+    float wall = smoothstep(roof + 0.002, roof - 0.002, uv.y);
+    vec3 wc = mix(vec3(0.020,0.021,0.034), vec3(0.006,0.007,0.015), fl);
+    wc *= 0.70 + 0.60*h21(vec2(bi, 9.0));
+    col = mix(col, wc, wall);
+    // lit windows on that block's own storey grid. Small: a window is a chip
+    // of light, and at thirty pixels they read as floor tiles.
+    vec2 wp = vec2(bx*(22.0 + fl*14.0), uv.y*(46.0 + fl*22.0));
+    vec2 wid = floor(wp), wf = fract(wp);
+    float won = step(h21(wid + 41.0 + fl), 0.20) * wall;
+    float wq = edge(max(abs(wf.x - 0.5) - 0.17, abs(wf.y - 0.5) - 0.22), aa*(46.0 + fl*22.0)*0.8);
+    vec3 lit = h21(wid + 77.0) < 0.76 ? vec3(1.00,0.78,0.42) : vec3(0.58,0.78,1.00);
+    col += lit * won * wq * (0.18 + 0.42*h21(wid + 13.0)) * (1.0 - fl*0.4);
+  }
+  // the street: soft out-of-focus lights, low in frame. The falloff has to do
+  // ALL the masking -- a smoothstep cut across a wide gaussian gave every glow
+  // a ruled horizontal top edge and turned them into rectangles.
+  vec2 bp = vec2(uv.x*asp*1.15 + scr.x*0.30, uv.y*1.15);
+  for (int L = 0; L < 2; L++){
+    float sc = 4.4 + float(L)*4.0;
+    vec2 gp = bp*sc + vec2(float(L)*0.43, float(L)*0.71);
+    vec2 id = floor(gp), f = fract(gp) - 0.5;
+    vec2 hh = h22(id);
+    float live = step(h21(id + 3.0), 0.26);
+    // A glow is evaluated only inside its OWN hash cell, so it gets clipped at
+    // the cell boundary: at r=0.30 the falloff is still 6% there and every
+    // light came out as a hard-edged rectangle. Keeping r well under the
+    // half-cell puts the falloff below a level of 255 before it is cut.
+    float r = 0.07 + 0.11*hh.x*hh.x;
+    float d = length(f - (hh - 0.5)*0.5);
+    float hue = h21(id + 9.0);
+    vec3 tint = hue < 0.50 ? vec3(1.00,0.70,0.32)
+              : (hue < 0.76 ? vec3(0.40,0.64,1.00)
+              : (hue < 0.91 ? vec3(1.00,0.36,0.42) : vec3(0.44,1.00,0.72)));
+    float br = 0.6 + 0.4*sin(t*(0.25 + 0.5*hh.y) + hh.x*20.0);
+    col += tint * live * (0.34 + 0.66*hh.y) * br * exp(-d*d/(r*r))
+         * smoothstep(0.46, 0.04, uv.y) * (1.5 - float(L)*0.5);
+  }
+  return col;
+}
+vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
+  return cityAt(uv, t, scr, asp, fwidth(uv.y));
+}
+`;
+
+const SCENE_ARCADE = `
+// --- a platformer, playing itself ------------------------------------------
+// The level is a FUNCTION OF WORLD X, not a stored thing: which cells are gaps,
+// which carry a coin, where the runner is and whether it is airborne all fall
+// out of the same hash. That is what makes it endless, seekable, and free --
+// and it is why the runner's jumps land: it is not reacting to the terrain, it
+// and the terrain are the same expression.
+//
+// Collection needs no state either. A coin is drawn only while the runner has
+// not reached it, so passing one IS collecting it.
+float aGap(float i){
+  float a = step(h21(vec2(i, 7.0)), 0.24);
+  float b = step(h21(vec2(i - 1.0, 7.0)), 0.24);
+  return a * (1.0 - b);                 // never two in a row: that is unjumpable
+}
+float aCoin(float i){ return step(h21(vec2(i, 19.0)), 0.34) * (1.0 - aGap(i)); }
+float aJump(float wx){
+  float j = 0.0, ci = floor(wx);
+  for (int k = -2; k <= 2; k++){
+    float i = ci + float(k);
+    float u = (wx - (i + 0.5)) / 1.35;
+    j = max(j, aGap(i) * max(0.0, 1.0 - u*u));
+  }
+  return j;
+}
+vec3 sceneCol(vec2 uv, float t, vec2 scr, float asp){
+  const float K = 26.0;                 // world units across the frame
+  const float G = 0.24;                 // where the ground line sits
+  const float RX = 0.155;               // the runner holds this column
+  float wx = t*4.4 + scr.x*1.9;         // it plays on its own AND answers the orbit
+  // The level is indexed from the CENTRE of the frame, so the runner -- which
+  // holds a column off to the left -- stands at a different world x from the
+  // one the scroll names. Using wx for the jumps and the collecting had it
+  // leaping over solid ground and eating coins three units early.
+  float rwx = wx + (RX - 0.5)*asp*K;
+  float px = fwidth(uv.x)*asp*K*0.9;
+
+  // dusk, because the whole thing is silhouette and silhouette needs a bright sky
+  vec3 col = mix(vec3(0.98,0.60,0.26), vec3(0.10,0.05,0.19), smoothstep(0.14, 0.92, uv.y));
+  col = mix(col, vec3(1.00,0.86,0.48), smoothstep(0.40, 0.16, uv.y));
+  vec2 sp = vec2(0.74 - scr.x*0.006, 0.36);
+  float sd = length((uv - sp)*vec2(asp,1.0));
+  col += vec3(1.0,0.62,0.26) * 0.34*exp(-sd*4.2);
+  col = mix(col, vec3(1.0,0.94,0.68), edge(sd - 0.062, fwidth(uv.y)*1.2));
+
+  // two ridges behind, at their own rates
+  for (int L = 0; L < 2; L++){
+    float fl = float(L);
+    float hx = (uv.x - 0.5)*asp*(6.0 - fl*2.4) + wx*(0.05 + fl*0.07) + fl*11.0;
+    float hy = (0.30 + fl*0.05)
+             + (0.10 - fl*0.03)*vnz(vec2(hx*0.55, 2.0))
+             + (0.04 - fl*0.01)*vnz(vec2(hx*1.7, 8.0));
+    col = mix(col, mix(vec3(0.30,0.12,0.30), vec3(0.15,0.06,0.21), fl),
+              smoothstep(hy + 0.004, hy - 0.004, uv.y));
+  }
+
+  // --- the level ---
+  vec2 p = vec2((uv.x - 0.5)*asp*K + wx, (uv.y - G)*K);
+  float ci = floor(p.x);
+  vec3 ink = vec3(0.045,0.020,0.070);
+
+  // ground, cell by cell, with the gaps missing
+  float ground = 0.0, plat = 0.0;
+  for (int k = -1; k <= 1; k++){
+    float i = ci + float(k);
+    float solid = 1.0 - aGap(i);
+    // overlap by one pixel: two cells anti-aliased to their exact shared
+    // boundary leave a lighter seam between them, and a run of those reads as
+    // a picket fence rather than as ground
+    float inCell = edge(abs(p.x - i - 0.5) - (0.5 + px), px);
+    ground = max(ground, solid * inCell * edge(p.y, px));
+    // a ledge above, every so often, to give the eye somewhere else to go
+    float pl = step(h21(vec2(i, 31.0)), 0.16) * solid;
+    float pd = max(abs(p.x - i - 0.5) - 1.0, abs(p.y - 2.9) - 0.16);
+    plat = max(plat, pl * edge(pd, px));
+  }
+  col = mix(col, ink*1.5, plat);
+  col = mix(col, ink, ground);
+  // a lit rim on the ground, or the silhouette has no top edge
+  col = mix(col, vec3(0.86,0.44,0.34), ground * edge(abs(p.y + 0.055) - 0.055, px));
+
+  // coins, spinning, and gone the moment the runner is level with them
+  for (int k = -1; k <= 4; k++){
+    float i = ci + float(k);
+    float live = aCoin(i) * step(rwx, i + 0.45);
+    float cy = 2.0 + 0.16*sin(t*2.2 + i);
+    vec2 cq = vec2(p.x - i - 0.5, p.y - cy);
+    float w = 0.10 + 0.20*abs(cos(t*3.0 + i*1.7));
+    float cd = length(cq / vec2(w, 0.30)) - 1.0;
+    col = mix(col, vec3(1.00,0.82,0.26), live * edge(cd*w, px));
+    col += vec3(1.00,0.66,0.18) * live * 0.30 * exp(-dot(cq,cq)*7.0);
+  }
+
+  // --- the runner ---
+  float j = aJump(rwx);
+  float ry = j*2.0;                      // world units off the ground
+  vec2 r = vec2((uv.x - RX)*asp*K, (uv.y - G)*K - ry);
+  float run = rwx*3.4;
+  float air = step(0.02, j);
+  // legs: scissoring on the ground, tucked in the air
+  float la = mix(sin(run), 0.55, air), lb = mix(sin(run + 3.14159), 0.15, air);
+  float legY = mix(0.0, 0.30, air);
+  float d = min(sdSeg(r, vec2(0.0, 0.50), vec2(la*0.34, legY)),
+                sdSeg(r, vec2(0.0, 0.50), vec2(lb*0.34, legY)));
+  d = min(d, sdSeg(r, vec2(0.0, 0.48), vec2(0.0, 1.05)));            // body
+  // arms swing opposite the legs
+  d = min(d, sdSeg(r, vec2(0.0, 0.98), vec2(-la*0.30, mix(0.62, 1.20, air))));
+  d = min(d, sdSeg(r, vec2(0.0, 0.98), vec2(-lb*0.30, mix(0.62, 1.20, air))));
+  d = min(d, length(r - vec2(0.03, 1.30)) - 0.20);                    // head
+  float body = edge(d - 0.085, px);
+  col = mix(col, ink*0.55, body);
+  col = mix(col, vec3(0.94,0.56,0.34), body * edge(abs(r.x + 0.12) - 0.045, px*1.6));
+
+  // dust off the heels, only while running
+  vec2 dq = vec2(r.x + 0.45 + fract(run*0.5)*0.5, r.y - 0.12);
+  col = mix(col, vec3(0.55,0.32,0.40),
+            (1.0 - air) * edge(length(dq) - 0.09, 0.05) * (1.0 - fract(run*0.5)) * 0.6);
+
+  // the ground the LIGHTER stands on is nearer than any of it
+  col = mix(col, ink*0.35, smoothstep(0.085, 0.055, uv.y));
+  return col;
+}
+`;
+
 /* ---- the backdrops -------------------------------------------------------
    Four plain walls, then the scenes. A plain wall declares four colour stops
    measured DOWN from the top of the frame plus one key light; a scene declares
@@ -1069,6 +1256,14 @@ const BACKDROPS = {
   forest: {
     swatch: 'linear-gradient(180deg,#8fb27a 0%,#3d6a52 38%,#16281c 72%,#0a1008 100%)',
     scene: SCENE_FOREST, shadow: 0.34, vignette: 0.46,
+  },
+  city: {
+    swatch: 'radial-gradient(circle at 30% 62%, #ffb45a 0 7%, #24304c 38%, #05070d 80%)',
+    scene: SCENE_CITY, shadow: 0.28, vignette: 0.60,
+  },
+  arcade: {
+    swatch: 'linear-gradient(180deg,#f6b954 0%,#e0653f 44%,#4a2350 74%,#0d0512 100%)',
+    scene: SCENE_ARCADE, shadow: 0.30, vignette: 0.44,
   },
 };
 const BACKDROP_ORDER = Object.keys(BACKDROPS);
@@ -1254,12 +1449,20 @@ function applyBackdrop(name) {
   b.animated = !!b.scene;
   bgCur = b;
   scene.background = bgRT.texture;
-  bgSizeDirty = true; bgDirty = true;
+  // Not a flag: a COUNTDOWN. A scene stops re-compositing once the idle clock
+  // takes its life to zero, so if the one composite a boolean guarantees lands
+  // on a frame that does not take -- a resize in flight, a program still
+  // warming, a swap that raced the paint -- the target keeps the PREVIOUS
+  // backdrop and never recovers. That failure is silent, looks exactly like a
+  // broken shader, and cost most of a session to chase: the same build would
+  // render the new scene on two runs out of three and the old one on the
+  // third. Four frames is cheap and makes the switch unconditional.
+  bgSizeDirty = true; bgHot = 4;
 }
 const _bgCol = new THREE.Color();
 let bgSizeDirty = true;
 function bgResize() {
-  bgDirty = true;
+  bgHot = Math.max(bgHot, 2);
   const sz = renderer.getSize(new THREE.Vector2());
   const w = Math.max(64, Math.min(576, Math.round(sz.x * 0.62)));
   const h = Math.max(64, Math.min(768, Math.round(sz.y * 0.62)));
@@ -1274,7 +1477,7 @@ function bgResize() {
 // Called once per PRESENTED frame -- and then only if the frame would actually
 // differ. The four plain walls re-composite NOTHING once the camera stops: the
 // render target already holds the right pixels.
-let bgLastYaw = 1e9, bgLastPitch = 1e9, bgLastFlame = -1, bgDirty = true;
+let bgLastYaw = 1e9, bgLastPitch = 1e9, bgLastFlame = -1, bgHot = 4;
 let bgLife = 1, bgClock = 0;
 function bgTick(dt) {
   // Derived from idleT, not integrated towards it. Easing off simIsIdle()
@@ -1297,8 +1500,9 @@ function renderBackdrop(tSec) {
   if (!scene.background || !bgCur) return;
   const moved = Math.abs(cam.yaw - bgLastYaw) > 1e-4 || Math.abs(cam.pitch - bgLastPitch) > 1e-4
     || Math.abs(smoothFlameLevel - bgLastFlame) > 2e-3;
-  if (!moved && !bgDirty && !(bgCur.animated && bgLife > 0)) return;
-  bgLastYaw = cam.yaw; bgLastPitch = cam.pitch; bgLastFlame = smoothFlameLevel; bgDirty = false;
+  if (!moved && bgHot <= 0 && !(bgCur.animated && bgLife > 0)) return;
+  bgLastYaw = cam.yaw; bgLastPitch = cam.pitch; bgLastFlame = smoothFlameLevel;
+  if (bgHot > 0) bgHot--;
   if (bgSizeDirty) bgResize();
   bgUniforms.uCam.value.set((cam.yaw - BG_YAW0) * BG_SCROLL, Math.sin(cam.pitch) * 0.32, bgClock);
   bgUniforms.uFrame.value.z = smoothFlameLevel;
