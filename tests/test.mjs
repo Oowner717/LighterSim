@@ -678,7 +678,10 @@ await settleLid(false);
   // there to catch a list collapsing to nothing.
   check('every case is on the sheet', counts.c === want.c && want.c >= 8, `${counts.c}/${want.c}`);
   check('every flame is on the sheet', counts.f === want.f && want.f >= 8, `${counts.f}/${want.f}`);
-  check('every backdrop is on the sheet', counts.b === want.b && want.b >= 8, `${counts.b}/${want.b}`);
+  // The backdrop floor is lower than the other two on purpose: the set is
+  // being rebuilt one scene at a time, so it grows batch by batch. What it
+  // still catches is the list collapsing entirely.
+  check('every backdrop is on the sheet', counts.b === want.b && want.b >= 4, `${counts.b}/${want.b}`);
 
   const pick = (sec, name) => page.click(`#${sec} .sw:has(span:text-is("${name}"))`);
   await pick('swCase', 'crimson');                       // a design, not a plain metal
@@ -689,8 +692,8 @@ await settleLid(false);
   check('the picked swatch is the marked one',
     await L('document.querySelector("#swCase .sw.on span").textContent') === 'crimson');
 
-  await pick('swBack', 'ember');
-  check('picking a backdrop applies it', await L('LIGHTER.backdrop') === 'ember');
+  await pick('swBack', 'forest');
+  check('picking a backdrop applies it', await L('LIGHTER.backdrop') === 'forest');
   check('the backdrop is a live texture', await L('!!LIGHTER.scene.background') === true);
 
   await pick('swFlame', 'sunset');                       // a two-hue combination
@@ -1237,33 +1240,56 @@ check('no brand names anywhere user-visible', await L(
   check('the page reports the build it is running',
     await L('window.__BUILD') === swB, `page says ${await L('window.__BUILD')}`);
 }
-// uFx3 packs (beam, fogbank, strip saturation) and saturation's neutral is 1,
-// not 0 -- but a THREE.Vector4 is born all zeroes. Any path that composites
-// before the first applyBackdrop, or any backdrop that forgets to write the
-// slot, renders the painted strip fully greyscale. The bug is invisible in
-// review (the line reads fine) and obvious on screen, which is the worst
-// combination; it costs two evaluates to rule out.
+// Every backdrop is one of exactly two kinds and the difference is not
+// cosmetic: a plain wall is a still image the moment the camera stops and must
+// re-composite NOTHING, which is the whole battery guarantee; a scene is never
+// still. An entry that declares neither renders as the fallback ramp and looks
+// like a bug nobody filed.
 {
-  const at = n => L(`(LIGHTER.setBackdrop(${JSON.stringify(n)}), LIGHTER.bgU.uFx3.value.toArray())`);
-  const plain = await at('midnight');       // declares no sat
-  const cut = await at('teal');             // declares sat: 0.58
-  check('a backdrop that asks for no desaturation gets none',
-    plain[2] === 1, `midnight uFx3.z=${plain[2]}`);
-  check('and one that asks for it gets exactly what it asked for',
-    Math.abs(cut[2] - 0.58) < 1e-6 && cut[2] > 0, `teal uFx3.z=${cut[2]}`);
-  // The analytic cone is drawn from lamp A, so a backdrop that switched it on
-  // without one would hang a cone off whatever the previous backdrop left in
-  // the uniform. VACUOUS AS WRITTEN -- all 21 backdrops currently declare
-  // lamps, so the filter has nothing to select and this passes for free. It is
-  // kept as a forward guard on the next backdrop somebody adds, and the
-  // predicate itself was checked against a doctored table (lamps deleted from
-  // softbox, beam set) to confirm it selects rather than silently returning [].
-  const spot = await at('spotlight');
-  check('the spotlight beam is on, and it has a lamp to hang off',
-    spot[0] > 0 && await L('LIGHTER.bgU.uLampAC.value.w') > 0, `beam=${spot[0]}`);
-  const beamless = await L(`Object.entries(LIGHTER.BACKDROPS)
-    .filter(([, b]) => b.beam && !(b.lamps && b.lamps.length)).map(([k]) => k)`);
-  check('no backdrop draws a beam without one', beamless.length === 0, beamless.join(','));
+  const kinds = await L(`Object.entries(LIGHTER.BACKDROPS).map(([k, b]) =>
+    [k, !!b.scene, !!(b.stops && b.stops.length === 4)])`);
+  const bad = kinds.filter(([, sc, st]) => sc === st).map(([k]) => k);
+  check('every backdrop is either a painted scene or a plain wall, not both or neither',
+    bad.length === 0, bad.join(','));
+  const plain = kinds.filter(([, sc]) => !sc).map(([k]) => k);
+  const scenes = kinds.filter(([, sc]) => sc).map(([k]) => k);
+  check('there are exactly four plain walls', plain.length === 4, plain.join(','));
+  check('and at least one scene', scenes.length >= 1, scenes.join(','));
+
+  // The claim under test, on pixels: hold the camera dead still, composite
+  // twice, and see whether the frame changed. A scene must move on its own or
+  // it is a static texture with extra steps -- which is exactly the complaint
+  // this whole rebuild answers. A plain wall must NOT, or the compositor runs
+  // all night on a phone left awake.
+  const twice = n => L(`(async () => {
+    LIGHTER.setBackdrop(${JSON.stringify('N')}.replace('N', ${JSON.stringify(n)}));
+    LIGHTER.sim.lid.dragging = true;                 // pin the camera
+    LIGHTER.cam.yaw = 0.32; LIGHTER.cam.yawVel = 0;
+    LIGHTER.cam.pitch = 0; LIGHTER.cam.pitchVel = 0;
+    const grab = () => {
+      const r = LIGHTER.bgRT, buf = new Uint8Array(r.width * r.height * 4);
+      LIGHTER.renderer.readRenderTargetPixels(r, 0, 0, r.width, r.height, buf);
+      return buf;
+    };
+    const f0 = LIGHTER.frames;
+    await new Promise(r => { const w = () =>
+      (LIGHTER.frames - f0 > 4) ? r() : requestAnimationFrame(w); w(); });
+    const a = grab();
+    const f1 = LIGHTER.frames;
+    await new Promise(r => { const w = () =>
+      (LIGHTER.frames - f1 > 30) ? r() : requestAnimationFrame(w); w(); });
+    const b = grab();
+    let d = 0;
+    for (let i = 0; i < a.length; i += 4) d += Math.abs(a[i] - b[i]);
+    LIGHTER.sim.lid.dragging = false;
+    return d / (a.length / 4);
+  })()`);
+  const movedScene = await twice(scenes[0]);
+  const movedPlain = await twice(plain[0]);
+  check(`a scene keeps moving with the camera held still (${scenes[0]})`,
+    movedScene > 0.5, `mean channel delta ${movedScene.toFixed(3)}`);
+  check(`and a plain wall does not (${plain[0]})`,
+    movedPlain < 0.05, `mean channel delta ${movedPlain.toFixed(3)}`);
   await L('LIGHTER.setBackdrop("midnight")');
 }
 // A duplicate key in an object literal is silent: the later one wins and the
