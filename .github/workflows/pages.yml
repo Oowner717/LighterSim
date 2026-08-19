@@ -1,9 +1,17 @@
 name: Deploy to GitHub Pages
 
-# Manual-only: the live site publishes from the repo's default branch via the
-# built-in Pages pipeline. This workflow needs the github-pages environment to
-# allow this branch before it can deploy (Settings -> Environments).
+# Deploys on every push to the branch the site publishes from, and can also be
+# run by hand.
+#
+# It was manual-only, and the built-in pages-build-deployment quietly stopped
+# firing on pushes after 17 Aug. Eleven commits went out believing they were
+# live while the site served a build from before the backdrops were rebuilt --
+# a push proves only that the branch moved, and nothing here was watching the
+# difference. The push trigger is what closes that gap; the build stamp in the
+# corner of the app is what makes it checkable at a glance.
 on:
+  push:
+    branches: [claude/zippo-lighter-simulation-24ei5h]
   workflow_dispatch:
 
 permissions:
