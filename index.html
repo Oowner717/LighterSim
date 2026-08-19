@@ -170,6 +170,15 @@
     70% { transform: scale(1.12); opacity: 0.35; }
     100% { transform: scale(1.22); opacity: 0; }
   }
+  #restartTut {
+    width: 100%; margin-top: 10px; padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px dashed rgba(170, 185, 200, 0.30);
+    background: rgba(255, 255, 255, 0.02);
+    color: rgba(206, 216, 226, 0.72);
+    font-size: 12px; letter-spacing: 0.02em;
+  }
+  #restartTut:active { transform: scale(0.985); }
   #lessonSkip {
     display: none;
     pointer-events: auto;
@@ -661,6 +670,7 @@
           through whichever are possible right now; this is the whole list, in case you
           would rather go looking.</p>
         <div id="trickList"></div>
+        <button id="restartTut" type="button">&#8635; restart the tutorial &mdash; intro walkthrough and all the labels</button>
       </section>
       <p id="guideLegal">An original simulation of a classic windproof lighter.
         Not affiliated with or endorsed by any lighter manufacturer.</p>
@@ -675,7 +685,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18o';
+  window.__BUILD = '2026-08-18p';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -6898,6 +6908,16 @@ window.addEventListener('pointerup', endStyleDrag);
 window.addEventListener('pointercancel', endStyleDrag);
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
 document.getElementById('lessonSkip').addEventListener('click', skipLesson);
+// Restart means RESTART: the intro walks again, and every once-ever label and
+// lesson toast is forgotten, so the app teaches like it is day one. Learned
+// tricks stay learned -- the checklist records what you did, not what you
+// were told.
+document.getElementById('restartTut').addEventListener('click', () => {
+  sim.taught = {};
+  try { localStorage.setItem('lighter.taught', '{}'); } catch (e) { /* ignore */ }
+  closeGuide();
+  startLesson('intro');
+});
 document.getElementById('learnBtn').addEventListener('click', () => {
   if (Audio.ensure()) Audio.resume();
   openGuide();

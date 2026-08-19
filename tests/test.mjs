@@ -1756,6 +1756,21 @@ check('flame colour persists across reload',
     await L('LIGHTER.lesson') === null && await L('LIGHTER.sim.taught.introDone') === true
     && await L('document.getElementById("lessonSkip").classList.contains("show")') === false);
   await L('(LIGHTER.cam.yaw = 0.32, 0)');
+
+  // and the restart button undoes all of that: taught state forgotten, intro
+  // running again -- from the guide, where a lost user would go looking
+  await L('document.getElementById("infoBtn").click()');
+  await new Promise(r => setTimeout(r, 400));
+  await L('document.getElementById("restartTut").click()');
+  await new Promise(r => setTimeout(r, 400));
+  const rl = await L('LIGHTER.lesson');
+  check('the restart button re-runs the tutorial from scratch',
+    rl && rl.id === 'intro'
+    && await L('Object.keys(LIGHTER.sim.taught).length') === 0
+    && await L('!document.getElementById("guide").classList.contains("show")'),
+    JSON.stringify(rl));
+  await L('LIGHTER.skipLesson()');
+  await L('(LIGHTER.cam.yaw = 0.32, 0)');
 }
 /* 8 ── no console errors */
 check('no console errors', consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 6)));

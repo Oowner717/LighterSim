@@ -16,7 +16,7 @@
    BUMP BUILD ON EVERY DEPLOY. It names the cache, so changing it is what
    evicts the previous build; index.html carries the same string and the test
    suite fails if the two drift apart. */
-const BUILD = '2026-08-18o';
+const BUILD = '2026-08-18p';
 const CACHE = 'lighter-' + BUILD;
 
 self.addEventListener('install', () => self.skipWaiting());
