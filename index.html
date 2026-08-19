@@ -93,6 +93,34 @@
     background: rgba(170, 185, 200, 0.14); color: rgba(214, 224, 234, 0.72);
   }
   .tk.got .tkp { background: rgba(255, 176, 80, 0.18); color: rgba(255, 214, 168, 0.92); }
+  /* Labels pinned to PARTS. A pill at the bottom of the screen can name the
+     wick; only a label beside the wick can point at it, and pointing is most of
+     what a first-time explanation has to do. */
+  #callouts { position: fixed; inset: 0; z-index: 7; pointer-events: none; }
+  .co {
+    position: absolute; left: 0; top: 0;
+    max-width: 46vw; padding: 7px 11px;
+    border-radius: 11px;
+    border: 1px solid rgba(255, 190, 110, 0.30);
+    background: rgba(18, 14, 10, 0.80);
+    color: rgba(250, 238, 224, 0.94);
+    font-size: 12px; line-height: 1.35; letter-spacing: 0.01em;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(10px) saturate(1.2); -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    opacity: 0;
+    transition: opacity 0.28s ease, transform 0.28s ease;
+    will-change: transform;
+  }
+  .co.show { opacity: 1; }
+  /* the leader: a short line back to the part, so the label is attached to
+     something rather than floating next to it */
+  .co::after {
+    content: ''; position: absolute;
+    width: var(--lead, 0px); height: 1px;
+    background: linear-gradient(90deg, rgba(255, 190, 110, 0.62), rgba(255, 190, 110, 0));
+    top: 50%; right: calc(100% + 1px);
+  }
+  .co.flip::after { right: auto; left: calc(100% + 1px); transform: scaleX(-1); }
   #buildTag {
     position: fixed;
     left: calc(10px + env(safe-area-inset-left, 0px));
@@ -436,6 +464,7 @@
      service worker has twice served a months-old document while every commit
      looked deployed, and there was no way to tell from the screen. -->
 <div id="buildTag" aria-hidden="true"></div>
+<div id="callouts" aria-live="polite"></div>
 <button id="styleBtn" type="button" aria-label="Appearance: case, flame and background">
   <i id="finishSwatch"></i><i id="flameSwatch"></i>
 </button>
@@ -578,7 +607,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18l';
+  window.__BUILD = '2026-08-18m';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -3937,6 +3966,7 @@ const Actions = {
     if (S.state === 'out') return;
     if (sim.flame.state !== OUT) setFlame(OUT, 'service');   // belt and braces
     S.state = 'out';
+    callout('touch.pad', 'svcPadEdge', 'the felt pad. peel it back to reach the cotton underneath.', 6.2);
     S.yV = 0;   // S.y keeps its pull height and drains out during the float
     S.screw = 1; S.screwOut = false; S.autoTurn = 0;
     S.stub = !sim.flintMissing;   // an emptied tube stays visibly empty
@@ -4901,7 +4931,10 @@ function stepPhysics(h) {
         sim.camShake = Math.max(sim.camShake, Math.min(0.45, lid.omega / 70));
         lid.omega = lid.omega < CFG.LID_BOUNCE_MIN ? 0 : -lid.omega * CFG.LID_BOUNCE;
       }
-      if (!lid.everOpened) { lid.everOpened = true; updateHints(); }
+      if (!lid.everOpened) {
+        lid.everOpened = true; updateHints();
+        callout('touch.wheel', 'wheel', 'the flint wheel. one firm flick DOWN — a lazy roll only grinds.');
+      }
     }
   }
   // a lid sweeping shut disturbs the flame, then caps it before fully seating
@@ -5744,8 +5777,26 @@ function beginBendDrag(tr, handle) {
   tr.wickArc = Array.from({ length: 21 }, () => ({ x: 0, y: 0 }));   // odd: index 10 is upright
   tr.wickX0 = tr.x; tr.wickY0 = tr.y; tr.wickK0 = wick.k; tr.wickHandle = handle;
 }
+// What each part says the first time you put a finger on it. Fired from the
+// classifier's own answer, so a label can never appear beside something the
+// touch did not actually land on.
+const FIRST_TOUCH = {
+  wick: ['tip', 'the wick. fold it flat and the flame can hide inside the chimney.'],
+  bend: ['bendHandle', 'drag this either way to bend the wick — it only appears when nothing is burning.'],
+  chimney: ['mouth', 'the chimney. it breaks up wind, so a gust bends the flame instead of killing it.'],
+  wheel: ['wheel', 'the flint wheel. one firm flick DOWN — a lazy roll only grinds.'],
+  screw: ['svcScrew', 'the flint screw. circle a finger on it to wind the spring out.'],
+  pad: ['svcPadEdge', 'the felt pad. peel it back to reach the cotton underneath.'],
+  packing: ['svcPacking', 'the cotton. hold a finger here and the can pours until it reads full.'],
+  tube: ['svcTube', 'the flint tube. tap it to tip the worn flint out.'],
+  flintNew: ['svcFlint', 'a fresh flint. drag it over the tube and let go.'],
+};
 function beginGesture(tr) {
   tr.gesture = classify(tr.x, tr.y);
+  {
+    const f = FIRST_TOUCH[tr.gesture];
+    if (f) callout('touch.' + tr.gesture, f[0], f[1]);
+  }
   // remember a poke that LANDED on the wick even when the cold-only gate sent
   // the gesture elsewhere, so pointerup can explain the refusal. LIT only: an
   // ember tap is a relight request, not a thwarted bend.
@@ -6793,6 +6844,60 @@ let toastUntil = 0, lastDudToast = -1e9, gaugeTimer = 0;
 // the moment the thing it explains has just happened -- which is the only
 // moment the explanation costs the reader nothing, because they have the
 // evidence in front of them. It outranks the cycling pill for its duration.
+// --- callouts: a label pinned to the part it is talking about ---------------
+// The hint pill can name the wick. Only a label beside the wick can POINT at
+// one, and pointing is most of what a first explanation has to do. These reuse
+// the named anchors the hit-testing already projects, so a part that moves --
+// and all of them move, the whole thing is hinged -- drags its label with it.
+const coHost = document.getElementById('callouts');
+const coLive = [];
+function callout(id, anchor, text, secs = 5.6) {
+  if (sim.taught[id] || !coHost) return;
+  sim.taught[id] = true;
+  try { localStorage.setItem('lighter.taught', JSON.stringify(sim.taught)); } catch (e) { /* ignore */ }
+  const el = document.createElement('div');
+  el.className = 'co';
+  el.textContent = text;
+  coHost.appendChild(el);
+  const c = { el, anchor, until: perfNow + secs, born: perfNow };
+  coLive.push(c);
+  placeCallout(c);
+  requestAnimationFrame(() => el.classList.add('show'));
+}
+// One label per part at a time, laid out on the side of the lighter with room
+// for it. Clamped to the viewport, because an anchor can sit close enough to an
+// edge that an unclamped label would hang off it.
+function placeCallout(c) {
+  const p = anchorScreen(c.anchor);
+  const W = window.innerWidth, H = window.innerHeight;
+  const w = c.el.offsetWidth || 160, h = c.el.offsetHeight || 34;
+  const lead = Math.max(18, Math.min(46, W * 0.07));
+  const flip = p.x < W * 0.5;                    // label goes to the roomier side
+  let x = p.x + (flip ? (lead + w / 2) : -(lead + w / 2));
+  let y = p.y;
+  x = Math.max(w / 2 + 8, Math.min(W - w / 2 - 8, x));
+  y = Math.max(h / 2 + 8, Math.min(H - h / 2 - 8, y));
+  c.el.style.setProperty('--lead', Math.max(0, Math.abs(x - p.x) - w / 2) + 'px');
+  c.el.classList.toggle('flip', flip);
+  // JS owns the transform outright. Sharing it with a CSS rule means the inline
+  // value silently wins and the rule's centring is never applied, so the scale
+  // that opens the label has to compose here.
+  c.el.style.transform = `translate(${Math.round(x - w / 2)}px, ${Math.round(y - h / 2)}px)`
+    + (c.el.classList.contains('show') ? ' scale(1)' : ' scale(0.94)');
+}
+function tickCallouts() {
+  for (let i = coLive.length - 1; i >= 0; i--) {
+    const c = coLive[i];
+    if (perfNow >= c.until) {
+      c.el.classList.remove('show');
+      const el = c.el;
+      setTimeout(() => el.remove(), 320);
+      coLive.splice(i, 1);
+      continue;
+    }
+    placeCallout(c);
+  }
+}
 function teach(id, msg, s = 5.4) {
   if (sim.taught[id]) return;
   sim.taught[id] = true;
@@ -7108,6 +7213,7 @@ function loop(tms) {
   updateGravity(dt);
   updateFrame(dt, timeFreeze === null ? tms / 1000 : timeFreeze);
   tickHints(dt);
+  if (coLive.length) tickCallouts();
   Audio.maybeIdle(smoothFlameLevel);
   idleT = simIsIdle() ? idleT + dt : 0;
   if (idleT < 1.5 || tms - lastPresentT > 500) {

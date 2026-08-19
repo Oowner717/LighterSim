@@ -1242,8 +1242,12 @@ check('no brand names anywhere user-visible', await L(
     // holds UNLIT, which is what the check is named for. Whether the suite
     // arrives here with it burning depends on test order, so put it out.
     if (LIGHTER.state !== 'OUT') { LIGHTER.Actions.flipLid(); }
-    await new Promise(r => { const f0 = LIGHTER.frames;
-      const w = () => (LIGHTER.frames - f0 > 30) ? r() : requestAnimationFrame(w); w(); });
+    // Wall clock, not frames. The flame's light on the wall is SMOOTHED and
+    // decays over about half a second after the state flips, so at 50fps a
+    // thirty-frame wait ends mid-decay: the first grab catches the wall still
+    // lit and the second catches it dark, which is a 75-level difference and
+    // exactly the intermittent failure this check kept showing.
+    await new Promise(r => setTimeout(r, 1500));
     LIGHTER.setBackdrop(${JSON.stringify('N')}.replace('N', ${JSON.stringify(n)}));
     const grab = () => {
       const r = LIGHTER.bgRT, buf = new Uint8Array(r.width * r.height * 4);
@@ -1623,6 +1627,62 @@ check('flame colour persists across reload',
     `copy says ${n}, ${nTricks} tricks of ${want.length} entries`);
   await L('document.getElementById("guideClose").click()');
   await new Promise(r => setTimeout(r, 300));
+}
+// A callout has to be pinned to the PART, not to a corner: that is the whole
+// reason it exists. Checked on the rendered element against the same projected
+// anchor the hit-testing uses, so a label that drifted off its part -- or a
+// part that moved without taking its label -- fails here.
+{
+  // the persistence tests reload the page, which wipes the injected helpers
+  await page.evaluate(() => {
+    const c = document.getElementById('c');
+    window.__pt = (type, id, x, y) => c.dispatchEvent(new PointerEvent(type, {
+      pointerId: id, clientX: x, clientY: y, pointerType: 'touch',
+      bubbles: true, cancelable: true, isPrimary: id === 1,
+    }));
+    window.__sleep = ms => new Promise(r => setTimeout(r, ms));
+  });
+  await L('(LIGHTER.sim.taught = {}, LIGHTER.Actions.flipLid(true), 0)');
+  await new Promise(r => setTimeout(r, 900));
+  const tip = await L('LIGHTER.anchor("tip")');
+  await page.evaluate(async t => {
+    window.__pt('pointerdown', 77, t.x, t.y);
+    await window.__sleep(90);
+    window.__pt('pointerup', 77, t.x, t.y);
+  }, tip);
+  await new Promise(r => setTimeout(r, 500));
+  // the lid opening announces the wheel first, so pick the label by what it is
+  // talking about rather than by whichever rendered most recently
+  const co = await L(`(() => {
+    const e = [...document.querySelectorAll('#callouts .co')].find(n => /wick/.test(n.textContent));
+    if (!e) return null;
+    const r = e.getBoundingClientRect();
+    return { text: e.textContent, cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+  })()`);
+  check('touching the wick puts a label on screen', !!co && /wick/.test(co.text || ''),
+    co ? co.text : 'no callout');
+  if (co) {
+    // it sits beside the part, not on top of it and not across the screen
+    const now = await L('LIGHTER.anchor("tip")');
+    const d = Math.hypot(co.cx - now.x, co.cy - now.y);
+    const w = await L('window.innerWidth');
+    check('and it sits beside the wick rather than anywhere on screen',
+      d > 20 && d < w * 0.75, `centre is ${d.toFixed(0)}px from the wick, viewport ${w}px`);
+    // and it tracks: move the camera and the label must follow the part
+    await L('(LIGHTER.cam.yaw += 0.35, 0)');
+    await new Promise(r => setTimeout(r, 500));
+    const after = await L(`(() => {
+      const e = [...document.querySelectorAll('#callouts .co')].find(n => /wick/.test(n.textContent));
+      if (!e) return null;
+      const r = e.getBoundingClientRect();
+      const a = LIGHTER.anchor('tip');
+      return Math.hypot(r.left + r.width / 2 - a.x, r.top + r.height / 2 - a.y);
+    })()`);
+    check('and follows it when the lighter turns',
+      after !== null && Math.abs(after - d) < w * 0.25,
+      `was ${d.toFixed(0)}px from the wick, now ${after === null ? 'gone' : after.toFixed(0) + 'px'}`);
+    await L('(LIGHTER.cam.yaw -= 0.35, 0)');
+  }
 }
 /* 8 ── no console errors */
 check('no console errors', consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 6)));
