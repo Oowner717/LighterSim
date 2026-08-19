@@ -80,6 +80,19 @@
   .tk.got .tkd { color: rgba(255, 196, 120, 0.95); }
   .tk .tkw { flex: 1 1 auto; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .tk .gi { width: 26px; height: 26px; }
+  .tkg {
+    margin: 12px 0 1px; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(206, 216, 226, 0.42);
+  }
+  .tkg:first-child { margin-top: 2px; }
+  .tk .tkp {
+    margin-left: 8px; font-style: normal; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 999px;
+    background: rgba(170, 185, 200, 0.14); color: rgba(214, 224, 234, 0.72);
+  }
+  .tk.got .tkp { background: rgba(255, 176, 80, 0.18); color: rgba(255, 214, 168, 0.92); }
   #motionBtn {
     position: fixed;
     right: calc(12px + env(safe-area-inset-right, 0px));
@@ -531,10 +544,11 @@
           fiction: a real one burns as it burns.</p>
       </section>
       <section>
-        <h3>Tricks</h3>
-        <p><span id="guideNTrick">?</span> things it does that a lighter has no business doing. The pill at the
-          bottom of the screen walks you through whichever are possible right now;
-          this is the whole list, in case you would rather go looking.</p>
+        <h3>Everything it does</h3>
+        <p>Working it, keeping it running, and <b><span id="guideNTrick">?</span> tricks</b> &mdash; things a
+          lighter has no business doing. The pill at the bottom of the screen walks you
+          through whichever are possible right now; this is the whole list, in case you
+          would rather go looking.</p>
         <div id="trickList"></div>
       </section>
       <p id="guideLegal">An original simulation of a classic windproof lighter.
@@ -550,7 +564,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18i';
+  window.__BUILD = '2026-08-18j';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -2119,6 +2133,8 @@ const sim = {
   disc: { lit: false, pop: false, smother: false, ember: false, relight: false, refuel: false, finish: false, flameCol: false, service: false, bend: false },
   counts: { pops: 0, ignitions: 0, smothers: 0, steals: 0, relights: 0, snuffs: 0, sparks: 0, duds: 0, refills: 0, services: 0 },
 };
+sim.taught = {};
+try { Object.assign(sim.taught, JSON.parse(localStorage.getItem('lighter.taught') || '{}')); } catch (e) { /* ignore */ }
 // discovered tricks persist, so returning players skip the beginner hints
 try { Object.assign(sim.disc, JSON.parse(localStorage.getItem('lighter.disc') || '{}')); } catch (e) { /* ignore */ }
 // fuel level, flint wear, chosen finish and lifetime stats persist too
@@ -6527,21 +6543,37 @@ function paintTrickList() {
   const host = document.getElementById('trickList');
   if (!host) return;
   host.innerHTML = '';
-  for (const h of HINTS) {
-    const got = h.done();
-    const row = document.createElement('div');
-    row.className = 'tk' + (got ? ' got' : '');
-    row.insertAdjacentHTML('beforeend', gestureSVG(h.g));
-    const w = document.createElement('div');
-    w.className = 'tkw';
-    const n = document.createElement('span'); n.className = 'tkn'; n.textContent = h.name;
-    const t = document.createElement('span'); t.className = 'tkh'; t.textContent = h.text();
-    w.append(n, t);
-    const d = document.createElement('span');
-    d.className = 'tkd'; d.textContent = got ? '\u2713' : '\u25cb';
-    d.setAttribute('aria-label', got ? 'found' : 'not found yet');
-    row.append(w, d);
-    host.appendChild(row);
+  for (const [grp, label] of [['basics', 'Working it'], ['tricks', 'Tricks'], ['style', 'Appearance']]) {
+    const rows = HINTS.filter(h => h.grp === grp);
+    if (!rows.length) continue;
+    const head = document.createElement('h4');
+    head.className = 'tkg'; head.textContent = label;
+    host.appendChild(head);
+    for (const h of rows) {
+      const got = h.done();
+      const row = document.createElement('div');
+      row.className = 'tk' + (got ? ' got' : '');
+      row.insertAdjacentHTML('beforeend', gestureSVG(h.g));
+      const w = document.createElement('div');
+      w.className = 'tkw';
+      const n = document.createElement('span');
+      n.className = 'tkn'; n.textContent = h.name;
+      // the two halves of the vanishing flame carry the same name, so the part
+      // label is what stops the list looking like it repeats itself
+      if (h.part) {
+        const pt = document.createElement('em');
+        pt.className = 'tkp'; pt.textContent = h.part;
+        n.appendChild(pt);
+      }
+      const t = document.createElement('span');
+      t.className = 'tkh'; t.textContent = h.text();
+      w.append(n, t);
+      const d = document.createElement('span');
+      d.className = 'tkd'; d.textContent = got ? '\u2713' : '\u25cb';
+      d.setAttribute('aria-label', got ? 'found' : 'not found yet');
+      row.append(w, d);
+      host.appendChild(row);
+    }
   }
 }
 // aria-modal alone does not stop Tab walking out of the sheet into the controls
@@ -6557,7 +6589,7 @@ function openGuide() {
   // to claim four finishes and four flames long after there were 24 and 17
   for (const [id, n] of [['guideNFin', FINISH_ORDER.length],
     ['guideNFlame', FLAME_ORDER.length], ['guideNBack', BACKDROP_ORDER.length],
-    ['guideNTrick', HINTS.length]]) {
+    ['guideNTrick', TRICK_IDS.length]]) {
     const el = document.getElementById(id);
     if (el) el.textContent = n;
   }
@@ -6738,6 +6770,16 @@ guideEl.addEventListener('click', e => { if (e.target === guideEl) closeGuide();
 
 // transient "why did that happen" explainers, shown over the rotating hints
 let toastUntil = 0, lastDudToast = -1e9, gaugeTimer = 0;
+// A toast fires every time its condition is met. A LESSON fires once, ever, at
+// the moment the thing it explains has just happened -- which is the only
+// moment the explanation costs the reader nothing, because they have the
+// evidence in front of them. It outranks the cycling pill for its duration.
+function teach(id, msg, s = 5.4) {
+  if (sim.taught[id]) return;
+  sim.taught[id] = true;
+  try { localStorage.setItem('lighter.taught', JSON.stringify(sim.taught)); } catch (e) { /* ignore */ }
+  toast(msg, s);
+}
 function toast(msg, s = 3.6) {
   toastUntil = perfNow + s;
   hintEl.textContent = msg;
@@ -6809,17 +6851,44 @@ const gestureSVG = k => GESTURE[k]
 // the guide, so those three can never drift into disagreeing about what a
 // trick is or how you do it.
 const HINTS = [
-  { id: 'open', g: 'flick', name: 'light it', text: () => 'flip the lid • flick down the wheel', done: () => sim.disc.lit },
-  { id: 'squeeze', g: 'pinch', name: 'the squeeze', text: () => 'try the squeeze: pinch lid-top + base-bottom', done: () => sim.disc.pop },
-  { id: 'smother', g: 'swipe', name: 'smother it', text: () => 'swipe slowly across the flame to snuff it', done: () => sim.disc.smother },
-  { id: 'bend', g: 'drag', name: 'fold the wick', text: () => 'drag the blue ball to fold the wick — either way', done: () => sim.disc.bend },
-  { id: 'ember', g: 'swipe', name: 'hide an ember', text: () => (wickIsBent() ? 'now swipe across the flame — it hides as an ember' : 'put it out, fold the wick low, then light it and swipe'), done: () => sim.disc.ember },
-  { id: 'relight', g: 'tap', name: 'call it back', text: relightHint, done: () => sim.disc.relight },
-  { id: 'refuel', g: 'hold', name: 'quick refill', text: () => 'tank’s low — close the lid, hold the base to refill', done: () => sim.disc.refuel },
-  { id: 'service', g: 'pull', name: 'strip it down', text: () => 'or service it properly: flame out, lid open, pull the insert up and out', done: () => sim.disc.service },
-  { id: 'finish', g: 'tap', name: 'restyle the case', text: () => 'tap the split disc (top-left) to restyle the case', done: () => sim.disc.finish },
-  { id: 'flame', g: 'tap', name: 'recolour the flame', text: () => 'same sheet, flame tab: colours, effects and backdrops', done: () => sim.disc.flameCol },
+  // Grouped, because most of these are not tricks. Lighting a lighter is how a
+  // lighter works; changing its flint is maintenance. Calling all ten "tricks"
+  // made the real ones -- the four things it does that a lighter has no
+  // business doing -- worth no more than opening the lid.
+  { id: 'open', grp: 'basics', g: 'flick', name: 'light it',
+    text: () => 'flip the lid • flick down the wheel', done: () => sim.disc.lit },
+  { id: 'refuel', grp: 'basics', g: 'hold', name: 'quick refill',
+    text: () => 'tank’s low — close the lid, hold the base to refill', done: () => sim.disc.refuel },
+  { id: 'service', grp: 'basics', g: 'pull', name: 'strip it down',
+    text: () => 'or service it properly: flame out, lid open, pull the insert up and out',
+    done: () => sim.disc.service },
+
+  { id: 'squeeze', grp: 'tricks', g: 'pinch', name: 'the squeeze pop',
+    text: () => 'try the squeeze: pinch lid-top + base-bottom until it pops',
+    done: () => sim.disc.pop },
+  { id: 'smother', grp: 'tricks', g: 'swipe', name: 'smother it',
+    text: () => 'swipe slowly across the flame — starve it of air, do not blow it out',
+    done: () => sim.disc.smother },
+  // One trick in two halves. The fold is only the setup; the flame going out is
+  // only half the payoff. Split like this so the pill can prompt each half in
+  // turn and the guide can show what they add up to.
+  { id: 'bend', grp: 'tricks', g: 'drag', name: 'the vanishing flame', part: 'setup',
+    text: () => 'drag the blue ball to fold the wick flat — the setup for the vanishing flame',
+    done: () => sim.disc.bend },
+  { id: 'ember', grp: 'tricks', g: 'swipe', name: 'the vanishing flame', part: 'part 1',
+    text: () => (wickIsBent()
+      ? 'now light it and swipe across — it looks out, but an ember hides in the chimney'
+      : 'fold the wick flat first, then light it and swipe the flame away'),
+    done: () => sim.disc.ember },
+  { id: 'relight', grp: 'tricks', g: 'tap', name: 'the vanishing flame', part: 'part 2',
+    text: relightHint, done: () => sim.disc.relight },
+
+  { id: 'finish', grp: 'style', g: 'tap', name: 'restyle the case',
+    text: () => 'tap the split disc (top-left) to restyle the case', done: () => sim.disc.finish },
+  { id: 'flame', grp: 'style', g: 'tap', name: 'recolour the flame',
+    text: () => 'same sheet, flame tab: colours, effects and backdrops', done: () => sim.disc.flameCol },
 ];
+const TRICK_IDS = HINTS.filter(h => h.grp === 'tricks').map(h => h.id);
 let hintIdx = 0, hintTimer = 0;
 function currentHints() {
   // only show hints the user can act on right now
@@ -6859,7 +6928,11 @@ function updateHints() {
   // How many are left is the thing the old pill never said. Without it a hint
   // that cycles reads as nagging; with it, it reads as a list you are working
   // through, and the last one tells you there is nothing after it.
-  paintHint(h.g, h.text(), `${HINTS.filter(x => x.done()).length}/${HINTS.length}`);
+  // The count is of TRICKS, and only appears on one. Counting all ten told you
+  // that opening the lid was a third of the way to something.
+  const tricks = HINTS.filter(x => x.grp === 'tricks');
+  paintHint(h.g, h.text(), h.grp === 'tricks'
+    ? `${tricks.filter(x => x.done()).length}/${tricks.length}` : '');
 }
 // The pill is three parts now: what your hand does, what to do, and how far
 // through the set you are. Kept as separate elements so textContent still
@@ -7102,8 +7175,8 @@ window.LIGHTER = {
   // the trick table as the pill and the guide actually see it, including
   // whether the gesture it names is one the app can draw
   get tricks() {
-    return HINTS.map(h => ({ id: h.id, name: h.name, text: h.text(),
-      g: h.g, drawable: !!GESTURE[h.g], done: h.done() }));
+    return HINTS.map(h => ({ id: h.id, name: h.name, text: h.text(), grp: h.grp,
+      part: h.part || '', g: h.g, drawable: !!GESTURE[h.g], done: h.done() }));
   },
   get state() { return sim.flame.state; },
   get lidTheta() { return sim.lid.theta; },

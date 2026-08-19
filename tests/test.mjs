@@ -1232,6 +1232,13 @@ check('no brand names anywhere user-visible', await L(
   check('and none of them declares anything that moves', moving.length === 0, moving.join(','));
 
   const stillness = n => L(`(async () => {
+    // The flame's light on the wall is the one thing that still moves, and it
+    // belongs to the lighter rather than to the backdrop -- so the claim only
+    // holds UNLIT, which is what the check is named for. Whether the suite
+    // arrives here with it burning depends on test order, so put it out.
+    if (LIGHTER.state !== 'OUT') { LIGHTER.Actions.flipLid(); }
+    await new Promise(r => { const f0 = LIGHTER.frames;
+      const w = () => (LIGHTER.frames - f0 > 30) ? r() : requestAnimationFrame(w); w(); });
     LIGHTER.setBackdrop(${JSON.stringify('N')}.replace('N', ${JSON.stringify(n)}));
     const grab = () => {
       const r = LIGHTER.bgRT, buf = new Uint8Array(r.width * r.height * 4);
@@ -1595,15 +1602,20 @@ check('flame colour persists across reload',
   await L('document.getElementById("infoBtn").click()');
   await new Promise(r => setTimeout(r, 400));
   const rows = await L(`[...document.querySelectorAll('#trickList .tk')].map(r =>
-    [r.querySelector('.tkn').textContent, r.querySelector('.tkh').textContent,
-     !!r.querySelector('svg.gi')])`);
-  const want = await L('LIGHTER.tricks.map(t => [t.name, t.text, true])');
+    [r.querySelector('.tkn').firstChild.textContent,
+     r.querySelector('.tkp') ? r.querySelector('.tkp').textContent : '',
+     r.querySelector('.tkh').textContent, !!r.querySelector('svg.gi')])`);
+  const want = await L('LIGHTER.tricks.map(t => [t.name, t.part, t.text, true])');
   check('the guide lists every one of them, from the same table',
     JSON.stringify(rows) === JSON.stringify(want),
     `${rows.length} rows vs ${want.length} tricks`);
   const n = await L('document.getElementById("guideNTrick").textContent');
-  check('and the copy counts them rather than claiming a number',
-    n === String(want.length), `copy says ${n}, there are ${want.length}`);
+  const nTricks = await L(`LIGHTER.tricks.filter(t => t.grp === 'tricks').length`);
+  // and it counts TRICKS, not everything in the list -- lighting a lighter is
+  // not a trick, and neither is changing its flint
+  check('and the copy counts the tricks, not the whole list',
+    n === String(nTricks) && nTricks < want.length,
+    `copy says ${n}, ${nTricks} tricks of ${want.length} entries`);
   await L('document.getElementById("guideClose").click()');
   await new Promise(r => setTimeout(r, 300));
 }
