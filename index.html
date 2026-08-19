@@ -93,6 +93,16 @@
     background: rgba(170, 185, 200, 0.14); color: rgba(214, 224, 234, 0.72);
   }
   .tk.got .tkp { background: rgba(255, 176, 80, 0.18); color: rgba(255, 214, 168, 0.92); }
+  #buildTag {
+    position: fixed;
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    z-index: 6;
+    font-size: 9px; letter-spacing: 0.08em;
+    font-variant-numeric: tabular-nums;
+    color: rgba(206, 216, 226, 0.30);
+    pointer-events: none; user-select: none;
+  }
   #motionBtn {
     position: fixed;
     right: calc(12px + env(safe-area-inset-right, 0px));
@@ -422,6 +432,10 @@
 
 <button id="motionBtn" type="button">Enable motion</button>
 <button id="infoBtn" type="button" aria-label="How it works">?</button>
+<!-- Which build you are actually running. Cheap to add and worth having: the
+     service worker has twice served a months-old document while every commit
+     looked deployed, and there was no way to tell from the screen. -->
+<div id="buildTag" aria-hidden="true"></div>
 <button id="styleBtn" type="button" aria-label="Appearance: case, flame and background">
   <i id="finishSwatch"></i><i id="flameSwatch"></i>
 </button>
@@ -564,7 +578,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18j';
+  window.__BUILD = '2026-08-18k';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -6535,6 +6549,11 @@ function updateGauges() {
       + `${n.steals} steals · ${n.relights} relights · ${n.refills} refills · ${n.duds} duds`;
     if (s !== lastG.s) { lastG.s = s; gStatsEl.textContent = s; }
   }
+}
+{ // one source: index.html declares it, sw.js names its cache after it, and
+  // the suite fails if the two ever drift apart
+  const bt = document.getElementById('buildTag');
+  if (bt) bt.textContent = 'build ' + (window.__BUILD || '?');
 }
 const guideIsOpen = () => guideEl.classList.contains('show');
 // Built from the same HINTS table the pill reads, so the list can never claim

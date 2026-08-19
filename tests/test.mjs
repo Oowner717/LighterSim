@@ -1216,6 +1216,11 @@ check('no brand names anywhere user-visible', await L(
     `sw.js ${swB} vs index.html ${idxB}`);
   check('the page reports the build it is running',
     await L('window.__BUILD') === swB, `page says ${await L('window.__BUILD')}`);
+  // and reports it ON SCREEN, without opening anything. Two deploys have gone
+  // out stale with no way to tell from the app which one was in front of you.
+  check('and shows it on screen',
+    await L('document.getElementById("buildTag").textContent') === 'build ' + swB,
+    await L('document.getElementById("buildTag").textContent'));
 }
 // Every backdrop is a plain wall: four colour stops and a key. There are no
 // scenes any more, nothing is time-driven, and nothing pans -- so a resting
