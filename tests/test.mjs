@@ -1584,6 +1584,29 @@ check('finish persists across reload',
 check('flame colour persists across reload',
   await L('LIGHTER.flameCol') === 'emerald' && await L('LIGHTER.flameLightHex') === '57e084');
 
+// The pill and the guide's checklist are built from one table, which is the
+// only reason they cannot end up teaching a trick two different ways -- the
+// exact drift that let a finish's swatch stop resembling the finish. Checked
+// on the rendered list, not on the table, so a builder that silently drops a
+// row is caught too.
+{
+  const bad = await L('LIGHTER.tricks.filter(t => !t.drawable || !t.name).map(t => t.id)');
+  check('every trick declares a gesture the app can draw', bad.length === 0, bad.join(','));
+  await L('document.getElementById("infoBtn").click()');
+  await new Promise(r => setTimeout(r, 400));
+  const rows = await L(`[...document.querySelectorAll('#trickList .tk')].map(r =>
+    [r.querySelector('.tkn').textContent, r.querySelector('.tkh').textContent,
+     !!r.querySelector('svg.gi')])`);
+  const want = await L('LIGHTER.tricks.map(t => [t.name, t.text, true])');
+  check('the guide lists every one of them, from the same table',
+    JSON.stringify(rows) === JSON.stringify(want),
+    `${rows.length} rows vs ${want.length} tricks`);
+  const n = await L('document.getElementById("guideNTrick").textContent');
+  check('and the copy counts them rather than claiming a number',
+    n === String(want.length), `copy says ${n}, there are ${want.length}`);
+  await L('document.getElementById("guideClose").click()');
+  await new Promise(r => setTimeout(r, 300));
+}
 /* 8 ── no console errors */
 check('no console errors', consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 6)));
 
