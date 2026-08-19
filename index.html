@@ -149,12 +149,19 @@
   .tk .tkd { transition: color 0.2s ease; }
   /* the pulsing ring a lesson pins to the part the current step is about --
      the pill says WHAT to do, the ring says WHERE */
+  /* The wrapper takes the JS translate; the ::before takes the pulse. One
+     element cannot do both -- the keyframes' transform silently replaces the
+     inline translate and the ring pulses at 0,0, which is the same
+     transform-fight the callouts hit. */
   #lessonRing {
     position: fixed; left: 0; top: 0; width: 40px; height: 40px;
     margin: -20px 0 0 -20px;
+    pointer-events: none; z-index: 7; display: none;
+  }
+  #lessonRing::before {
+    content: ''; position: absolute; inset: 0;
     border: 2px solid rgba(255, 190, 110, 0.9);
     border-radius: 50%;
-    pointer-events: none; z-index: 7; display: none;
     box-shadow: 0 0 14px rgba(255, 170, 80, 0.4), inset 0 0 8px rgba(255, 170, 80, 0.25);
     animation: ringPulse 1.6s ease-out infinite;
   }
@@ -163,6 +170,18 @@
     70% { transform: scale(1.12); opacity: 0.35; }
     100% { transform: scale(1.22); opacity: 0; }
   }
+  #lessonSkip {
+    display: none;
+    pointer-events: auto;
+    padding: 5px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(170, 185, 200, 0.26);
+    background: rgba(16, 20, 26, 0.55);
+    color: rgba(206, 216, 226, 0.62);
+    font-size: 11px; letter-spacing: 0.04em;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  #lessonSkip.show { display: block; }
   #buildTag {
     position: fixed;
     left: calc(10px + env(safe-area-inset-left, 0px));
@@ -523,6 +542,8 @@
 <div id="bottomBar">
   <button id="svcDone" type="button">&#10003; done &mdash; slide it back in</button>
   <div id="hint"></div>
+  <!-- a walkthrough you cannot leave is a hostage situation, not a tutorial -->
+  <button id="lessonSkip" type="button">skip &#215;</button>
 </div>
 <div id="hud" aria-hidden="true">
   <div class="hrow"><span>fuel</span><div class="hbar"><i id="hFuel"></i></div></div>
@@ -654,7 +675,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18n';
+  window.__BUILD = '2026-08-18o';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -6876,6 +6897,7 @@ function endStyleDrag(e) {
 window.addEventListener('pointerup', endStyleDrag);
 window.addEventListener('pointercancel', endStyleDrag);
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
+document.getElementById('lessonSkip').addEventListener('click', skipLesson);
 document.getElementById('learnBtn').addEventListener('click', () => {
   if (Audio.ensure()) Audio.resume();
   openGuide();
@@ -7029,8 +7051,25 @@ const LESSONS = {
     { g: 'tap', a: 'mouth', t: 'now tap the lighter — it relights with no strike. that is the whole trick', done: () => sim.counts.relights > n },
   ]; },
 };
+// The first-run course. Not in the guide's list -- it IS the front door: a
+// fresh profile gets walked from "what is this" to a lit flame and the famous
+// clink, then handed to the hub for the rest. The orbit step keeps its own
+// closure flag because "has looked around" is not a fact the world remembers.
+LESSONS.intro = () => {
+  const y0 = cam.yaw, n = sim.counts.ignitions;
+  let orbited = false;
+  return [
+    { g: 'swipe', a: 'baseCenter', t: 'this is a windproof lighter. drag anywhere to turn it round',
+      done: () => (orbited = orbited || Math.abs(cam.yaw - y0) > 0.30) },
+    { g: 'drag', a: 'lidTop', t: 'flip the lid open — drag it round its hinge, or double-tap', done: () => lidIsOpen() },
+    { g: 'flick', a: 'wheel', t: 'now flick DOWN on the wheel to strike a light', done: () => sim.counts.ignitions > n },
+    { g: 'drag', a: 'lidTop', t: 'snap the lid shut to put it out — that clink is the famous part',
+      done: () => sim.counts.ignitions > n && sim.flame.state === OUT && !lidIsOpen() },
+  ];
+};
 let lesson = null;
 const lessonRingEl = document.getElementById('lessonRing');
+const lessonSkipEl = document.getElementById('lessonSkip');
 function startLesson(id) {
   const mk = LESSONS[id];
   if (!mk) return false;
@@ -7040,6 +7079,18 @@ function startLesson(id) {
 }
 function endLessonUI() {
   if (lessonRingEl) lessonRingEl.style.display = 'none';
+  if (lessonSkipEl) lessonSkipEl.classList.remove('show');
+}
+function markIntroDone() {
+  sim.taught.introDone = true;
+  try { localStorage.setItem('lighter.taught', JSON.stringify(sim.taught)); } catch (e) { /* ignore */ }
+}
+function skipLesson() {
+  if (!lesson) return;
+  if (lesson.id === 'intro') markIntroDone();
+  lesson = null;
+  endLessonUI();
+  updateHints();
 }
 function tickLesson() {
   if (!lesson) return;
@@ -7048,10 +7099,20 @@ function tickLesson() {
     if (!lesson.steps[i].done()) { idx = i; break; }
   }
   if (idx < 0) {
+    const wasIntro = lesson.id === 'intro';
     const h = HINTS.find(x => x.id === lesson.id);
     lesson = null;
     endLessonUI();
-    toast('\u2713 learned: ' + (h ? h.name + (h.part ? ' \u2014 ' + h.part : '') : ''), 4.2);
+    if (wasIntro) {
+      markIntroDone();
+      toast('\u2713 that\u2019s the basics — lit, and put out properly', 4.6);
+      // and hand over to the hub for everything else, once the toast has had
+      // its moment
+      setTimeout(() => callout('ui.learn', '#learnBtn',
+        'everything else lives here — tricks included. tap a lesson and I\u2019ll walk you through it', 7), 4800);
+    } else {
+      toast('\u2713 learned: ' + (h ? h.name + (h.part ? ' \u2014 ' + h.part : '') : ''), 4.2);
+    }
     updateLearnBadge();
     return;
   }
@@ -7060,6 +7121,7 @@ function tickLesson() {
     lesson.lastIdx = idx;
     paintHint(st.g, st.t, (idx + 1) + '/' + lesson.steps.length);
     hintEl.classList.add('wrap');
+    if (lessonSkipEl) lessonSkipEl.classList.add('show');
   }
   // the ring rides the part the current step is about, every frame, because
   // every part on this thing is hinged or floating
@@ -7454,12 +7516,15 @@ document.addEventListener('visibilitychange', () => {
 
 updateHints();
 updateLearnBadge();
-// A first-timer cannot know the app is teachable. Once, on a fresh profile,
-// the lesson hub introduces itself -- beside the button, not in a modal.
-if (!HINTS.some(h => h.done())) {
-  setTimeout(() => callout('ui.learn', '#learnBtn',
-    'new to these? every lesson lives here — tap one and I\u2019ll walk you through it', 7), 1600);
-}
+// A fresh profile does not get a pointer at the curriculum -- it gets walked.
+// The intro starts itself a moment after boot: turn it, open it, light it,
+// snap it shut. Skippable from the chip under the pill, and both finishing
+// and skipping mark it done for good, so it fires once ever. Re-checked at
+// fire time, because the suite (and any returning player racing the timer)
+// may have marked it done in the interim.
+setTimeout(() => {
+  if (!sim.taught.introDone && !HINTS.some(h => h.done()) && !lesson) startLesson('intro');
+}, 1400);
 
 updateGauges();
 applyFlameCol(sim.flameCol);
@@ -7491,7 +7556,7 @@ window.LIGHTER = {
   get backdropCount() { return BACKDROP_ORDER.length; },
   // the trick table as the pill and the guide actually see it, including
   // whether the gesture it names is one the app can draw
-  startLesson,
+  startLesson, skipLesson,
   get lesson() { return lesson ? { id: lesson.id, step: lesson.lastIdx, of: lesson.steps.length } : null; },
   get tricks() {
     return HINTS.map(h => ({ id: h.id, name: h.name, text: h.text(), grp: h.grp,

@@ -30,6 +30,11 @@ page.on('pageerror', e => consoleErrors.push('pageerror: ' + e.message));
 await page.goto(URL);
 await page.waitForFunction(() => window.__booted && window.LIGHTER && window.LIGHTER.frames > 10, null, { timeout: 30000 });
 console.log('booted, frames rendering');
+// A fresh profile auto-starts the intro walkthrough 1.4s after boot, and a
+// running lesson owns the hint pill -- which would silently rewrite what half
+// of these checks are looking at. Mark it done before the timer fires; the
+// intro has its own tests at the end, run explicitly.
+await page.evaluate(() => { window.LIGHTER.sim.taught.introDone = true; });
 
 // pin the wear systems out of the way so every legacy check stays deterministic;
 // the fuel/flint sections below unpin (and re-pin) around themselves
@@ -1730,6 +1735,27 @@ check('flame colour persists across reload',
     l2 === null ? 'complete' : JSON.stringify(l2));
   await L('(LIGHTER.Actions.flipLid(false), 0)');
   await new Promise(r => setTimeout(r, 600));
+}
+// The front door: a fresh profile is WALKED, not pointed. Run explicitly here
+// (the auto-start timer was preempted at boot so it could not trample the
+// suite), and prove the three promises -- it starts, it advances off the
+// world, and it can be left.
+{
+  await L('(delete LIGHTER.sim.taught.introDone, 0)');
+  const started = await L('LIGHTER.startLesson("intro")');
+  check('the intro course exists and starts', started === true && (await L('LIGHTER.lesson')).id === 'intro');
+  const p1 = await L('document.getElementById("hint").textContent');
+  check('it opens by teaching the camera', /drag anywhere|turn it round/i.test(p1), p1);
+  check('and the walkthrough can be left', await L('document.getElementById("lessonSkip").classList.contains("show")') === true);
+  await L('(LIGHTER.cam.yaw += 0.45, 0)');
+  await new Promise(r => setTimeout(r, 500));
+  const p2 = await L('document.getElementById("hint").textContent');
+  check('orbiting advances it to the lid', /lid/i.test(p2), p2);
+  await L('LIGHTER.skipLesson()');
+  check('skipping ends it and it will not restart',
+    await L('LIGHTER.lesson') === null && await L('LIGHTER.sim.taught.introDone') === true
+    && await L('document.getElementById("lessonSkip").classList.contains("show")') === false);
+  await L('(LIGHTER.cam.yaw = 0.32, 0)');
 }
 /* 8 ── no console errors */
 check('no console errors', consoleErrors.length === 0, JSON.stringify(consoleErrors.slice(0, 6)));
