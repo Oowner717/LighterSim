@@ -121,6 +121,48 @@
     top: 50%; right: calc(100% + 1px);
   }
   .co.flip::after { right: auto; left: calc(100% + 1px); transform: scaleX(-1); }
+  #learnBtn {
+    position: fixed;
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    top: calc(104px + env(safe-area-inset-top, 0px));
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: 1px solid rgba(170, 185, 200, 0.34);
+    background: rgba(16, 20, 26, 0.55);
+    font-size: 17px; line-height: 1; text-align: center; padding: 0;
+    backdrop-filter: blur(10px) saturate(1.3); -webkit-backdrop-filter: blur(10px) saturate(1.3);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  }
+  #learnBtn::after { content: ''; position: absolute; inset: -7px; border-radius: 50%; }
+  #learnBadge {
+    position: absolute; top: -4px; right: -6px;
+    min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 999px;
+    background: rgba(255, 154, 60, 0.94); color: #1a0f04;
+    font-size: 10px; font-style: normal; font-weight: 700; line-height: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+  #learnBadge:empty { display: none; }
+  /* rows in the lesson list are buttons now */
+  .tk { cursor: pointer; }
+  .tk:active { transform: scale(0.985); }
+  .tk .tkd { transition: color 0.2s ease; }
+  /* the pulsing ring a lesson pins to the part the current step is about --
+     the pill says WHAT to do, the ring says WHERE */
+  #lessonRing {
+    position: fixed; left: 0; top: 0; width: 40px; height: 40px;
+    margin: -20px 0 0 -20px;
+    border: 2px solid rgba(255, 190, 110, 0.9);
+    border-radius: 50%;
+    pointer-events: none; z-index: 7; display: none;
+    box-shadow: 0 0 14px rgba(255, 170, 80, 0.4), inset 0 0 8px rgba(255, 170, 80, 0.25);
+    animation: ringPulse 1.6s ease-out infinite;
+  }
+  @keyframes ringPulse {
+    0% { transform: scale(0.72); opacity: 0.95; }
+    70% { transform: scale(1.12); opacity: 0.35; }
+    100% { transform: scale(1.22); opacity: 0; }
+  }
   #buildTag {
     position: fixed;
     left: calc(10px + env(safe-area-inset-left, 0px));
@@ -460,11 +502,16 @@
 
 <button id="motionBtn" type="button">Enable motion</button>
 <button id="infoBtn" type="button" aria-label="How it works">?</button>
+<!-- The lesson hub. The guide holds the list, but a first-timer has no reason
+     to guess that "?" contains a curriculum: this button says so, wears the
+     count of lessons still unlearned, and lands you on the list in one tap. -->
+<button id="learnBtn" type="button" aria-label="Lessons">&#127891;<i id="learnBadge"></i></button>
 <!-- Which build you are actually running. Cheap to add and worth having: the
      service worker has twice served a months-old document while every commit
      looked deployed, and there was no way to tell from the screen. -->
 <div id="buildTag" aria-hidden="true"></div>
 <div id="callouts" aria-live="polite"></div>
+<div id="lessonRing" aria-hidden="true"></div>
 <button id="styleBtn" type="button" aria-label="Appearance: case, flame and background">
   <i id="finishSwatch"></i><i id="flameSwatch"></i>
 </button>
@@ -607,7 +654,7 @@
   // evicts the previous deploy; a test fails if the two ever drift apart.
   // Also the answer to "which build am I actually running", which took a round
   // trip to establish the one time it mattered.
-  window.__BUILD = '2026-08-18m';
+  window.__BUILD = '2026-08-18n';
   if ('serviceWorker' in navigator &&
       (location.hostname.endsWith('github.io') || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('./sw.js').then(function (reg) {
@@ -6642,6 +6689,16 @@ function paintTrickList() {
       d.className = 'tkd'; d.textContent = got ? '\u2713' : '\u25cb';
       d.setAttribute('aria-label', got ? 'found' : 'not found yet');
       row.append(w, d);
+      // every row is a button: tap it and be walked through the thing it names.
+      // The style rows have no steps to walk -- their lesson IS the sheet.
+      row.setAttribute('role', 'button'); row.tabIndex = 0;
+      const go = () => {
+        closeGuide();
+        if (grp === 'style') { openStyle(); return; }
+        startLesson(h.id);
+      };
+      row.addEventListener('click', go);
+      row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
       host.appendChild(row);
     }
   }
@@ -6819,6 +6876,15 @@ function endStyleDrag(e) {
 window.addEventListener('pointerup', endStyleDrag);
 window.addEventListener('pointercancel', endStyleDrag);
 infoBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openGuide(); });
+document.getElementById('learnBtn').addEventListener('click', () => {
+  if (Audio.ensure()) Audio.resume();
+  openGuide();
+  // land on the syllabus, not the top of the essay
+  requestAnimationFrame(() => {
+    const tl = document.getElementById('trickList');
+    if (tl) tl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  });
+});
 styleBtn.addEventListener('click', () => { if (Audio.ensure()) Audio.resume(); openStyle(); });
 // debug: fast-forward the wear systems so refills are testable without waiting
 document.getElementById('ffFuel').addEventListener('click', () => {
@@ -6868,7 +6934,14 @@ function callout(id, anchor, text, secs = 5.6) {
 // for it. Clamped to the viewport, because an anchor can sit close enough to an
 // edge that an unclamped label would hang off it.
 function placeCallout(c) {
-  const p = anchorScreen(c.anchor);
+  // '#id' anchors to a DOM element's centre; anything else is a 3D part
+  let p;
+  if (c.anchor[0] === '#') {
+    const el = document.querySelector(c.anchor);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    p = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  } else p = anchorScreen(c.anchor);
   const W = window.innerWidth, H = window.innerHeight;
   const w = c.el.offsetWidth || 160, h = c.el.offsetHeight || 34;
   const lead = Math.max(18, Math.min(46, W * 0.07));
@@ -6897,6 +6970,114 @@ function tickCallouts() {
     }
     placeCallout(c);
   }
+}
+// --- lessons: tap a thing you have not learned, get walked through it -------
+// The list in the guide is the syllabus; each row is a button that starts the
+// walkthrough for that entry. A lesson is a list of steps, each with a done()
+// predicate, and the runner is STATELESS on purpose: every tick it shows the
+// first step that is not yet satisfied. Prerequisites fall out for free -- ask
+// for the smother lesson with the lid shut and step one is opening it -- and
+// so does recovering when the user wanders off-script, because the current
+// step is always recomputed from the world rather than remembered.
+//
+// Terminal steps are judged on COUNTER DELTAS captured when the lesson starts,
+// not on the persisted discovery flags: a returning player re-running a lesson
+// must still perform it, not be told they already had.
+const LESSONS = {
+  open: () => { const n = sim.counts.ignitions; return [
+    { g: 'drag', a: 'lidTop', t: 'flip the lid open — drag it round its hinge, or double-tap', done: () => lidIsOpen() },
+    { g: 'flick', a: 'wheel', t: 'one firm flick DOWN on the wheel — that scrapes the flint into sparks', done: () => sim.counts.ignitions > n },
+  ]; },
+  refuel: () => { const n = sim.counts.refills; return [
+    { g: 'drag', a: 'lidTop', t: 'close the lid first — it only drinks shut', done: () => !lidIsOpen() },
+    { g: 'hold', a: 'baseCenter', t: 'hold a finger on the base and it glugs itself full', done: () => sim.counts.refills > n || sim.fuel >= 0.99 },
+  ]; },
+  service: () => [
+    { g: 'swipe', a: 'mouth', t: 'put the flame out — close the lid, or swipe slowly across it', done: () => sim.flame.state === OUT },
+    { g: 'drag', a: 'lidTop', t: 'open the lid back up', done: () => lidIsOpen() },
+    { g: 'pull', a: 'mouth', t: 'grab the chimney and pull — the whole insert slides out of the case', done: () => sim.svc.state === 'out' },
+  ],
+  squeeze: () => { const n = sim.counts.pops; return [
+    { g: 'pinch', a: 'lidTop', t: 'pinch lid-top and base-bottom, then squeeze — the case flexes and the cam lets go', done: () => sim.counts.pops > n },
+  ]; },
+  smother: () => { const n = sim.counts.smothers; return [
+    { g: 'flick', a: 'wheel', t: 'get it burning first — lid open, flick the wheel', done: () => sim.flame.state === LIT },
+    { g: 'swipe', a: 'mouth', t: 'now pass a finger SLOWLY across the flame. slow starves it; fast only bends it', done: () => sim.counts.smothers > n },
+  ]; },
+  // Every bend-family lesson needs the lid open before the ball exists: the
+  // handle only projects sensibly on an open lighter, and the first cut of
+  // these skipped that step -- with the lid shut the ring pointed at where the
+  // handle would be, which is inside the case.
+  bend: () => [
+    { g: 'swipe', a: 'mouth', t: 'the wick only bends cold — put the flame out first', done: () => sim.flame.state === OUT },
+    { g: 'drag', a: 'lidTop', t: 'open the lid so you can reach the wick', done: () => lidIsOpen() },
+    { g: 'drag', a: 'bendHandle', t: 'drag the blue ball sideways and lay the wick flat', done: () => wickIsBent() },
+  ],
+  ember: () => { const n = sim.counts.steals; return [
+    { g: 'swipe', a: 'mouth', t: 'flame out first — the setup happens cold', done: () => sim.flame.state === OUT || wickIsBent() },
+    { g: 'drag', a: 'lidTop', t: 'open the lid so you can reach the wick', done: () => lidIsOpen() },
+    { g: 'drag', a: 'bendHandle', t: 'lay the wick flat with the blue ball', done: () => wickIsBent() },
+    { g: 'flick', a: 'wheel', t: 'light it — the flame burns low, down in the chimney', done: () => sim.flame.state !== OUT },
+    { g: 'swipe', a: 'mouth', t: 'swipe across it. it will LOOK out — it is not', done: () => sim.counts.steals > n },
+  ]; },
+  relight: () => { const n = sim.counts.relights; return [
+    { g: 'swipe', a: 'mouth', t: 'flame out first — the setup happens cold', done: () => sim.flame.state !== LIT || wickIsBent() },
+    { g: 'drag', a: 'lidTop', t: 'open the lid so you can reach the wick', done: () => lidIsOpen() || sim.flame.state === EMBER },
+    { g: 'drag', a: 'bendHandle', t: 'lay the wick flat with the blue ball', done: () => wickIsBent() || sim.flame.state === EMBER },
+    { g: 'flick', a: 'wheel', t: 'light it', done: () => sim.flame.state !== OUT },
+    { g: 'swipe', a: 'mouth', t: 'swipe the flame away to hide it as an ember', done: () => sim.flame.state === EMBER || sim.counts.relights > n },
+    { g: 'tap', a: 'mouth', t: 'now tap the lighter — it relights with no strike. that is the whole trick', done: () => sim.counts.relights > n },
+  ]; },
+};
+let lesson = null;
+const lessonRingEl = document.getElementById('lessonRing');
+function startLesson(id) {
+  const mk = LESSONS[id];
+  if (!mk) return false;
+  lesson = { id, steps: mk(), lastIdx: -1 };
+  tickLesson();
+  return true;
+}
+function endLessonUI() {
+  if (lessonRingEl) lessonRingEl.style.display = 'none';
+}
+function tickLesson() {
+  if (!lesson) return;
+  let idx = -1;
+  for (let i = 0; i < lesson.steps.length; i++) {
+    if (!lesson.steps[i].done()) { idx = i; break; }
+  }
+  if (idx < 0) {
+    const h = HINTS.find(x => x.id === lesson.id);
+    lesson = null;
+    endLessonUI();
+    toast('\u2713 learned: ' + (h ? h.name + (h.part ? ' \u2014 ' + h.part : '') : ''), 4.2);
+    updateLearnBadge();
+    return;
+  }
+  const st = lesson.steps[idx];
+  if (idx !== lesson.lastIdx) {
+    lesson.lastIdx = idx;
+    paintHint(st.g, st.t, (idx + 1) + '/' + lesson.steps.length);
+    hintEl.classList.add('wrap');
+  }
+  // the ring rides the part the current step is about, every frame, because
+  // every part on this thing is hinged or floating
+  if (lessonRingEl) {
+    const pt = anchorScreen(st.a);
+    const x = Math.max(26, Math.min(window.innerWidth - 26, pt.x));
+    const y = Math.max(26, Math.min(window.innerHeight - 26, pt.y));
+    lessonRingEl.style.display = 'block';
+    lessonRingEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  }
+}
+// the badge on the learn button: how many entries are still unlearned
+let lastBadge = -1;
+function updateLearnBadge() {
+  const el = document.getElementById('learnBadge');
+  if (!el) return;
+  const left = HINTS.filter(h => !h.done()).length;
+  if (left !== lastBadge) { lastBadge = left; el.textContent = left ? String(left) : ''; }
 }
 function teach(id, msg, s = 5.4) {
   if (sim.taught[id]) return;
@@ -7028,6 +7209,7 @@ function currentHints() {
 }
 function updateHints() {
   try { localStorage.setItem('lighter.disc', JSON.stringify(sim.disc)); } catch (e) { /* ignore */ }
+  updateLearnBadge();
   if (perfNow < toastUntil) return;   // let an active explainer finish
   // mid-service, the ritual's own step-by-step instruction owns the pill
   const svcText = serviceHint();
@@ -7037,6 +7219,7 @@ function updateHints() {
     else hintEl.classList.remove('show');
     return;
   }
+  if (lesson) { tickLesson(); return; }   // a walkthrough owns the pill
   hintEl.classList.remove('wrap');
   const hs = currentHints();
   if (sim.fuel <= 0 && sim.flame.state === OUT) {
@@ -7213,6 +7396,7 @@ function loop(tms) {
   updateGravity(dt);
   updateFrame(dt, timeFreeze === null ? tms / 1000 : timeFreeze);
   tickHints(dt);
+  if (lesson) tickLesson();
   if (coLive.length) tickCallouts();
   Audio.maybeIdle(smoothFlameLevel);
   idleT = simIsIdle() ? idleT + dt : 0;
@@ -7269,6 +7453,14 @@ document.addEventListener('visibilitychange', () => {
 });
 
 updateHints();
+updateLearnBadge();
+// A first-timer cannot know the app is teachable. Once, on a fresh profile,
+// the lesson hub introduces itself -- beside the button, not in a modal.
+if (!HINTS.some(h => h.done())) {
+  setTimeout(() => callout('ui.learn', '#learnBtn',
+    'new to these? every lesson lives here — tap one and I\u2019ll walk you through it', 7), 1600);
+}
+
 updateGauges();
 applyFlameCol(sim.flameCol);
 
@@ -7299,6 +7491,8 @@ window.LIGHTER = {
   get backdropCount() { return BACKDROP_ORDER.length; },
   // the trick table as the pill and the guide actually see it, including
   // whether the gesture it names is one the app can draw
+  startLesson,
+  get lesson() { return lesson ? { id: lesson.id, step: lesson.lastIdx, of: lesson.steps.length } : null; },
   get tricks() {
     return HINTS.map(h => ({ id: h.id, name: h.name, text: h.text(), grp: h.grp,
       part: h.part || '', g: h.g, drawable: !!GESTURE[h.g], done: h.done() }));
